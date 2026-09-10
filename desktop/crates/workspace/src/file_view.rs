@@ -169,6 +169,7 @@ pub(crate) fn render_file_name_with_status(
   status: Option<RepoStatusKind>,
   label: SharedString,
   old_label: Option<SharedString>,
+  compact: bool,
 ) -> AnyElement {
   if status == Some(RepoStatusKind::Renamed)
     && let Some(old_label) = old_label
@@ -176,7 +177,8 @@ pub(crate) fn render_file_name_with_status(
     return h_flex()
       .min_w_0()
       .items_center()
-      .text_sm()
+      .when(compact, |this| this.text_xs())
+      .when(!compact, |this| this.text_sm())
       .gap_1()
       .child(
         div()
@@ -199,7 +201,8 @@ pub(crate) fn render_file_name_with_status(
 
   div()
     .flex_shrink_0()
-    .text_sm()
+    .when(compact, |this| this.text_xs())
+    .when(!compact, |this| this.text_sm())
     .when(status == Some(RepoStatusKind::Deleted), |this| {
       this.line_through()
     })
@@ -241,6 +244,7 @@ pub(crate) fn render_file_title_with_status(
           status,
           file_name_label(path),
           old_path.map(file_name_label),
+          false,
         )),
     )
     .when(is_dirty, |this| {

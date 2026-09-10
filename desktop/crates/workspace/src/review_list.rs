@@ -892,7 +892,7 @@ impl ReviewList {
       } else {
         IconName::ChevronDown
       }))
-      .child(div().text_sm().text_color(theme.foreground).child(file))
+      .child(div().text_xs().text_color(theme.foreground).child(file))
       .child(
         div()
           .flex_1()
@@ -970,7 +970,7 @@ impl ReviewList {
         div()
           .flex_1()
           .min_w_0()
-          .text_sm()
+          .text_xs()
           .text_color(theme.foreground)
           .truncate()
           .child(comment.excerpt.clone()),
@@ -1125,7 +1125,7 @@ impl ReviewList {
         div()
           .w_full()
           .min_w_0()
-          .text_sm()
+          .text_xs()
           .text_color(theme.foreground)
           .truncate()
           .child(comment.excerpt.clone()),

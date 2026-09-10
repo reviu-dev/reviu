@@ -626,6 +626,7 @@ impl ListDelegate for PrFilesDelegate {
               Some(status),
               file_name_label(&path),
               old_path.as_deref().map(file_name_label),
+              true,
             ))
             .child(
               div()
@@ -4433,7 +4434,7 @@ impl DockPanel {
       )
       .child(
         div()
-          .text_sm()
+          .text_xs()
           .text_color(theme.foreground)
           .child(context.branch.clone()),
       )
@@ -4565,7 +4566,7 @@ impl DockPanel {
       )
       .child(
         div()
-          .text_sm()
+          .text_xs()
           .text_color(theme.foreground)
           .child(pull_request.title.clone()),
       )
@@ -4635,7 +4636,7 @@ impl DockPanel {
                 div()
                   .flex_1()
                   .min_w_0()
-                  .text_sm()
+                  .text_xs()
                   .text_color(theme.foreground)
                   .truncate()
                   .child(checks_summary_title(checks)),
@@ -4667,7 +4668,7 @@ impl DockPanel {
               div()
                 .flex_1()
                 .min_w_0()
-                .text_sm()
+                .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(if self.pr_checks_loading {
                   "Loading checks...".to_string()

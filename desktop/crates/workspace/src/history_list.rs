@@ -706,7 +706,7 @@ impl HistoryList {
                           .min_w_0()
                           .flex_1()
                           .overflow_hidden()
-                          .text_sm()
+                          .text_xs()
                           .text_ellipsis()
                           .child(summary),
                       ),
