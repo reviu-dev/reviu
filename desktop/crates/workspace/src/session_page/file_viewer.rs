@@ -271,7 +271,11 @@ impl SessionPage {
           editor.reveal_source_position(doc_line, doc_column, cx)
         });
       }
-      self.set_active_center_tab(tab.clone());
+      if self.center_layout.contains_tab(&tab) {
+        self.set_active_center_tab(tab.clone());
+      } else {
+        self.remember_center_tab(tab.clone());
+      }
       self.editor_tab = Some(tab.clone());
       self.record_recent_file(&repo_root, &rel_path);
       self.focus_editor_if_asked(intent, window, cx);
@@ -2419,6 +2423,50 @@ mod tests {
       cx.debug_bounds("session-conversation-pane").is_some(),
       "closing the file gives the conversation the full center back"
     );
+  }
+
+  #[gpui::test]
+  async fn reopening_an_existing_diff_from_chat_keeps_the_tabs_separate(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-reopen-diff-tab");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let diff_tab = CenterTab::diff(PathBuf::from("README.md"));
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(CenterTab::chat(), OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.active_center_tab, Some(diff_tab.clone()));
+      assert_eq!(page.center_layout.surface_count(), 1);
+      assert_eq!(page.center_layout.tabs(), vec![diff_tab.clone()]);
+      assert_eq!(page.center_tabs, vec![CenterTab::chat(), diff_tab]);
+    });
   }
 
   #[gpui::test]
