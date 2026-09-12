@@ -1972,13 +1972,14 @@ impl Render for AgentChatPanel {
         this.child(
           h_flex()
             .debug_selector(|| "agent-chat-header".to_string())
-            .h(px(40.))
-            .min_h(px(40.))
-            .max_h(px(40.))
+            .h(px(36.))
+            .min_h(px(36.))
+            .max_h(px(36.))
             .flex_shrink_0()
             .px_3()
             .items_center()
             .justify_between()
+            .text_xs()
             .bg(theme.background)
             .border_b_1()
             .border_color(theme.border)
@@ -1997,7 +1998,7 @@ impl Render for AgentChatPanel {
                 .child(
                   div()
                     .flex_none()
-                    .text_sm()
+                    .text_xs()
                     .line_height(gpui::relative(1.))
                     .child(label),
                 )

@@ -157,6 +157,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
         Button::new(config.id)
           .ghost()
           .compact()
+          .small()
           .child(avatar)
           .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu: PopupMenu, _, _| {
             let mut menu = menu.item(

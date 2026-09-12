@@ -64,7 +64,7 @@ const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
 const DOCK_PANEL_CHANGES_SUMMARY_DEBUG_SELECTOR: &str = "dock-panel-changes-summary";
 const DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR: &str = "dock-panel-changes-action";
 const DOCK_PANEL_CHANGES_ACTION_MENU_DEBUG_SELECTOR: &str = "dock-panel-changes-action-menu";
-const DOCK_PANEL_HEADER_HEIGHT_PX: f32 = 40.0;
+const DOCK_PANEL_HEADER_HEIGHT_PX: f32 = 36.0;
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
 const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
@@ -686,14 +686,6 @@ impl ListDelegate for PrFilesDelegate {
     cx: &mut Context<ListState<Self>>,
   ) {
     self.selected_index = ix;
-    if let Some(path) = ix
-      .and_then(|ix| self.file_at(ix))
-      .map(|file| file.path.clone())
-    {
-      let _ = self
-        .panel
-        .update(cx, |panel, _| panel.pr_selected_file = Some(path));
-    }
     cx.notify();
   }
 }
@@ -1187,6 +1179,7 @@ impl DockPanel {
       else {
         return;
       };
+      this.pr_selected_file = Some(path.clone());
       cx.emit(DockPanelEvent::OpenPullRequestFile {
         base_oid: range.base,
         head_oid: range.head,
@@ -1501,6 +1494,7 @@ impl DockPanel {
     let Some(range) = self.pr_range.clone() else {
       return;
     };
+    self.select_pr_file(Some(path.as_path()), cx);
     cx.emit(DockPanelEvent::OpenPullRequestFile {
       base_oid: range.base,
       head_oid: range.head,
@@ -1508,6 +1502,42 @@ impl DockPanel {
       line: None,
       intent,
     });
+  }
+
+  pub(crate) fn select_pr_file(&mut self, path: Option<&Path>, cx: &mut Context<Self>) {
+    let index = self.pr_file_index(path);
+    self.pr_selected_file = path.map(Path::to_path_buf);
+    self.pr_files_list.update(cx, |list, cx| {
+      list.delegate_mut().selected_index = index;
+      cx.notify();
+    });
+    cx.notify();
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub(crate) fn select_pr_file_for_driver(
+    &mut self,
+    path: Option<&Path>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let index = self.pr_file_index(path);
+    self.pr_selected_file = path.map(Path::to_path_buf);
+    self.pr_files_list.update(cx, |list, cx| {
+      list.set_selected_index(index, window, cx);
+    });
+    cx.notify();
+  }
+
+  fn pr_file_index(&self, path: Option<&Path>) -> Option<IndexPath> {
+    path.and_then(|path| {
+      self
+        .pr_files
+        .iter()
+        .position(|file| file.path == path)
+        .map(IndexPath::new)
+    })
   }
 
   fn copy_pr_file_context_path(&self, path: PathBuf, relative: bool, cx: &mut Context<Self>) {
@@ -2606,6 +2636,7 @@ impl DockPanel {
       "files_loading": self.pr_files_loading,
       "files_error": self.pr_files_error.as_ref().map(|error| error.to_string()),
       "files": self.pr_files.iter().map(driver_pr_file).collect::<Vec<_>>(),
+      "selected_file": self.pr_selected_file.as_ref().map(|path| path.display().to_string()),
       "range": self.pr_range.as_ref().map(|range| serde_json::json!({
         "base": range.base.as_str(),
         "head": range.head.as_str(),
@@ -3150,6 +3181,16 @@ impl DockPanel {
 
   fn toggle_pull_request_details(&mut self, cx: &mut Context<Self>) {
     self.pr_details_expanded = !self.pr_details_expanded;
+    cx.notify();
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  pub(crate) fn set_pull_request_details_expanded_for_driver(
+    &mut self,
+    expanded: bool,
+    cx: &mut Context<Self>,
+  ) {
+    self.pr_details_expanded = expanded;
     cx.notify();
   }
 
@@ -3824,6 +3865,7 @@ impl DockPanel {
       .items_center()
       .justify_between()
       .gap_2()
+      .text_xs()
       .border_b_1()
       .border_color(theme.border)
       .px_2()
@@ -4954,9 +4996,17 @@ impl DockPanel {
     files: Vec<git::CommitChangedFile>,
     cx: &mut Context<Self>,
   ) {
+    let selected_index = self.pr_selected_file.as_ref().and_then(|selected_file| {
+      files
+        .iter()
+        .position(|file| file.path == *selected_file)
+        .map(IndexPath::new)
+    });
     self.pr_files = files.clone();
     self.pr_files_list.update(cx, |list, cx| {
-      list.delegate_mut().files = files;
+      let delegate = list.delegate_mut();
+      delegate.files = files;
+      delegate.selected_index = selected_index;
       cx.notify();
     });
   }
@@ -5259,6 +5309,7 @@ impl Render for DockPanel {
       .flex_shrink_0()
       .items_center()
       .justify_between()
+      .text_xs()
       .px_2()
       .border_b_1()
       .border_color(theme.border)
@@ -5286,7 +5337,7 @@ impl Render for DockPanel {
             .icon(UiIconName::RefreshCw)
             .ghost()
             .compact()
-            .small()
+            .xsmall()
             .tooltip("Refresh")
             .loading(self.pr_refresh_pending > 0)
             .loading_icon(gpui_component::Icon::new(UiIconName::RefreshCw))
@@ -7511,6 +7562,29 @@ mod tests {
     // A deleted file has no working-tree copy, and it still belongs to the list.
     assert!(cx.debug_bounds("pr-file-src/main.rs").is_some());
     assert!(cx.debug_bounds("pr-file-docs/gone.md").is_some());
+  }
+
+  #[gpui::test]
+  async fn selecting_a_pull_request_file_marks_it_in_the_panel(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![
+        changed_file("src/discounts.ts", git::CommitFileChangeKind::Modified),
+        changed_file("src/totals.ts", git::CommitFileChangeKind::Modified),
+      ],
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.select_pr_file(Some(Path::new("src/totals.ts")), cx)
+    });
+
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.pr_selected_file, Some(PathBuf::from("src/totals.ts")));
+      assert_eq!(
+        panel.pr_files_list.read(cx).delegate().selected_index,
+        Some(IndexPath::new(1))
+      );
+    });
   }
 
   #[gpui::test]

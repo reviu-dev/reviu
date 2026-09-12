@@ -2,10 +2,9 @@
 
 use super::center_layout::{CenterDropTarget, CenterLayout, CenterNode, CenterPane, CenterPaneId};
 use super::*;
-use crate::annotations::{AnnotationKind, shows_annotation_navigation};
-use crate::diff_toolbar::{
-  DIFF_TOOLBAR_HEIGHT, DiffToolbar, NavigationControl, SplitControl, ToggleControl,
-};
+#[cfg(test)]
+use crate::annotations::AnnotationKind;
+use crate::diff_toolbar::{DIFF_TOOLBAR_HEIGHT, DiffToolbar, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
 use gpui_component::{
   Selectable as _,
@@ -358,16 +357,17 @@ impl SessionPage {
       .debug_selector(|| INTERACTIVE_REBASE_DEBUG_SELECTOR.to_string())
       .child(
         h_flex()
-          .h(px(40.))
-          .min_h(px(40.))
+          .h(px(DIFF_TOOLBAR_HEIGHT))
+          .min_h(px(DIFF_TOOLBAR_HEIGHT))
           .flex_shrink_0()
           .items_center()
           .gap_2()
           .px_3()
           .border_b_1()
           .border_color(theme.border)
+          .text_xs()
           .child(gpui_component::Icon::new(UiIconName::GitMerge).size_3())
-          .child(div().text_sm().child("Interactive rebase")),
+          .child(div().text_xs().child("Interactive rebase")),
       )
       .child(div().flex_1().min_h_0().child(todo_view))
       .into_any_element()
@@ -1983,7 +1983,7 @@ impl SessionPage {
       .child(
         div()
           .min_w_0()
-          .text_sm()
+          .text_xs()
           .text_color(theme.foreground)
           .child(title),
       )
@@ -2143,45 +2143,6 @@ impl SessionPage {
         file_dirty,
         cx,
       ));
-    }
-
-    if let Some(state) = self
-      .annotation_navigation(cx)
-      .filter(|state| !previewing && shows_annotation_navigation(*state))
-    {
-      let (label, previous_tooltip, next_tooltip) = match state.kind {
-        AnnotationKind::Conflict => (
-          "Conflict",
-          "Previous conflict (cmd-alt-up)",
-          "Next conflict (cmd-alt-down)",
-        ),
-        AnnotationKind::Change => (
-          "Hunk",
-          "Select previous hunk (cmd-alt-up)",
-          "Select next hunk (cmd-alt-down)",
-        ),
-      };
-      let view = cx.entity();
-      let previous_view = view.clone();
-      toolbar = toolbar.navigation(NavigationControl {
-        active_index: state.active_index,
-        total: state.total,
-        enabled: can_navigate_annotations(Some(state)),
-        label,
-        previous_tooltip,
-        next_tooltip,
-        counter_debug_selector: ANNOTATION_COUNTER_DEBUG_SELECTOR,
-        on_previous: Rc::new(move |_, cx| {
-          previous_view.update(cx, |this, cx| {
-            this.navigate_change(AnnotationDirection::Previous, cx)
-          });
-        }),
-        on_next: Rc::new(move |_, cx| {
-          view.update(cx, |this, cx| {
-            this.navigate_change(AnnotationDirection::Next, cx)
-          });
-        }),
-      });
     }
 
     if has_editor && self.shown_previewable() {
@@ -2395,6 +2356,7 @@ impl SessionPage {
           .items_center()
           .justify_between()
           .gap_2()
+          .text_xs()
           .border_b_1()
           .border_color(theme.border)
           .px_2()
@@ -2452,10 +2414,10 @@ impl SessionPage {
 
 pub(super) const DOCK_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-dock-resize-handle";
 pub(super) const SIDEBAR_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-sidebar-resize-handle";
-const CENTER_TAB_BAR_HEIGHT_PX: f32 = 40.0;
-const CENTER_TAB_CONTENT_HEIGHT_PX: f32 = 26.0;
+const CENTER_TAB_BAR_HEIGHT_PX: f32 = 36.0;
+const CENTER_TAB_CONTENT_HEIGHT_PX: f32 = 24.0;
 const CENTER_TAB_LABEL_HEIGHT_PX: f32 = 18.0;
-const CENTER_TAB_UNDERLINE_OFFSET_PX: f32 = 1.0;
+const CENTER_TAB_UNDERLINE_OFFSET_PX: f32 = 0.0;
 const CENTER_CONTENT_DEBUG_SELECTOR: &str = "session-center-content";
 const CENTER_DROP_TARGET_DEBUG_SELECTOR: &str = "session-center-drop-target";
 const CENTER_DROP_GROUP: &str = "session-center-drop";
@@ -3484,7 +3446,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_single_hunk_hides_the_change_walker_but_keeps_its_target(cx: &mut TestAppContext) {
+  async fn hunks_keep_keyboard_navigation_without_toolbar_controls(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-single-hunk-walker");
     let original = (1..=60)
       .map(|line| format!("line {line}\n"))
@@ -3531,7 +3493,7 @@ mod tests {
     cx.run_until_parked();
     assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
 
-    // A second hunk brings the walker back, without selecting one until the user walks it.
+    // A second hunk keeps keyboard navigation without adding toolbar controls.
     let two_hunks = one_hunk.replace("line 50\n", "line 50 changed\n");
     std::fs::write(repo.path.join("README.md"), &two_hunks).expect("update file again");
     page.update_in(cx, |page, window, cx| {
@@ -3551,10 +3513,13 @@ mod tests {
     await_editor_diff(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
-    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_some());
+    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
+    page.update(cx, |page, cx| {
+      page.navigate_change(AnnotationDirection::Next, cx)
+    });
     page.read_with(cx, |page, cx| {
       let editor = page.warm_editor().as_ref().expect("editor").read(cx);
-      assert!(editor.highlighted_hunk_group_id(cx).is_none());
+      assert!(editor.highlighted_hunk_group_id(cx).is_some());
     });
   }
 
@@ -6124,7 +6089,7 @@ mod tests {
         .is_some(),
       "the selected conflict offers current, incoming and both"
     );
-    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_some());
+    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
     assert!(cx.debug_bounds("session-accept-all-current").is_none());
     assert!(cx.debug_bounds("session-accept-all-incoming").is_none());
 

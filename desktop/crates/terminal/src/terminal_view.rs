@@ -794,6 +794,8 @@ fn terminal_font(family: gpui::SharedString) -> Font {
     style: FontStyle::Normal,
     fallbacks: Some(FontFallbacks::from_fonts(vec![
       "Lilex".into(),
+      "FiraCode Nerd Font Mono".into(),
+      "FiraCode Nerd Font".into(),
       "Symbols Nerd Font Mono".into(),
       "Symbols Nerd Font".into(),
       "Apple Color Emoji".into(),

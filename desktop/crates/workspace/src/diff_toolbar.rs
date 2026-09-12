@@ -6,35 +6,21 @@ use std::rc::Rc;
 
 use editor::DiffViewMode;
 use gpui::{
-  AnyElement, App, InteractiveElement as _, IntoElement, ParentElement, Styled, Window, div,
-  prelude::*, px,
+  AnyElement, App, InteractiveElement as _, IntoElement, ParentElement, Styled, Window, prelude::*,
+  px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _,
+  ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
   button::{Button, ButtonGroup, ButtonVariants as _},
   h_flex,
 };
 use ui::UiIconName;
 
-pub(crate) const DIFF_TOOLBAR_HEIGHT: f32 = 40.0;
+pub(crate) const DIFF_TOOLBAR_HEIGHT: f32 = 36.0;
 
 /// The two consumers are different entities, so each hands over its own closure
 /// rather than the toolbar reaching for a view it cannot know.
 type ToolbarAction = Rc<dyn Fn(&mut Window, &mut App)>;
-
-/// Stepping through the conflicts or the changes of the open file.
-pub(crate) struct NavigationControl {
-  pub active_index: usize,
-  pub total: usize,
-  pub enabled: bool,
-  pub label: &'static str,
-  pub previous_tooltip: &'static str,
-  pub next_tooltip: &'static str,
-  /// Each host keeps the name its own tests and the driver already use.
-  pub counter_debug_selector: &'static str,
-  pub on_previous: ToolbarAction,
-  pub on_next: ToolbarAction,
-}
 
 pub(crate) struct ToggleControl {
   pub active: bool,
@@ -57,7 +43,6 @@ pub(crate) struct DiffToolbar {
   /// Element ids are namespaced per host: both toolbars can be mounted at once.
   id_prefix: &'static str,
   title: Option<AnyElement>,
-  navigation: Option<NavigationControl>,
   preview: Option<ToggleControl>,
   whitespace: Option<ToggleControl>,
   split: Option<SplitControl>,
@@ -70,7 +55,6 @@ impl DiffToolbar {
     Self {
       id_prefix,
       title: None,
-      navigation: None,
       preview: None,
       whitespace: None,
       split: None,
@@ -81,11 +65,6 @@ impl DiffToolbar {
 
   pub(crate) fn title(mut self, title: AnyElement) -> Self {
     self.title = Some(title);
-    self
-  }
-
-  pub(crate) fn navigation(mut self, navigation: NavigationControl) -> Self {
-    self.navigation = Some(navigation);
     self
   }
 
@@ -112,11 +91,8 @@ impl DiffToolbar {
 
   pub(crate) fn render(self, cx: &App) -> AnyElement {
     let theme = cx.theme().clone();
-    let mut controls = h_flex().flex_shrink_0().items_center().gap_2();
+    let mut controls = h_flex().flex_shrink_0().items_center().gap_2().text_xs();
 
-    if let Some(navigation) = self.navigation {
-      controls = controls.child(render_navigation(self.id_prefix, navigation, cx));
-    }
     if let Some(preview) = self.preview {
       controls = controls.child(render_preview(self.id_prefix, preview));
     }
@@ -139,6 +115,7 @@ impl DiffToolbar {
       .flex_shrink_0()
       .items_center()
       .gap_3()
+      .text_xs()
       .px_3()
       .border_b_1()
       .border_color(theme.border);
@@ -150,64 +127,6 @@ impl DiffToolbar {
     }
     row.child(controls).into_any_element()
   }
-}
-
-fn render_navigation(
-  id_prefix: &'static str,
-  navigation: NavigationControl,
-  cx: &App,
-) -> AnyElement {
-  let theme = cx.theme().clone();
-  let on_previous = navigation.on_previous.clone();
-  let on_next = navigation.on_next.clone();
-  let counter_selector = navigation.counter_debug_selector;
-  let show_buttons = navigation_buttons_visible(&navigation);
-
-  h_flex()
-    .items_center()
-    .gap_1()
-    .when(show_buttons, |this| {
-      this.child(
-        Button::new(format!("{id_prefix}-navigate-previous"))
-          .icon(IconName::ArrowUp)
-          .xsmall()
-          .ghost()
-          .compact()
-          .tooltip(navigation.previous_tooltip)
-          .on_click(move |_, window, cx| on_previous(window, cx)),
-      )
-    })
-    .child(
-      div()
-        .debug_selector(move || counter_selector.to_string())
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(navigation_counter_text(
-          navigation.label,
-          navigation.active_index,
-          navigation.total,
-        )),
-    )
-    .when(show_buttons, |this| {
-      this.child(
-        Button::new(format!("{id_prefix}-navigate-next"))
-          .icon(IconName::ArrowDown)
-          .xsmall()
-          .ghost()
-          .compact()
-          .tooltip(navigation.next_tooltip)
-          .on_click(move |_, window, cx| on_next(window, cx)),
-      )
-    })
-    .into_any_element()
-}
-
-fn navigation_counter_text(label: &str, active_index: usize, total: usize) -> String {
-  format!("{label} {}/{}", active_index + 1, total)
-}
-
-fn navigation_buttons_visible(navigation: &NavigationControl) -> bool {
-  navigation.enabled && navigation.total > 1
 }
 
 fn render_whitespace(id_prefix: &'static str, whitespace: ToggleControl) -> AnyElement {
@@ -311,39 +230,6 @@ fn render_preview(id_prefix: &'static str, preview: ToggleControl) -> AnyElement
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  fn test_navigation_control(enabled: bool, total: usize) -> NavigationControl {
-    NavigationControl {
-      active_index: 0,
-      total,
-      enabled,
-      label: "Conflict",
-      previous_tooltip: "Previous conflict",
-      next_tooltip: "Next conflict",
-      counter_debug_selector: "test-counter",
-      on_previous: Rc::new(|_, _| {}),
-      on_next: Rc::new(|_, _| {}),
-    }
-  }
-
-  #[test]
-  fn navigation_buttons_are_hidden_when_the_counter_cannot_move() {
-    assert!(!navigation_buttons_visible(&test_navigation_control(
-      false, 1
-    )));
-    assert!(!navigation_buttons_visible(&test_navigation_control(
-      true, 1
-    )));
-    assert!(navigation_buttons_visible(&test_navigation_control(
-      true, 2
-    )));
-  }
-
-  #[test]
-  fn navigation_counter_names_the_walked_annotation() {
-    assert_eq!(navigation_counter_text("Hunk", 1, 5), "Hunk 2/5");
-    assert_eq!(navigation_counter_text("Conflict", 0, 1), "Conflict 1/1");
-  }
 
   #[test]
   fn whitespace_icon_uses_a_whitespace_symbol() {

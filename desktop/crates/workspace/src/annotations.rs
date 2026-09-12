@@ -1,15 +1,20 @@
 //! Walking a diff: conflicts when the file has them, changes otherwise.
 
 use editor::{ConflictNavigationDirection, Editor, HunkNavigationDirection};
-use git::RepoStatusKind;
-use gpui::{App, Context};
+use gpui::Context;
 
+use git::RepoStatusKind;
+#[cfg(test)]
+use gpui::App;
+
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnnotationKind {
   Conflict,
   Change,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AnnotationNavigationState {
   pub(crate) active_index: usize,
@@ -39,6 +44,7 @@ impl AnnotationDirection {
   }
 }
 
+#[cfg(test)]
 pub(crate) fn conflict_navigation_state_for(
   file_status: Option<RepoStatusKind>,
   editor: &Editor,
@@ -50,6 +56,7 @@ pub(crate) fn conflict_navigation_state_for(
 }
 
 /// A conflicted file is walked conflict by conflict; any other one hunk by hunk.
+#[cfg(test)]
 pub(crate) fn annotation_navigation_state_for(
   file_status: Option<RepoStatusKind>,
   editor: &Editor,
@@ -71,15 +78,6 @@ pub(crate) fn annotation_navigation_state_for(
     })
 }
 
-pub(crate) fn can_navigate_annotations(state: Option<AnnotationNavigationState>) -> bool {
-  state.is_some_and(|state| state.total > 1)
-}
-
-/// A lone annotation needs no walker; opening the file already shows its target.
-pub(crate) fn shows_annotation_navigation(state: AnnotationNavigationState) -> bool {
-  state.total > 1
-}
-
 pub(crate) fn navigate_annotation(
   editor: &mut Editor,
   file_status: Option<RepoStatusKind>,
@@ -92,54 +90,5 @@ pub(crate) fn navigate_annotation(
     editor.navigate_conflict(direction.conflict(), cx);
   } else {
     editor.navigate_hunk(direction.hunk(), cx);
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn lone_annotations_hide_navigation() {
-    assert!(!shows_annotation_navigation(AnnotationNavigationState {
-      active_index: 0,
-      total: 1,
-      kind: AnnotationKind::Change,
-    }));
-    assert!(shows_annotation_navigation(AnnotationNavigationState {
-      active_index: 0,
-      total: 2,
-      kind: AnnotationKind::Change,
-    }));
-    assert!(!shows_annotation_navigation(AnnotationNavigationState {
-      active_index: 0,
-      total: 1,
-      kind: AnnotationKind::Conflict,
-    }));
-    assert!(shows_annotation_navigation(AnnotationNavigationState {
-      active_index: 0,
-      total: 2,
-      kind: AnnotationKind::Conflict,
-    }));
-  }
-
-  #[test]
-  fn can_navigate_annotations_requires_multiple_annotations() {
-    assert!(!can_navigate_annotations(None));
-    assert!(!can_navigate_annotations(Some(AnnotationNavigationState {
-      active_index: 0,
-      total: 1,
-      kind: AnnotationKind::Conflict,
-    })));
-    assert!(can_navigate_annotations(Some(AnnotationNavigationState {
-      active_index: 0,
-      total: 2,
-      kind: AnnotationKind::Conflict,
-    })));
-    assert!(can_navigate_annotations(Some(AnnotationNavigationState {
-      active_index: 0,
-      total: 3,
-      kind: AnnotationKind::Change,
-    })));
   }
 }
