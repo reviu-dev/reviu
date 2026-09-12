@@ -7,8 +7,7 @@ use editor::{Copy, Cut, Paste, Quit, Redo, SelectAll, Undo, set_indent_rainbow_e
 use gpui::Keystroke;
 use gpui::{
   AnyWindowHandle, App, Context, Decorations, Entity, FocusHandle, Focusable, Global, Menu,
-  MenuItem, Render, SharedString, Subscription, Task, Window, WindowButton, div, img, prelude::*,
-  px,
+  MenuItem, Render, Subscription, Task, Window, WindowButton, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex, kbd::Kbd,
@@ -504,7 +503,7 @@ impl WorkspaceView {
     &mut self,
     scroll_offset_y: f32,
     cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
+  ) -> Result<(), gpui::SharedString> {
     self.session_page.update(cx, |page, cx| {
       page.set_editor_scroll_for_driver(scroll_offset_y, cx)
     })
@@ -532,7 +531,7 @@ impl WorkspaceView {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
+  ) -> Result<(), gpui::SharedString> {
     self.session_page.update(cx, |page, cx| {
       page.open_agent_diff_snapshot_for_driver(window, cx)
     })
@@ -544,7 +543,7 @@ impl WorkspaceView {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
+  ) -> Result<(), gpui::SharedString> {
     self
       .session_page
       .update(cx, |page, cx| page.focus_agent_chat_for_driver(window, cx))
@@ -557,7 +556,7 @@ impl WorkspaceView {
     title: String,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
+  ) -> Result<(), gpui::SharedString> {
     self.session_page.update(cx, |page, cx| {
       page.focus_agent_chat_by_title_for_driver(title, window, cx)
     })
@@ -569,7 +568,7 @@ impl WorkspaceView {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
+  ) -> Result<(), gpui::SharedString> {
     self.session_page.update(cx, |page, cx| {
       page.split_center_with_chat_for_driver(window, cx)
     })
@@ -583,7 +582,7 @@ impl WorkspaceView {
     dock_width: Option<f32>,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
+  ) -> Result<(), gpui::SharedString> {
     self.session_page.update(cx, |page, cx| {
       page.prepare_screenshot_workspace_for_driver(active_path, dock_width, window, cx)
     })
