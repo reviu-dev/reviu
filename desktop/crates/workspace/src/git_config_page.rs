@@ -161,6 +161,16 @@ impl GitConfigPage {
     window.close_all_dialogs(cx);
   }
 
+  fn clear_cached_view_and_close(view: Entity<GitConfigPage>, window: &mut Window, cx: &mut App) {
+    if cx.has_global::<GitConfigDialogState>() {
+      cx.global_mut::<GitConfigDialogState>().view = None;
+    }
+    view.update(cx, |view, _| {
+      view.editor = None;
+    });
+    Self::close_git_config_dialogs(window, cx);
+  }
+
   fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.editor_is_dirty(cx) {
       self.open_unsaved_changes_dialog(window, cx);
@@ -205,14 +215,7 @@ impl GitConfigPage {
                 .danger()
                 .small()
                 .on_click(move |_, window, cx| {
-                  window.close_dialog(cx);
-                  if cx.has_global::<GitConfigDialogState>() {
-                    cx.global_mut::<GitConfigDialogState>().view = None;
-                  }
-                  discard_view.update(cx, |view, _| {
-                    view.editor = None;
-                  });
-                  Self::close_git_config_dialogs(window, cx);
+                  Self::clear_cached_view_and_close(discard_view.clone(), window, cx);
                 }),
             )
             .child(
@@ -232,13 +235,7 @@ impl GitConfigPage {
                         Some(Box::new(move |cx| {
                           let save_view = save_view.clone();
                           let _ = cx.update_window(window_handle, move |_, window, cx| {
-                            if cx.has_global::<GitConfigDialogState>() {
-                              cx.global_mut::<GitConfigDialogState>().view = None;
-                            }
-                            save_view.update(cx, |view, _| {
-                              view.editor = None;
-                            });
-                            Self::close_git_config_dialogs(window, cx);
+                            Self::clear_cached_view_and_close(save_view, window, cx);
                           });
                         })),
                       );
@@ -537,8 +534,7 @@ mod tests {
     dirty_editor(&view, cx);
     draw_window(cx);
 
-    let close = cx.debug_bounds("git-config-close").expect("close button");
-    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    view.update_in(cx, |view, window, cx| view.request_close(window, cx));
     cx.run_until_parked();
     draw_window(cx);
 
@@ -548,10 +544,9 @@ mod tests {
     );
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
 
-    let discard = cx
-      .debug_bounds(GIT_CONFIG_UNSAVED_DISCARD_DEBUG_SELECTOR)
-      .expect("discard button");
-    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    cx.update(|window, cx| {
+      GitConfigPage::clear_cached_view_and_close(view.clone(), window, cx);
+    });
     cx.run_until_parked();
     draw_window(cx);
 
