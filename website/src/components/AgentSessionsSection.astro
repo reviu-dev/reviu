@@ -15,7 +15,7 @@ const sectionImage = await themeImageSources(
   sessionsLight,
   sessionsDark,
   3020,
-  1894,
+  1834,
 );
 
 const sessionRows = [
@@ -73,7 +73,7 @@ const cards = [
   </div>
 
   <div class="mx-auto max-w-7xl px-6 lg:px-8">
-    <div class="grid items-center gap-12 lg:grid-cols-[0.9fr_1.1fr]">
+    <div class="grid items-center gap-12 lg:grid-cols-[0.78fr_1.22fr]">
       <div>
         <div class="reviu-reveal max-w-2xl">
           <h2 class="text-base/7 font-semibold text-primary">Agent sessions</h2>
@@ -141,7 +141,7 @@ const cards = [
       </div>
 
       <div
-        class="reviu-reveal relative"
+        class="reviu-reveal relative lg:-mr-24 xl:-mr-40"
         style="--reveal-delay: 300ms;"
       >
         <div
@@ -154,17 +154,8 @@ const cards = [
             sources={sectionImage}
             alt="Reviu agent sessions workspace screenshot"
             loading="lazy"
-            class="rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10"
+            class="w-full max-w-none rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10"
           />
-        </div>
-        <div class="absolute -bottom-6 left-6 hidden max-w-72 rounded-2xl border border-border bg-background/90 p-4 text-sm shadow-xl backdrop-blur md:block dark:bg-gray-950/90">
-          <p class="flex items-center gap-2 font-semibold text-foreground">
-            <ReceiptTextIcon class="size-4 text-primary" aria-hidden="true" />
-            Turn receipt
-          </p>
-          <p class="mt-2 text-muted-foreground">
-            4 files edited, 86 lines added, 18 removed. Review opens the diff.
-          </p>
         </div>
       </div>
     </div>

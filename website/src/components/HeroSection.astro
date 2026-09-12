@@ -14,7 +14,7 @@ import LogoLight from "../assets/logo_light.svg";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 
-const heroImage = await themeImageSources(heroLight, heroDark, 1400, 879);
+const heroImage = await themeImageSources(heroLight, heroDark, 1800, 1093);
 
 const workflowPills = [
   {
@@ -157,47 +157,25 @@ const workflowPills = [
     </div>
 
     <div
-      class="reviu-reveal relative mx-auto mt-10 max-w-6xl sm:mt-12"
+      class="reviu-reveal relative left-1/2 mt-10 w-[min(96rem,calc(100vw-1.5rem))] -translate-x-1/2 sm:mt-12"
       style="--reveal-delay: 600ms;"
     >
       <div
-        class="absolute -inset-x-12 -top-10 -bottom-16 -z-10 rounded-[3rem] bg-linear-to-b from-primary/10 via-background to-background blur-2xl dark:from-primary/20 dark:via-background/60"
+        class="absolute -inset-x-8 -top-10 -bottom-12 -z-10 rounded-[3rem] bg-linear-to-b from-primary/10 via-background to-background blur-2xl dark:from-primary/20 dark:via-background/60"
         aria-hidden="true"
       >
       </div>
       <div
         class="rounded-[2rem] border border-gray-900/10 bg-white/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur sm:p-3 dark:border-white/10 dark:bg-white/5 dark:shadow-black/30"
       >
-        <div class="relative mx-auto w-fit max-w-full overflow-hidden rounded-[1.35rem] bg-gray-950/5 ring-1 ring-gray-900/10 dark:ring-white/10">
+        <div class="mx-auto overflow-hidden rounded-[1.35rem] bg-gray-950/5 ring-1 ring-gray-900/10 dark:ring-white/10">
           <ThemePicture
             sources={heroImage}
             alt="Reviu desktop app with agent sessions, diff review, changes, and pull request workflow"
             loading="eager"
             fetchpriority="high"
-            class="mx-auto h-auto max-h-[52vh] w-auto max-w-full"
+            class="h-auto w-full"
           />
-          <div
-            class="absolute top-4 left-4 hidden max-w-56 rounded-2xl border border-white/70 bg-white/85 p-4 text-left shadow-xl backdrop-blur md:block dark:border-white/10 dark:bg-gray-950/80"
-          >
-            <p class="flex items-center gap-2 text-xs font-semibold text-primary">
-              <span class="size-2 rounded-full bg-emerald-500"></span>
-              Agent session running
-            </p>
-            <p class="mt-2 text-sm font-semibold text-foreground">
-              Add percentage discounts that stack with flat discounts
-            </p>
-          </div>
-          <div
-            class="absolute right-4 bottom-4 hidden max-w-64 rounded-2xl border border-white/70 bg-white/85 p-4 text-left shadow-xl backdrop-blur md:block dark:border-white/10 dark:bg-gray-950/80"
-          >
-            <p class="flex items-center gap-2 text-xs font-semibold text-primary">
-              <MessageCircleReplyIcon class="size-4" aria-hidden="true" />
-              Review batch ready
-            </p>
-            <p class="mt-2 text-sm text-muted-foreground">
-              3 line comments can go back to the agent before you commit.
-            </p>
-          </div>
         </div>
       </div>
     </div>

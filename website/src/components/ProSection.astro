@@ -4,7 +4,6 @@ import prLight from "../assets/app_screenshots/pr_light.png";
 import BellIcon from "@lucide/astro/icons/bell";
 import CircleCheckIcon from "@lucide/astro/icons/circle-check";
 import GitMergeIcon from "@lucide/astro/icons/git-merge";
-import GitPullRequestArrowIcon from "@lucide/astro/icons/git-pull-request-arrow";
 import GitPullRequestCreateIcon from "@lucide/astro/icons/git-pull-request-create";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
 import PuzzleIcon from "@lucide/astro/icons/puzzle";
@@ -13,12 +12,6 @@ import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 
 const sectionImage = await themeImageSources(prLight, prDark, 3020, 1894);
-
-const prStats = [
-  ["Checks", "12/12", "passed", "text-emerald-500"],
-  ["Review", "2", "threads", "text-primary"],
-  ["Merge", "ready", "squash", "text-amber-500"],
-];
 
 const features = [
   {
@@ -105,28 +98,6 @@ const features = [
           loading="lazy"
           class="rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10"
         />
-        <div class="absolute top-6 left-6 hidden max-w-72 rounded-2xl border border-border bg-background/90 p-4 text-sm shadow-xl backdrop-blur md:block dark:bg-gray-950/90">
-          <p class="flex items-center gap-2 font-semibold text-foreground">
-            <GitPullRequestArrowIcon class="size-4 text-primary" aria-hidden="true" />
-            PR #48 - Add checkout discounts
-          </p>
-          <p class="mt-2 text-muted-foreground">
-            feature/checkout-discounts into main
-          </p>
-        </div>
-        <div class="absolute right-6 bottom-6 hidden w-80 rounded-2xl border border-border bg-background/90 p-4 shadow-xl backdrop-blur md:block dark:bg-gray-950/90">
-          <div class="grid grid-cols-3 gap-2 text-center text-xs">
-            {
-              prStats.map((stat) => (
-                <div class="rounded-xl border border-border bg-muted/50 px-2 py-3 dark:bg-white/[0.03]">
-                  <p class="font-semibold text-foreground">{stat[0]}</p>
-                  <p class={`mt-1 font-semibold ${stat[3]}`}>{stat[1]}</p>
-                  <p class="mt-0.5 text-muted-foreground">{stat[2]}</p>
-                </div>
-              ))
-            }
-          </div>
-        </div>
       </div>
 
       <div class="grid gap-4">

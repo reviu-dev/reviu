@@ -1,6 +1,5 @@
 ---
 import CommandIcon from "@lucide/astro/icons/command";
-import GitGraphIcon from "@lucide/astro/icons/git-graph";
 import ListTodoIcon from "@lucide/astro/icons/list-todo";
 import TerminalIcon from "@lucide/astro/icons/terminal";
 import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
@@ -11,7 +10,7 @@ import { themeImageSources } from "../lib/themeImage";
 import gitDark from "../assets/app_screenshots/git_dark.png";
 import gitLight from "../assets/app_screenshots/git_light.png";
 
-const sectionImage = await themeImageSources(gitLight, gitDark, 3020, 1894);
+const sectionImage = await themeImageSources(gitLight, gitDark, 3020, 1834);
 
 const workflow = [
   {
@@ -56,6 +55,7 @@ const paletteCommands = [
   "Interactive rebase",
   "Pop stash",
 ];
+
 ---
 
 <section
@@ -97,32 +97,19 @@ const paletteCommands = [
       </p>
     </div>
 
-    <div class="mt-14 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+    <div class="mt-14 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
       <div
-        class="reviu-reveal relative rounded-[2rem] border border-border bg-background/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur dark:bg-white/[0.04] dark:shadow-black/30"
+        class="reviu-reveal relative lg:-ml-24 xl:-ml-40"
         style="--reveal-delay: 200ms;"
       >
-        <ThemePicture
-          sources={sectionImage}
-          alt="Reviu interactive rebase, hunk staging, conflicts, and Git history screenshot"
-          loading="lazy"
-          class="rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10"
-        />
-        <div class="absolute right-6 bottom-6 hidden max-w-72 rounded-2xl border border-border bg-background/90 p-4 text-sm shadow-xl backdrop-blur md:block dark:bg-gray-950/90">
-          <p class="flex items-center gap-2 font-semibold text-foreground">
-            <GitGraphIcon class="size-4 text-primary" aria-hidden="true" />
-            Branch ready to push
-          </p>
-          <div class="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-            <div class="rounded-xl bg-emerald-500/10 px-2 py-2 text-emerald-600 dark:text-emerald-400">
-              6 staged
-            </div>
-            <div class="rounded-xl bg-amber-500/10 px-2 py-2 text-amber-600 dark:text-amber-400">
-              2 stashed
-            </div>
-            <div class="rounded-xl bg-primary/10 px-2 py-2 text-primary">
-              rebased
-            </div>
+        <div class="rounded-[2rem] border border-border bg-background/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur dark:bg-white/[0.04] dark:shadow-black/30">
+          <div class="aspect-[3020/1834] overflow-hidden rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10">
+            <ThemePicture
+              sources={sectionImage}
+              alt="Reviu interactive rebase, hunk staging, conflicts, and Git history screenshot"
+              loading="lazy"
+              class="h-full w-full object-cover object-top"
+            />
           </div>
         </div>
       </div>
