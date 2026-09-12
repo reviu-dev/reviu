@@ -2790,6 +2790,24 @@ impl AgentChatPanel {
     cx.notify();
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn first_diff_snapshot_for_driver(
+    &self,
+  ) -> Option<(PathBuf, Option<String>, String, Option<u32>)> {
+    self.items.iter().find_map(|item| {
+      let ChatItem::Tool(tool) = item else {
+        return None;
+      };
+      let diff = tool.diffs.first()?;
+      Some((
+        PathBuf::from(diff.path.clone()),
+        diff.old_text.clone(),
+        diff.new_text.clone(),
+        diff.first_changed_line(),
+      ))
+    })
+  }
+
   pub fn begin_message_edit(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
     if self.in_flight {
       return;

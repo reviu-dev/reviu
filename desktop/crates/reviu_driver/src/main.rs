@@ -158,6 +158,10 @@ enum Command {
   OpenFile {
     path: String,
   },
+  /// Open a repository-relative file as a normal code tab.
+  OpenCodeFile {
+    path: String,
+  },
   /// Open a Pull Request file in the center diff editor.
   OpenPullRequestFile {
     path: Option<String>,
@@ -176,8 +180,51 @@ enum Command {
   },
   /// Direct driver hook for perf runs: open the Changes dock tab.
   ShowChanges,
+  /// Direct driver hook: set the right dock width in pixels.
+  ResizeDock {
+    width: f32,
+  },
+  /// Direct driver hook: set the active editor vertical scroll offset in lines.
+  SetEditorScroll {
+    offset: f32,
+  },
+  /// Direct driver hook: expand all project sections in the sidebar.
+  ExpandSidebarProjects,
+  /// Direct driver hook: set the left sidebar width in pixels.
+  ResizeSidebar {
+    width: f32,
+  },
+  /// Direct driver hook: open a terminal center tab.
+  OpenTerminal,
+  /// Direct driver hook: open the first agent tool diff snapshot in the center editor.
+  OpenAgentDiffSnapshot,
+  /// Direct driver hook: focus the active agent chat center tab.
+  FocusAgentChat,
+  /// Direct driver hook: focus an agent chat center tab by title substring.
+  FocusAgentChatByTitle {
+    title: String,
+  },
+  /// Direct driver hook: create a new agent session.
+  NewAgentSession,
+  /// Direct driver hook: seed the active agent session with one user message.
+  SeedAgentMessage {
+    text: String,
+  },
+  /// Direct driver hook: split the active center surface with the chat on the left.
+  SplitCenterWithChat,
+  /// Wait until the active editor has loaded its projection, or return the last editor state.
+  WaitUntilEditorReady {
+    timeout_ms: Option<u64>,
+  },
+  /// Direct driver hook for marketing screenshots: open chat, files, terminal, and a split center layout.
+  PrepareScreenshotWorkspace {
+    active_path: Option<String>,
+    dock_width: Option<f32>,
+  },
   /// Direct driver hook: open the Pull Request dock tab.
   ShowPullRequest,
+  /// Direct driver hook: expand the Pull Request details/checks block.
+  ExpandPullRequestDetails,
   /// Direct driver hook: open the Review dock tab.
   ShowReview,
   /// Direct driver hook: create a pending pull request review comment on the open PR file.
@@ -434,6 +481,18 @@ fn handle_test_command(
         Err(error) => respond(err(error)),
       }
     }
+    Command::OpenCodeFile { path } => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.open_code_file_for_driver(PathBuf::from(path), window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::OpenPullRequestFile { path } => {
       let result = cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -466,9 +525,143 @@ fn handle_test_command(
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
     }
+    Command::ResizeDock { width } => {
+      cx.update(|_, cx| {
+        view.update(cx, |view, cx| view.resize_dock_for_driver(width, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::SetEditorScroll { offset } => {
+      let result = cx
+        .update(|_, cx| view.update(cx, |view, cx| view.set_editor_scroll_for_driver(offset, cx)));
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::ExpandSidebarProjects => {
+      cx.update(|_, cx| {
+        view.update(cx, |view, cx| view.expand_sidebar_projects_for_driver(cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::ResizeSidebar { width } => {
+      cx.update(|_, cx| {
+        view.update(cx, |view, cx| view.resize_sidebar_for_driver(width, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::OpenTerminal => {
+      cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.open_terminal_for_driver(window, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::OpenAgentDiffSnapshot => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.open_agent_diff_snapshot_for_driver(window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::FocusAgentChat => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.focus_agent_chat_for_driver(window, cx))
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::FocusAgentChatByTitle { title } => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.focus_agent_chat_by_title_for_driver(title, window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::NewAgentSession => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.new_agent_session_for_driver(window, cx))
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::SeedAgentMessage { text } => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.seed_agent_message_for_driver(text, window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::SplitCenterWithChat => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.split_center_with_chat_for_driver(window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::WaitUntilEditorReady { timeout_ms } => {
+      let state = wait_until_editor_ready_test(cx, view, timeout_ms.unwrap_or(5000));
+      respond(ok(state));
+    }
+    Command::PrepareScreenshotWorkspace {
+      active_path,
+      dock_width,
+    } => {
+      let active_path = active_path.map(PathBuf::from);
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.prepare_screenshot_workspace_for_driver(active_path, dock_width, window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::ShowPullRequest => {
       cx.update(|window, cx| {
         view.update(cx, |view, cx| view.show_pull_request_for_driver(window, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::ExpandPullRequestDetails => {
+      cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+          view.set_pull_request_details_expanded_for_driver(true, cx)
+        });
       });
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
@@ -640,6 +833,25 @@ fn simulate_scroll_events(
   cx.run_until_parked();
 }
 
+fn wait_until_editor_ready_test(
+  cx: &mut gpui::VisualTestContext,
+  view: &Entity<WorkspaceView>,
+  timeout_ms: u64,
+) -> serde_json::Value {
+  let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+  let mut state = view.read_with(cx, |view, cx| view.editor_stats_for_driver(cx));
+  while !state
+    .get("ready")
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false)
+    && std::time::Instant::now() < deadline
+  {
+    wait_test(cx, 100);
+    state = view.read_with(cx, |view, cx| view.editor_stats_for_driver(cx));
+  }
+  state
+}
+
 fn wait_test(cx: &mut gpui::VisualTestContext, ms: u64) {
   let deadline = std::time::Instant::now() + Duration::from_millis(ms);
   let mut flip = false;
@@ -789,6 +1001,10 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::OpenCodeFile { path } => match open_code_file_directly(cx, window, view, path) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
     Command::OpenPullRequestFile { path } => {
       match open_pull_request_file_directly(cx, window, view, path) {
         Ok(()) => respond(ok(serde_json::json!({}))),
@@ -815,10 +1031,77 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::ResizeDock { width } => match resize_dock_directly(cx, window, view, width) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::SetEditorScroll { offset } => {
+      match set_editor_scroll_directly(cx, window, view, offset) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::ExpandSidebarProjects => match expand_sidebar_projects_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::ResizeSidebar { width } => match resize_sidebar_directly(cx, window, view, width) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::OpenTerminal => match open_terminal_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::OpenAgentDiffSnapshot => match open_agent_diff_snapshot_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::FocusAgentChat => match focus_agent_chat_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::FocusAgentChatByTitle { title } => {
+      match focus_agent_chat_by_title_directly(cx, window, view, title) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::NewAgentSession => match new_agent_session_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::SeedAgentMessage { text } => {
+      match seed_agent_message_directly(cx, window, view, text) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::SplitCenterWithChat => match split_center_with_chat_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::WaitUntilEditorReady { timeout_ms } => {
+      let state = wait_until_editor_ready_visual(cx, window, view, timeout_ms.unwrap_or(5000));
+      respond(ok(state));
+    }
+    Command::PrepareScreenshotWorkspace {
+      active_path,
+      dock_width,
+    } => match prepare_screenshot_workspace_directly(cx, window, view, active_path, dock_width) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
     Command::ShowPullRequest => match show_pull_request_directly(cx, window, view) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::ExpandPullRequestDetails => {
+      match expand_pull_request_details_directly(cx, window, view) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::ShowReview => match show_review_directly(cx, window, view) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
@@ -976,6 +1259,24 @@ fn open_file_directly(
 }
 
 #[cfg(target_os = "macos")]
+fn open_code_file_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  path: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.open_code_file_for_driver(PathBuf::from(path), window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
 fn open_pull_request_file_directly(
   cx: &mut VisualTestAppContext,
   window: AnyWindowHandle,
@@ -1039,6 +1340,221 @@ fn show_changes_directly(
 }
 
 #[cfg(target_os = "macos")]
+fn prepare_screenshot_workspace_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  active_path: Option<String>,
+  dock_width: Option<f32>,
+) -> Result<(), String> {
+  let active_path = active_path.map(PathBuf::from);
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.prepare_screenshot_workspace_for_driver(active_path, dock_width, window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn resize_dock_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  width: f32,
+) -> Result<(), String> {
+  cx.update_window(window, |_, _, cx| {
+    view.update(cx, |view, cx| view.resize_dock_for_driver(width, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn set_editor_scroll_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  offset: f32,
+) -> Result<(), String> {
+  cx.update_window(window, |_, _, cx| {
+    view.update(cx, |view, cx| view.set_editor_scroll_for_driver(offset, cx))
+  })
+  .map_err(|error| error.to_string())??;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn expand_sidebar_projects_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  cx.update_window(window, |_, _, cx| {
+    view.update(cx, |view, cx| view.expand_sidebar_projects_for_driver(cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn resize_sidebar_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  width: f32,
+) -> Result<(), String> {
+  cx.update_window(window, |_, _, cx| {
+    view.update(cx, |view, cx| view.resize_sidebar_for_driver(width, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn open_terminal_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  cx.update_window(window, |_, window, cx| {
+    view.update(cx, |view, cx| view.open_terminal_for_driver(window, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn open_agent_diff_snapshot_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.open_agent_diff_snapshot_for_driver(window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn focus_agent_chat_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| view.focus_agent_chat_for_driver(window, cx))
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn focus_agent_chat_by_title_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  title: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.focus_agent_chat_by_title_for_driver(title, window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn new_agent_session_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| view.new_agent_session_for_driver(window, cx))
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn seed_agent_message_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  text: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.seed_agent_message_for_driver(text, window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn split_center_with_chat_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.split_center_with_chat_for_driver(window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn wait_until_editor_ready_visual(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  timeout_ms: u64,
+) -> serde_json::Value {
+  let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+  let mut state = view.read_with(cx, |view, cx| view.editor_stats_for_driver(cx));
+  while !state
+    .get("ready")
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false)
+    && std::time::Instant::now() < deadline
+  {
+    cx.advance_clock(Duration::from_millis(100));
+    wait_visual(cx, window, 100);
+    state = view.read_with(cx, |view, cx| view.editor_stats_for_driver(cx));
+  }
+  state
+}
+
+#[cfg(target_os = "macos")]
 fn show_pull_request_directly(
   cx: &mut VisualTestAppContext,
   window: AnyWindowHandle,
@@ -1060,6 +1576,22 @@ fn show_review_directly(
 ) -> Result<(), String> {
   cx.update_window(window, |_, window, cx| {
     view.update(cx, |view, cx| view.show_review_for_driver(window, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn expand_pull_request_details_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  cx.update_window(window, |_, _, cx| {
+    view.update(cx, |view, cx| {
+      view.set_pull_request_details_expanded_for_driver(true, cx)
+    });
   })
   .map_err(|error| error.to_string())?;
   cx.run_until_parked();
@@ -1464,14 +1996,49 @@ mod tests {
       serde_json::from_str::<Command>(r#"{"cmd":"show_changes"}"#).expect("show changes"),
       Command::ShowChanges
     ));
+    match serde_json::from_str::<Command>(r#"{"cmd":"resize_sidebar","width":280}"#)
+      .expect("resize sidebar")
+    {
+      Command::ResizeSidebar { width } => assert_eq!(width, 280.0),
+      _ => panic!("expected resize sidebar command"),
+    }
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"show_pull_request"}"#).expect("show pull request"),
       Command::ShowPullRequest
     ));
     assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"expand_pull_request_details"}"#)
+        .expect("expand pull request details"),
+      Command::ExpandPullRequestDetails
+    ));
+    assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"show_review"}"#).expect("show review"),
       Command::ShowReview
     ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"focus_agent_chat"}"#).expect("focus agent chat"),
+      Command::FocusAgentChat
+    ));
+    match serde_json::from_str::<Command>(
+      r#"{"cmd":"focus_agent_chat_by_title","title":"discount"}"#,
+    )
+    .expect("focus agent chat by title")
+    {
+      Command::FocusAgentChatByTitle { title } => assert_eq!(title, "discount"),
+      _ => panic!("expected focus agent chat by title command"),
+    }
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"new_agent_session"}"#).expect("new agent session"),
+      Command::NewAgentSession
+    ));
+    match serde_json::from_str::<Command>(
+      r#"{"cmd":"seed_agent_message","text":"Review tax rounding"}"#,
+    )
+    .expect("seed agent message")
+    {
+      Command::SeedAgentMessage { text } => assert_eq!(text, "Review tax rounding"),
+      _ => panic!("expected seed agent message command"),
+    }
     match serde_json::from_str::<Command>(
       r#"{"cmd":"create_pull_request_review_comment","path":"src/main.rs","line":0,"body":"note"}"#,
     )

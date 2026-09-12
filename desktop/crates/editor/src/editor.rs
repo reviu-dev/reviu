@@ -1460,6 +1460,19 @@ impl Editor {
     &self.document
   }
 
+  pub fn git_debug_state_for_driver(&self) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
+    (
+      self.git_diff_enabled,
+      self.repo_file.is_some(),
+      self.git_store.is_some(),
+      self.git_state.bases.is_some(),
+      self.diffs.is_some(),
+      self.projection.is_some(),
+      self.diff_task.is_some(),
+      self.bases_task.is_some(),
+    )
+  }
+
   pub fn measured_editor_line_height(&self) -> Pixels {
     if self.editor_line_height > px(0.0) {
       self.editor_line_height
@@ -2533,6 +2546,12 @@ impl Editor {
 
   pub fn review_comment_display_mode(&self) -> ReviewCommentDisplayMode {
     self.review_comment_display_mode
+  }
+
+  #[doc(hidden)]
+  pub fn set_scroll_offset_for_driver(&mut self, scroll_offset_y: f32, cx: &mut Context<Self>) {
+    self.scroll_offset_y = scroll_offset_y.max(0.0);
+    cx.notify();
   }
 
   /// What this editor currently offers a review comment. The host installs the

@@ -53,6 +53,19 @@ Common commands:
 {"cmd":"git_state"}
 {"cmd":"run_git_action","action":{"action":"push"}}
 {"cmd":"open_pull_request_file","path":"fixtures/pr-open.txt"}
+{"cmd":"open_code_file","path":"src/main.rs"}
+{"cmd":"open_terminal"}
+{"cmd":"open_agent_diff_snapshot"}
+{"cmd":"focus_agent_chat"}
+{"cmd":"focus_agent_chat_by_title","title":"discount"}
+{"cmd":"new_agent_session"}
+{"cmd":"seed_agent_message","text":"Review checkout discounts"}
+{"cmd":"split_center_with_chat"}
+{"cmd":"resize_dock","width":260}
+{"cmd":"set_editor_scroll","offset":5}
+{"cmd":"expand_sidebar_projects"}
+{"cmd":"resize_sidebar","width":280}
+{"cmd":"wait_until_editor_ready","timeout_ms":6000}
 {"cmd":"create_pull_request_review_comment","path":"fixtures/pr-open.txt","line":0,"body":"note"}
 {"cmd":"show_review"}
 {"cmd":"submit_pull_request_review","body":"looks good"}
@@ -110,7 +123,7 @@ Core tools:
 
 - lifecycle: `start`, `restart`, `status`, `quit`
 - UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `park`, `scroll`
-- app state: `path_prompt`, `open_file`, `open_pull_request_file`, `show_changes`, `show_pull_request`, `show_review`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`, `github_notifications`
+- app state: `path_prompt`, `open_file`, `open_code_file`, `open_pull_request_file`, `open_terminal`, `open_agent_diff_snapshot`, `focus_agent_chat`, `focus_agent_chat_by_title`, `new_agent_session`, `seed_agent_message`, `split_center_with_chat`, `resize_dock`, `set_editor_scroll`, `expand_sidebar_projects`, `resize_sidebar`, `wait_until_editor_ready`, `show_changes`, `show_pull_request`, `expand_pull_request_details`, `show_review`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`, `github_notifications`
 - Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `refresh_github_notifications`, `open_github_notification`, `mark_github_notification_done`, `run_git_action`, `create_pull_request_review_comment`, `submit_pull_request_review`, `discard_pull_request_review`
 - visual: `screenshot` with `--backend visual` on macOS
 

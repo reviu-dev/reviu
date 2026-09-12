@@ -248,6 +248,16 @@ impl SessionList {
     cx.notify();
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn expand_all_projects_for_driver(&mut self, cx: &mut Context<Self>) {
+    if self.collapsed_projects.is_empty() {
+      return;
+    }
+    self.collapsed_projects.clear();
+    cx.notify();
+  }
+
   #[cfg(test)]
   pub(crate) fn is_project_collapsed(&self, repo_root: &Path) -> bool {
     self.collapsed_projects.contains(repo_root)
@@ -400,7 +410,7 @@ impl SessionList {
     let mut paths = HashSet::new();
     for repo_root in self.rendered_project_order() {
       if self.git_repositories.contains(&repo_root) {
-        paths.insert(repo_root);
+        paths.insert(repo_root.clone());
       }
     }
     for row in &self.conversations {
@@ -524,10 +534,10 @@ impl SessionList {
         .unwrap_or_else(|| "Main checkout".into()),
       updated_at_secs: main_summary.and_then(|summary| summary.head_updated_at_secs),
     }];
+    let mut checkouts = Vec::new();
     if !self.git_repositories.contains(repo_root) {
       return rows;
     }
-    let mut checkouts = Vec::new();
     for row in self
       .conversations
       .iter()
@@ -787,9 +797,9 @@ impl SessionList {
           .child({
             let avatar = Avatar::new().name(name.clone()).xsmall();
             if let Some(url) = avatar_url {
-              avatar.src(url)
+              avatar.src(url).into_any_element()
             } else {
-              avatar
+              avatar.into_any_element()
             }
           }),
       )
@@ -1306,11 +1316,12 @@ impl Render for SessionList {
 
     let header = h_flex()
       .debug_selector(|| "session-sidebar-header".to_string())
-      .h(px(40.))
-      .min_h(px(40.))
-      .max_h(px(40.))
+      .h(px(36.))
+      .min_h(px(36.))
+      .max_h(px(36.))
       .flex_shrink_0()
       .items_center()
+      .text_xs()
       .px_3()
       .border_b_1()
       .border_color(theme.border)

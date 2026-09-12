@@ -7,7 +7,8 @@ use editor::{Copy, Cut, Paste, Quit, Redo, SelectAll, Undo, set_indent_rainbow_e
 use gpui::Keystroke;
 use gpui::{
   AnyWindowHandle, App, Context, Decorations, Entity, FocusHandle, Focusable, Global, Menu,
-  MenuItem, Render, Subscription, Task, Window, WindowButton, div, img, prelude::*, px,
+  MenuItem, Render, SharedString, Subscription, Task, Window, WindowButton, div, img, prelude::*,
+  px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex, kbd::Kbd,
@@ -326,6 +327,19 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn open_code_file_for_driver(
+    &mut self,
+    rel_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.open_code_file_for_driver(rel_path, window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn open_pull_request_file_for_driver(
     &mut self,
     rel_path: Option<PathBuf>,
@@ -470,6 +484,113 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn resize_dock_for_driver(&mut self, width: f32, cx: &mut Context<Self>) {
+    self
+      .session_page
+      .update(cx, |page, cx| page.resize_dock_for_driver(width, cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn expand_sidebar_projects_for_driver(&mut self, cx: &mut Context<Self>) {
+    self
+      .session_page
+      .update(cx, |page, cx| page.expand_sidebar_projects_for_driver(cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn set_editor_scroll_for_driver(
+    &mut self,
+    scroll_offset_y: f32,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.set_editor_scroll_for_driver(scroll_offset_y, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn resize_sidebar_for_driver(&mut self, width: f32, cx: &mut Context<Self>) {
+    self
+      .session_page
+      .update(cx, |page, cx| page.resize_sidebar_for_driver(width, cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn open_terminal_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self
+      .session_page
+      .update(cx, |page, cx| page.open_terminal_for_driver(window, cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn open_agent_diff_snapshot_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.open_agent_diff_snapshot_for_driver(window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn focus_agent_chat_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    self
+      .session_page
+      .update(cx, |page, cx| page.focus_agent_chat_for_driver(window, cx))
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn focus_agent_chat_by_title_for_driver(
+    &mut self,
+    title: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.focus_agent_chat_by_title_for_driver(title, window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn split_center_with_chat_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.split_center_with_chat_for_driver(window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn prepare_screenshot_workspace_for_driver(
+    &mut self,
+    active_path: Option<PathBuf>,
+    dock_width: Option<f32>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.prepare_screenshot_workspace_for_driver(active_path, dock_width, window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn show_pull_request_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self
       .session_page
@@ -482,6 +603,18 @@ impl WorkspaceView {
     self
       .session_page
       .update(cx, |page, cx| page.show_review_for_driver(window, cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn set_pull_request_details_expanded_for_driver(
+    &mut self,
+    expanded: bool,
+    cx: &mut Context<Self>,
+  ) {
+    self.session_page.update(cx, |page, cx| {
+      page.set_pull_request_details_expanded_for_driver(expanded, cx)
+    });
   }
 
   #[cfg(any(test, feature = "test-support"))]
@@ -540,6 +673,31 @@ impl WorkspaceView {
   ) -> Result<(), gpui::SharedString> {
     self.session_page.update(cx, |page, cx| {
       page.submit_agent_prompt_for_driver(text, window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn new_agent_session_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self
+      .session_page
+      .update(cx, |page, cx| page.new_agent_session_for_driver(window, cx))
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn seed_agent_message_for_driver(
+    &mut self,
+    text: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.seed_agent_message_for_driver(text, window, cx)
     })
   }
 
@@ -977,7 +1135,7 @@ impl WorkspaceView {
       .label(update_action_label(update_state.clone()))
       .primary()
       .compact()
-      .small()
+      .xsmall()
       .loading(update_download_in_progress)
       .disabled(update_download_in_progress)
       .on_click(cx.listener(Self::global_update_download_action));
@@ -991,8 +1149,8 @@ impl WorkspaceView {
       .icon(IconName::Github)
       .label("Sign in with GitHub")
       .ghost()
-      .gap_2()
-      .small()
+      .gap_1()
+      .xsmall()
       .on_click(|_, _, cx| {
         crate::auth_flow::start_github_sign_in(cx, "top_bar");
       });
@@ -1001,7 +1159,7 @@ impl WorkspaceView {
       .label("File search")
       .ghost()
       .compact()
-      .small()
+      .xsmall()
       .child(Self::file_search_kbd(window, cx).ml_1())
       .on_click(|_, window, cx| {
         window.dispatch_action(Box::new(ShowFileSearch), cx);
@@ -1011,7 +1169,7 @@ impl WorkspaceView {
       .label("Command palette")
       .ghost()
       .compact()
-      .small()
+      .xsmall()
       .child(Self::command_palette_kbd(window, cx).ml_1())
       .on_click(|_, window, cx| {
         window.dispatch_action(Box::new(ShowCommandPalette), cx);
@@ -1052,7 +1210,7 @@ impl WorkspaceView {
       bar.px_3()
     };
 
-    let mut right = div().flex().items_center().gap_2();
+    let mut right = div().flex().items_center().gap_1();
     if show_update_button {
       right = right.child(update_button);
     }

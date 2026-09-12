@@ -444,7 +444,13 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
       "path": required_string(&arguments, "path")?,
     }),
     "show_changes" => json!({ "cmd": "show_changes" }),
+    "set_editor_scroll" => json!({
+      "cmd": "set_editor_scroll",
+      "offset": required_f64(&arguments, "offset")?,
+    }),
+    "expand_sidebar_projects" => json!({ "cmd": "expand_sidebar_projects" }),
     "show_pull_request" => json!({ "cmd": "show_pull_request" }),
+    "expand_pull_request_details" => json!({ "cmd": "expand_pull_request_details" }),
     "show_review" => json!({ "cmd": "show_review" }),
     "create_pull_request_review_comment" => json!({
       "cmd": "create_pull_request_review_comment",
@@ -661,8 +667,27 @@ fn tools() -> Vec<Value> {
     ),
     tool("show_changes", "Open the Changes dock tab.", empty_schema()),
     tool(
+      "set_editor_scroll",
+      "Set the active editor vertical scroll offset in lines.",
+      object_schema(vec![number_property(
+        "offset",
+        "Vertical scroll offset in lines.",
+      )])
+      .required(["offset"]),
+    ),
+    tool(
+      "expand_sidebar_projects",
+      "Expand all project sections in the sidebar.",
+      empty_schema(),
+    ),
+    tool(
       "show_pull_request",
       "Open the Pull Request dock tab.",
+      empty_schema(),
+    ),
+    tool(
+      "expand_pull_request_details",
+      "Expand the Pull Request details and checks block.",
       empty_schema(),
     ),
     tool("show_review", "Open the Review dock tab.", empty_schema()),
@@ -942,6 +967,7 @@ mod tests {
       "open_github_notification",
       "mark_github_notification_done",
       "show_pull_request",
+      "expand_pull_request_details",
       "show_review",
       "create_pull_request_review_comment",
       "submit_pull_request_review",
@@ -1013,6 +1039,11 @@ mod tests {
     assert_eq!(
       command_for_tool("show_pull_request", json!({})).expect("show pull request"),
       json!({ "cmd": "show_pull_request" })
+    );
+    assert_eq!(
+      command_for_tool("expand_pull_request_details", json!({}))
+        .expect("expand pull request details"),
+      json!({ "cmd": "expand_pull_request_details" })
     );
   }
 

@@ -74,10 +74,9 @@ use crate::interactive_rebase_todo_view::{
 };
 use sentry::protocol::Map;
 
-use crate::annotations::{
-  AnnotationDirection, AnnotationNavigationState, annotation_navigation_state_for,
-  can_navigate_annotations, navigate_annotation,
-};
+use crate::annotations::{AnnotationDirection, navigate_annotation};
+#[cfg(test)]
+use crate::annotations::{AnnotationNavigationState, annotation_navigation_state_for};
 use crate::palette_branches::{
   delete_branch_candidates, palette_branch, palette_stashes, rebase_branch_candidates,
 };
@@ -113,6 +112,7 @@ const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
 const WHITESPACE_TOGGLE_DEBUG_SELECTOR: &str = "session-whitespace-toggle";
 const SAVE_BUTTON_DEBUG_SELECTOR: &str = "session-save-file";
+#[cfg(test)]
 const ANNOTATION_COUNTER_DEBUG_SELECTOR: &str = "session-annotation-counter";
 const INTERACTIVE_REBASE_DEBUG_SELECTOR: &str = "session-interactive-rebase";
 const DIFF_EDITOR_DEBUG_SELECTOR: &str = "session-diff-editor";
@@ -1840,6 +1840,21 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn open_code_file_for_driver(
+    &mut self,
+    rel_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.checkout_root(cx).is_none() {
+      return Err("No project selected.".into());
+    }
+    self.open_file(rel_path, Some(1), None, OpenIntent::Open, window, cx);
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn open_pull_request_file_for_driver(
     &mut self,
     rel_path: Option<PathBuf>,
@@ -1853,6 +1868,9 @@ impl SessionPage {
     else {
       return Err("No loaded pull request file matches the driver request.".into());
     };
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.select_pr_file_for_driver(Some(path.as_path()), window, cx)
+    });
     self.open_pull_request_file(base, head, path, None, OpenIntent::Open, window, cx);
     Ok(())
   }
@@ -1865,6 +1883,219 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn expand_sidebar_projects_for_driver(&mut self, cx: &mut Context<Self>) {
+    self
+      .session_list
+      .update(cx, |list, cx| list.expand_all_projects_for_driver(cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn set_editor_scroll_for_driver(
+    &mut self,
+    scroll_offset_y: f32,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(editor) = self.warm_editor() else {
+      return Err("No editor is open.".into());
+    };
+    editor.update(cx, |editor, cx| {
+      editor.set_scroll_offset_for_driver(scroll_offset_y, cx)
+    });
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn resize_dock_for_driver(&mut self, width: f32, cx: &mut Context<Self>) {
+    self.resize_dock(width, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn resize_sidebar_for_driver(&mut self, width: f32, cx: &mut Context<Self>) {
+    self.resize_sidebar(width, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn open_terminal_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.new_terminal_tab(window, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn open_agent_diff_snapshot_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return Err("No agent session is open.".into());
+    };
+    let Some((path, old_text, new_text, line)) = panel.read(cx).first_diff_snapshot_for_driver()
+    else {
+      return Err("No agent diff snapshot is available.".into());
+    };
+    let checkout = panel.read(cx).cwd().to_path_buf();
+    let rel_path = agent_path_to_repo_relative(path, Some(checkout.as_path()));
+    self.open_agent_diff_snapshot(
+      rel_path,
+      old_text,
+      new_text,
+      line,
+      OpenIntent::Open,
+      window,
+      cx,
+    );
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn focus_agent_chat_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.checkout_root(cx).is_none() {
+      return Err("No project selected.".into());
+    }
+    let chat_tab = self.active_chat_tab(cx);
+    self.activate_center_tab(chat_tab, OpenIntent::Open, window, cx);
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn focus_agent_chat_by_title_for_driver(
+    &mut self,
+    title: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.checkout_root(cx).is_none() {
+      return Err("No project selected.".into());
+    }
+
+    let title = title.to_lowercase();
+    let tab = self
+      .center_tabs
+      .iter()
+      .filter(|tab| tab.kind == CenterTabKind::Chat)
+      .find(|tab| {
+        let label = match tab.conversation_id() {
+          Some(id) => self
+            .agent_chat_view
+            .iter()
+            .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+            .find_map(|panel| {
+              let panel = panel.read(cx);
+              (panel.current_conversation().id == id)
+                .then(|| panel.current_conversation().title.clone())
+            })
+            .or_else(|| self.conversation_meta(id, cx).map(|meta| meta.title))
+            .unwrap_or_default(),
+          None => "Chat".to_string(),
+        };
+        label.to_lowercase().contains(&title)
+      })
+      .cloned()
+      .ok_or_else(|| SharedString::from("No matching agent chat tab."))?;
+
+    self.activate_center_tab(tab, OpenIntent::Open, window, cx);
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn split_center_with_chat_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.checkout_root(cx).is_none() {
+      return Err("No project selected.".into());
+    }
+
+    let active_tab = self.center_layout.active_tab().clone();
+    let chat_tab = self.active_chat_tab(cx);
+    let pane_id = match self.center_layout.root() {
+      crate::session_page::center_layout::CenterNode::Pane(pane) => pane.id(),
+      crate::session_page::center_layout::CenterNode::Split(_) => return Ok(()),
+    };
+
+    self.center_layout.split_pane(
+      pane_id,
+      CenterSurface::from_tab(chat_tab),
+      CenterSplitDirection::Left,
+    );
+    self.remember_center_layout_tab(active_tab.clone());
+    self.activate_center_tab(active_tab, OpenIntent::Open, window, cx);
+    self.sync_agent_chat_close_control(cx);
+    cx.notify();
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn prepare_screenshot_workspace_for_driver(
+    &mut self,
+    active_path: Option<PathBuf>,
+    dock_width: Option<f32>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.checkout_root(cx).is_none() {
+      return Err("No project selected.".into());
+    }
+
+    let chat_tab = self.active_chat_tab(cx);
+    let active_path = active_path.unwrap_or_else(|| PathBuf::from("src/promo-codes.ts"));
+    let active_tab = CenterTab::diff(active_path.clone());
+    self.remember_center_tab(chat_tab.clone());
+    self.open_diff(
+      PathBuf::from("src/discounts.ts"),
+      Some(1),
+      OpenIntent::Open,
+      window,
+      cx,
+    );
+    self.open_file(
+      PathBuf::from("test/discounts.test.ts"),
+      Some(1),
+      None,
+      OpenIntent::Open,
+      window,
+      cx,
+    );
+    self.new_terminal_tab(window, cx);
+    self.open_diff(active_path, Some(1), OpenIntent::Open, window, cx);
+
+    let pane_id = match self.center_layout.root() {
+      crate::session_page::center_layout::CenterNode::Pane(pane) => Some(pane.id()),
+      crate::session_page::center_layout::CenterNode::Split(_) => None,
+    };
+    if let Some(pane_id) = pane_id {
+      self.center_layout.split_pane(
+        pane_id,
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      );
+      self.remember_center_layout_tab(active_tab.clone());
+    }
+
+    self.center = CenterView::Diff;
+    self.set_active_center_tab(active_tab);
+    self.show_dock_tab(DockPanelTab::Changes, window, cx);
+    self.resize_dock(dock_width.unwrap_or(260.0), cx);
+    self.sync_agent_chat_close_control(cx);
+    cx.notify();
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn show_pull_request_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.show_dock_tab(DockPanelTab::PullRequest, window, cx);
   }
@@ -1873,6 +2104,18 @@ impl SessionPage {
   #[doc(hidden)]
   pub fn show_review_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.show_dock_tab(DockPanelTab::Review, window, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn set_pull_request_details_expanded_for_driver(
+    &mut self,
+    expanded: bool,
+    cx: &mut Context<Self>,
+  ) {
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.set_pull_request_details_expanded_for_driver(expanded, cx)
+    });
   }
 
   #[cfg(any(test, feature = "test-support"))]
@@ -1954,6 +2197,37 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn new_agent_session_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.checkout_root(cx).is_none() {
+      return Err("No project selected.".into());
+    }
+    self.new_session(window, cx);
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn seed_agent_message_for_driver(
+    &mut self,
+    text: String,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return Err("No agent session is open.".into());
+    };
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test(text, cx);
+    });
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn agent_stats_for_driver(&self, cx: &App) -> serde_json::Value {
     let active_in_flight = self
       .agent_chat_view
@@ -1999,6 +2273,16 @@ impl SessionPage {
       let document = editor.document().read(cx);
       let line_count = document.len_lines();
       let display_line_count = editor.display_line_count(line_count);
+      let (
+        git_diff_enabled,
+        has_repo_file,
+        has_git_store,
+        has_bases,
+        has_diffs,
+        has_projection,
+        diff_task_active,
+        bases_task_active,
+      ) = editor.git_debug_state_for_driver();
       serde_json::json!({
         "ready": editor.projection().is_some(),
         "selected_file": selected_file,
@@ -2009,6 +2293,14 @@ impl SessionPage {
         "virtual_line_layout_cache_size": editor.virtual_line_layouts.len(),
         "word_diff_cache_size": editor.word_diff_cache_size(),
         "review_comment_ids": editor.review_comment_ids(),
+        "git_diff_enabled": git_diff_enabled,
+        "has_repo_file": has_repo_file,
+        "has_git_store": has_git_store,
+        "has_bases": has_bases,
+        "has_diffs": has_diffs,
+        "has_projection": has_projection,
+        "diff_task_active": diff_task_active,
+        "bases_task_active": bases_task_active,
       })
     })
   }

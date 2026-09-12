@@ -1225,6 +1225,7 @@ impl SessionPage {
       .and_then(|entry| entry.old_path.clone())
   }
 
+  #[cfg(test)]
   pub(super) fn annotation_navigation(&self, cx: &App) -> Option<AnnotationNavigationState> {
     let editor = self.diff_editor()?;
     let file_status = self.shown_file_status(cx);
