@@ -1,68 +1,54 @@
-# Reviu
+<p align="center">
+  <img src=".github/assets/icon.png" width="128" height="128" alt="Reviu">
+</p>
 
-A keyboard-first desktop Git client, built in Rust with [GPUI](https://gpui.rs). Review your AI agent's code before you push, then take it to merge.
+<h1 align="center">Reviu</h1>
 
-**[Website](https://reviu.dev)** · [Download](https://reviu.dev/#downloads) · [Changelog](https://reviu.dev/changelog)
+<p align="center">
+  The review app for code your agent writes.<br>
+  Native Rust desktop app with real Git workflows.
+</p>
 
-Reviu keeps the whole review loop in one native app: read your local diffs, review the code your agent wrote, and (with Reviu Pro) do GitHub pull request review, instead of bouncing between a Git client, the terminal and the browser. No Electron, no webview.
+<p align="center">
+  <a href="https://reviu.dev">Website</a> ·
+  <a href="https://reviu.dev/#downloads">Download</a> ·
+  <a href="https://reviu.dev/changelog">Changelog</a> ·
+  <a href="https://reviu.dev/#pricing">Pricing</a>
+</p>
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="website/src/assets/app_screenshots/git_light.png">
-  <img alt="Reviu local Git view with a split diff and the agent panel" src="website/src/assets/app_screenshots/git_dark.png">
-</picture>
+<p align="center">
+  <a href="https://github.com/reviu-dev/reviu/releases/latest"><img src="https://img.shields.io/github/v/release/reviu-dev/reviu" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-FSL--1.1--ALv2-blue" alt="License: FSL-1.1-ALv2"></a>
+  <img src="https://img.shields.io/badge/Rust-GPUI-2563EB" alt="Rust and GPUI">
+</p>
 
-## Features
+---
 
-### Review your agent's code before you push
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/readme-hero-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/readme-hero-light.png">
+    <img alt="Reviu desktop app with agent sessions, diff review, changes, and pull request workflow" src=".github/assets/readme-hero-light.png" width="900">
+  </picture>
+</p>
 
-Run Claude or Codex from the sidebar, read the diff it produced in a real editor, leave inline comments on the lines you want changed, and send them back to the agent. Works on local changes, no account needed.
+Reviu keeps the coding-agent review loop in one native app. Start Claude Code or Codex, watch the session, review every diff, send line comments back to the agent, then stage, rebase, commit, and open the pull request without bouncing between a terminal, Git client, and browser.
 
-### Full local Git, keyboard-first
+## What Reviu does
 
-Inline and split diffs, staging by hunk, commit / amend / undo, branch, merge, rebase (including interactive), cherry-pick, stash and conflict resolution, all reachable from a command palette. A built-in terminal sits beside the diff and opens in the selected repo.
+- **Review agent-written code locally**: read local diffs in a real editor, leave inline comments, and send precise feedback back to the agent.
+- **Use real Git, fast**: stage by hunk, commit, amend, branch, merge, rebase, cherry-pick, stash, resolve conflicts, and work from a command palette.
+- **Finish pull requests in Reviu Pro**: GitHub notifications, saved PR lists, pull request diffs, review threads, checks, merge actions, and optional AI briefs.
 
-### A GitHub home built for daily review · Reviu Pro
+## Download
 
-Notifications, saved pull request lists with filters, and repository browsing in one desktop home, backed by a multi-tier cache so it stays fast.
+Download the latest build from [reviu.dev](https://reviu.dev/#downloads) or [GitHub Releases](https://github.com/reviu-dev/reviu/releases).
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="website/src/assets/app_screenshots/github_home_light.png">
-  <img alt="Reviu GitHub home with notifications and saved pull request lists" src="website/src/assets/app_screenshots/github_home_dark.png">
-</picture>
-
-### Pull request review on the desktop · Reviu Pro
-
-Open a PR in inline or split diff, comment on the exact lines, stack comments into a pending review and submit them together (Approve / Request changes / Comment), track checks, and merge when the branch is ready.
-
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="website/src/assets/app_screenshots/github_pr_changes_light.png">
-  <img alt="Reviu pull request review with an inline diff and review comments" src="website/src/assets/app_screenshots/github_pr_changes_dark.png">
-</picture>
-
-### Threads, replies and AI briefs · Reviu Pro
-
-Reply to review threads, resolve conversations, and get an optional AI brief of a pull request (summary, files to review first, risks) with your own OpenAI or Anthropic key.
-
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="website/src/assets/app_screenshots/github_pr_conv_light.png">
-  <img alt="Reviu pull request conversation with review threads" src="website/src/assets/app_screenshots/github_pr_conv_dark.png">
-</picture>
-
-## Reviu Pro
-
-Free covers local Git and the agent panel. Reviu Pro adds the in-app GitHub integration (notifications, repository browsing, pull request review, issues, checks and merge actions) for `$9/month` or `$79/year`, with a 14-day trial.
-
-## Repository layout
-
-- `desktop/`: the Rust + GPUI desktop app (this is the client).
-- `website/`: the Astro marketing site ([reviu.dev](https://reviu.dev)).
-- `extension/`: browser extension for GitHub repos, PRs, and issues.
-
-The GitHub-integration backend (the service powering Reviu Pro) is closed-source and lives in a separate private repository. The Free features (local Git and the agent panel) run fully without it.
+Free covers local Git and the agent review workflow. [Reviu Pro](https://reviu.dev/#pricing) adds the in-app GitHub integration for pull request review and daily GitHub triage.
 
 ## License
 
-Source-available under [FSL-1.1-ALv2](LICENSE) (Functional Source License, Apache 2.0 future license): use, modify and redistribute freely for any non-competing purpose; each version converts to Apache-2.0 two years after its release.
+Source-available under [FSL-1.1-ALv2](LICENSE).
 
 ## Security
 
