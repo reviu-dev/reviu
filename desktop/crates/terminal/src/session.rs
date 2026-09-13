@@ -971,10 +971,12 @@ fn selection_type_for_mode(mode: TerminalSelectionMode) -> SelectionType {
 #[cfg(test)]
 mod tests {
   use super::{
-    TerminalBounds, TerminalListener, TerminalSelectionMode, TerminalSession, ViewportPoint,
-    ViewportSelectionRange, WorkingDirectoryTracker, search_match_to_viewport,
-    search_matches_for_term, selection_range_for_term, selection_text_for_term, snapshot_from_term,
+    TerminalBounds, TerminalListener, TerminalSelectionMode, ViewportPoint, ViewportSelectionRange,
+    search_match_to_viewport, search_matches_for_term, selection_range_for_term,
+    selection_text_for_term, snapshot_from_term,
   };
+  #[cfg(not(windows))]
+  use super::{TerminalSession, WorkingDirectoryTracker};
   use alacritty_terminal::{
     Term,
     event::{EventListener, VoidListener},
