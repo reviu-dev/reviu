@@ -23,6 +23,11 @@ struct SessionPageTestHost {
   page: Entity<SessionPage>,
 }
 
+fn disable_agent_process_for_test() {
+  // Real ACP I/O wakes GPUI from outside the deterministic test scheduler.
+  agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+}
+
 impl Render for SessionPageTestHost {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
@@ -39,6 +44,7 @@ pub(crate) fn add_session_page_window(
   repo_root: PathBuf,
   cx: &mut TestAppContext,
 ) -> (Entity<SessionPage>, &mut gpui::VisualTestContext) {
+  disable_agent_process_for_test();
   // The recent-repository store is process-global, so parallel tests would race
   // over it; the repo is set on the page explicitly below instead.
   isolate_config_store_for_test();
@@ -82,6 +88,7 @@ pub(crate) fn add_session_page_window(
 fn mount_session_page_window(
   cx: &mut TestAppContext,
 ) -> (Entity<SessionPage>, &mut gpui::VisualTestContext) {
+  disable_agent_process_for_test();
   cx.update(|cx| {
     gpui_component::init(cx);
     if !cx.has_global::<crate::config::AppSettings>() {

@@ -2569,10 +2569,7 @@ mod tests {
     });
   }
 
-  /// A page with the agent panel mounted against a nonexistent binary: the
-  /// full multi-panel plumbing runs, no process ever spawns. The override is
-  /// process-wide and never cleared: tests run in parallel, and clearing it
-  /// mid-run would let another test spawn a real agent.
+  /// A page with the agent panel mounted while the test fixture keeps its process disconnected.
   async fn page_with_agent_panel<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
@@ -2581,7 +2578,6 @@ mod tests {
     Entity<SessionPage>,
     &'a mut gpui::VisualTestContext,
   ) {
-    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
     let repo = TempRepo::init(name);
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let state_dir = agent_chat_state_dir()
