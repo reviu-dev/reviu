@@ -1287,6 +1287,35 @@ fn terminal_key_bindings() -> Vec<KeyBinding> {
   })
   .collect::<Vec<_>>();
 
+  let (find, next_match, previous_match) = if cfg!(target_os = "macos") {
+    ("cmd-f", "cmd-g", "cmd-shift-g")
+  } else {
+    ("ctrl-f", "ctrl-g", "ctrl-shift-g")
+  };
+  bindings.extend([
+    KeyBinding::new(find, terminal::OpenSearch, Some(terminal::TERMINAL_CONTEXT)),
+    KeyBinding::new(
+      find,
+      terminal::OpenSearch,
+      Some(terminal::TERMINAL_SEARCH_CONTEXT),
+    ),
+    KeyBinding::new(
+      "escape",
+      terminal::CloseSearch,
+      Some(terminal::TERMINAL_SEARCH_CONTEXT),
+    ),
+    KeyBinding::new(
+      next_match,
+      terminal::SearchNext,
+      Some(terminal::TERMINAL_SEARCH_CONTEXT),
+    ),
+    KeyBinding::new(
+      previous_match,
+      terminal::SearchPrevious,
+      Some(terminal::TERMINAL_SEARCH_CONTEXT),
+    ),
+  ]);
+
   if cfg!(target_os = "macos") {
     bindings.extend([
       KeyBinding::new(
@@ -1670,6 +1699,33 @@ mod tests {
         "{keystroke} should reach the terminal",
       );
     }
+  }
+
+  #[test]
+  fn terminal_search_shortcuts_override_terminal_input() {
+    let find = if cfg!(target_os = "macos") {
+      "cmd-f"
+    } else {
+      "ctrl-f"
+    };
+    assert_eq!(
+      first_binding_action_name(
+        "workspace",
+        &[terminal::TERMINAL_CONTEXT],
+        find,
+        app_and_workspace_key_bindings(),
+      ),
+      Some(<terminal::OpenSearch as Action>::name_for_type()),
+    );
+    assert_eq!(
+      first_binding_action_name(
+        "workspace",
+        &[terminal::TERMINAL_SEARCH_CONTEXT],
+        "escape",
+        app_and_workspace_key_bindings(),
+      ),
+      Some(<terminal::CloseSearch as Action>::name_for_type()),
+    );
   }
 
   #[test]

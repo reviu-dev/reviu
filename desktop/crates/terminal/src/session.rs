@@ -10,11 +10,16 @@ use alacritty_terminal::{
   event::{Event, EventListener, WindowSize},
   event_loop::{EventLoop, EventLoopSender, Msg},
   grid::{Dimensions, Scroll},
-  index::{Column, Point},
+  index::{Column, Direction, Point},
   selection::{Selection, SelectionType},
   sync::FairMutex,
   term::{
-    Config, Term, TermMode, cell::Flags, color::Colors, point_to_viewport, viewport_to_point,
+    Config, Term, TermMode,
+    cell::Flags,
+    color::Colors,
+    point_to_viewport,
+    search::{RegexIter, RegexSearch},
+    viewport_to_point,
   },
   tty,
   vte::ansi::{Color, CursorShape},
@@ -169,6 +174,23 @@ pub enum TerminalSelectionMode {
   Lines,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalSearchMatch {
+  start: Point,
+  end: Point,
+}
+
+pub(crate) struct TerminalSearchHandle {
+  term: Arc<FairMutex<Term<TerminalListener>>>,
+}
+
+impl TerminalSearchHandle {
+  pub(crate) fn find_matches(&self, query: &str) -> Vec<TerminalSearchMatch> {
+    let term = self.term.lock();
+    search_matches_for_term(&term, query)
+  }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalCellSnapshot {
   pub row: usize,
@@ -272,6 +294,7 @@ impl EventListener for TerminalListener {
 
 pub(crate) struct WorkingDirectoryTracker {
   process_id: Pid,
+  tracked_process_id: Mutex<Option<Pid>>,
   system: Mutex<System>,
   current: RwLock<PathBuf>,
   refresh_state: AtomicU8,
@@ -281,6 +304,7 @@ impl WorkingDirectoryTracker {
   fn new(process_id: u32, working_directory: PathBuf) -> Self {
     Self {
       process_id: Pid::from_u32(process_id),
+      tracked_process_id: Mutex::new(None),
       system: Mutex::new(System::new()),
       current: RwLock::new(working_directory),
       refresh_state: AtomicU8::new(0),
@@ -317,18 +341,7 @@ impl WorkingDirectoryTracker {
   pub(crate) fn refresh(&self) -> Option<PathBuf> {
     let mut latest = None;
     loop {
-      let next = {
-        let mut system = self.system.lock();
-        system.refresh_processes_specifics(
-          ProcessesToUpdate::Some(&[self.process_id]),
-          ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
-        );
-        system
-          .process(self.process_id)
-          .and_then(|process| process.cwd())
-          .filter(|path| path.is_dir())
-          .map(Path::to_path_buf)
-      };
+      let next = self.refresh_working_directory();
       if let Some(next) = next {
         *self.current.write() = next.clone();
         latest = Some(next);
@@ -353,9 +366,88 @@ impl WorkingDirectoryTracker {
     }
   }
 
+  fn refresh_working_directory(&self) -> Option<PathBuf> {
+    let mut system = self.system.lock();
+    let mut tracked_process_id = self.tracked_process_id.lock();
+
+    if let Some(process_id) = *tracked_process_id {
+      system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[process_id]),
+        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+      );
+      if let Some(path) = process_working_directory(&system, process_id) {
+        return Some(path);
+      }
+      *tracked_process_id = None;
+    }
+
+    system.refresh_processes_specifics(
+      ProcessesToUpdate::All,
+      ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+    );
+    if let Some(root_process) = system.process(self.process_id)
+      && root_process.name() != "login"
+      && let Some(path) = process_working_directory(&system, self.process_id)
+    {
+      *tracked_process_id = Some(self.process_id);
+      return Some(path);
+    }
+
+    if let Some((process_id, path)) = closest_descendant_working_directory(&system, self.process_id)
+    {
+      *tracked_process_id = Some(process_id);
+      return Some(path);
+    }
+
+    None
+  }
+
   pub(crate) fn current(&self) -> PathBuf {
     self.current.read().clone()
   }
+}
+
+fn process_working_directory(system: &System, process_id: Pid) -> Option<PathBuf> {
+  system
+    .process(process_id)
+    .and_then(|process| process.cwd())
+    .filter(|path| path.is_dir())
+    .map(Path::to_path_buf)
+}
+
+fn closest_descendant_working_directory(system: &System, root: Pid) -> Option<(Pid, PathBuf)> {
+  system
+    .processes()
+    .iter()
+    .filter_map(|(process_id, process)| {
+      let depth = process_depth(system, *process_id, root)?;
+      if depth == 0 {
+        return None;
+      }
+      let path = process.cwd()?.to_path_buf();
+      path.is_dir().then_some((*process_id, path, depth))
+    })
+    .min_by_key(|(_, _, depth)| *depth)
+    .map(|(process_id, path, _)| (process_id, path))
+}
+
+fn process_depth(system: &System, process_id: Pid, root: Pid) -> Option<usize> {
+  if process_id == root {
+    return Some(0);
+  }
+
+  let mut current = process_id;
+  for depth in 1..=64 {
+    let parent = system.process(current)?.parent()?;
+    if parent == root {
+      return Some(depth);
+    }
+    if parent == current {
+      return None;
+    }
+    current = parent;
+  }
+  None
 }
 
 pub struct TerminalSession {
@@ -472,6 +564,27 @@ impl TerminalSession {
 
   pub(crate) fn event_receiver(&self) -> Receiver<Event> {
     self.event_rx.clone()
+  }
+
+  pub(crate) fn search_handle(&self) -> TerminalSearchHandle {
+    TerminalSearchHandle {
+      term: Arc::clone(&self.term),
+    }
+  }
+
+  pub(crate) fn scroll_to_search_match(&mut self, found: TerminalSearchMatch) {
+    self.term.lock().scroll_to_point(found.start);
+  }
+
+  pub(crate) fn visible_search_ranges(
+    &self,
+    matches: &[TerminalSearchMatch],
+  ) -> Vec<ViewportSelectionRange> {
+    let term = self.term.lock();
+    matches
+      .iter()
+      .filter_map(|found| search_match_to_viewport(&term, *found))
+      .collect()
   }
 
   pub(crate) fn process_events(
@@ -640,6 +753,68 @@ impl Drop for TerminalSession {
   }
 }
 
+fn search_matches_for_term<T>(term: &Term<T>, query: &str) -> Vec<TerminalSearchMatch> {
+  if query.is_empty() {
+    return Vec::new();
+  }
+
+  let pattern = format!("(?i:{})", regex::escape(query));
+  let Ok(mut search) = RegexSearch::new(&pattern) else {
+    return Vec::new();
+  };
+  let start = Point::new(term.grid().topmost_line(), Column(0));
+  let end = Point::new(term.grid().bottommost_line(), term.grid().last_column());
+
+  RegexIter::new(start, end, Direction::Right, term, &mut search)
+    .map(|found| TerminalSearchMatch {
+      start: *found.start(),
+      end: *found.end(),
+    })
+    .collect()
+}
+
+fn search_match_to_viewport<T>(
+  term: &Term<T>,
+  found: TerminalSearchMatch,
+) -> Option<ViewportSelectionRange> {
+  let rows = term.screen_lines();
+  let cols = term.columns();
+  if rows == 0 || cols == 0 {
+    return None;
+  }
+
+  let display_offset = term.grid().display_offset();
+  let viewport_top = -(display_offset as i32);
+  let viewport_bottom = viewport_top + rows as i32 - 1;
+  if found.end.line.0 < viewport_top || found.start.line.0 > viewport_bottom {
+    return None;
+  }
+
+  let start_line = found.start.line.0.max(viewport_top);
+  let end_line = found.end.line.0.min(viewport_bottom);
+  let start_col = if found.start.line.0 < viewport_top {
+    0
+  } else {
+    found.start.column.0.min(cols - 1)
+  };
+  let end_col = if found.end.line.0 > viewport_bottom {
+    cols - 1
+  } else {
+    found.end.column.0.min(cols - 1)
+  };
+
+  Some(ViewportSelectionRange {
+    start: ViewportPoint {
+      row: (start_line - viewport_top) as usize,
+      col: start_col,
+    },
+    end: ViewportPoint {
+      row: (end_line - viewport_top) as usize,
+      col: end_col,
+    },
+  })
+}
+
 fn tty_options(working_directory: &Path) -> tty::Options {
   let mut options = tty::Options {
     working_directory: Some(working_directory.to_path_buf()),
@@ -796,8 +971,9 @@ fn selection_type_for_mode(mode: TerminalSelectionMode) -> SelectionType {
 #[cfg(test)]
 mod tests {
   use super::{
-    TerminalBounds, TerminalListener, TerminalSelectionMode, ViewportPoint, ViewportSelectionRange,
-    WorkingDirectoryTracker, selection_range_for_term, selection_text_for_term, snapshot_from_term,
+    TerminalBounds, TerminalListener, TerminalSelectionMode, TerminalSession, ViewportPoint,
+    ViewportSelectionRange, WorkingDirectoryTracker, search_match_to_viewport,
+    search_matches_for_term, selection_range_for_term, selection_text_for_term, snapshot_from_term,
   };
   use alacritty_terminal::{
     Term,
@@ -858,6 +1034,62 @@ mod tests {
     std::fs::remove_dir_all(root).expect("tracker fixture should be removed");
     assert_eq!(observed.as_deref(), Some(target.as_path()));
     assert_eq!(tracker.current(), target);
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn terminal_session_tracks_cd_commands() {
+    let root =
+      std::env::temp_dir().join(format!("reviu-terminal-session-cwd-{}", std::process::id()));
+    let target = root.join("nested");
+    if root.exists() {
+      std::fs::remove_dir_all(&root).expect("stale session fixture should be removed");
+    }
+    std::fs::create_dir_all(&target).expect("session fixture should be created");
+    let target = target
+      .canonicalize()
+      .expect("session fixture should resolve");
+    let mut session = TerminalSession::spawn(root.clone(), TerminalBounds::default())
+      .expect("terminal session should spawn");
+
+    session.input(&format!("cd \"{}\"\r", target.display()));
+    let tracker = session.working_directory_tracker();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut observed = None;
+    while observed.as_deref() != Some(target.as_path()) && std::time::Instant::now() < deadline {
+      if tracker.begin_refresh() {
+        observed = tracker.refresh();
+      }
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    drop(session);
+    std::fs::remove_dir_all(root).expect("session fixture should be removed");
+    assert_eq!(observed.as_deref(), Some(target.as_path()));
+  }
+
+  #[test]
+  fn terminal_search_is_literal_case_insensitive_and_reaches_history() {
+    let bounds = TerminalBounds {
+      columns: 16,
+      lines: 2,
+      ..TerminalBounds::default()
+    };
+    let config = Config {
+      scrolling_history: 20,
+      ..Config::default()
+    };
+    let mut term = Term::new(config, &bounds, VoidListener);
+    let mut processor: Processor = Processor::new();
+    processor.advance(&mut term, b"Alpha [one]\r\nbeta\r\nALPHA [one]");
+
+    let matches = search_matches_for_term(&term, "alpha [one]");
+
+    assert_eq!(matches.len(), 2);
+    assert!(search_match_to_viewport(&term, matches[0]).is_none());
+    assert!(search_match_to_viewport(&term, matches[1]).is_some());
+    term.scroll_to_point(matches[0].start);
+    assert!(search_match_to_viewport(&term, matches[0]).is_some());
   }
 
   #[test]

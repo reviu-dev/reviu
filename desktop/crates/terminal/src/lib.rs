@@ -9,4 +9,7 @@ pub use session::{
   ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalCursorSnapshot,
   TerminalSelectionMode, TerminalSession, ViewportPoint, ViewportSelectionRange,
 };
-pub use terminal_view::{SendKeystroke, TERMINAL_CONTEXT, TerminalView, TerminalViewEvent};
+pub use terminal_view::{
+  CloseSearch, OpenSearch, SearchNext, SearchPrevious, SendKeystroke, TERMINAL_CONTEXT,
+  TERMINAL_SEARCH_CONTEXT, TerminalView, TerminalViewEvent,
+};

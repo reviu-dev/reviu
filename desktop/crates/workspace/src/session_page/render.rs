@@ -2865,6 +2865,24 @@ mod tests {
     });
   }
 
+  fn bind_terminal_search_shortcuts(cx: &mut gpui::VisualTestContext) {
+    let find = if cfg!(target_os = "macos") {
+      "cmd-f"
+    } else {
+      "ctrl-f"
+    };
+    cx.update(|_, cx| {
+      cx.bind_keys([
+        gpui::KeyBinding::new(find, terminal::OpenSearch, Some(terminal::TERMINAL_CONTEXT)),
+        gpui::KeyBinding::new(
+          "escape",
+          terminal::CloseSearch,
+          Some(terminal::TERMINAL_SEARCH_CONTEXT),
+        ),
+      ]);
+    });
+  }
+
   #[gpui::test]
   async fn the_repo_line_is_painted_without_connecting_an_agent(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-repo-line");
@@ -4778,6 +4796,41 @@ mod tests {
       terminal_bounds.size.width > gpui::px(0.0) && terminal_bounds.size.height > gpui::px(0.0),
       "the terminal should fill the center pane"
     );
+  }
+
+  #[gpui::test]
+  async fn terminal_find_stays_in_the_terminal_and_restores_shell_focus(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-terminal-find");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    bind_terminal_search_shortcuts(cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+      "cmd-f"
+    } else {
+      "ctrl-f"
+    });
+    cx.run_until_parked();
+
+    let terminal = page.read_with(cx, |page, _| {
+      page
+        .terminal_for_tab(&CenterTab::terminal(1))
+        .expect("terminal")
+    });
+    assert!(terminal.read_with(cx, |terminal, _| terminal.is_search_open()));
+    assert!(cx.debug_bounds("terminal-search").is_some());
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    assert!(!terminal.read_with(cx, |terminal, _| terminal.is_search_open()));
+    page.read_with(cx, |page, _| assert_eq!(page.center, CenterView::Terminal));
+    terminal.update_in(cx, |terminal, window, cx| {
+      assert!(terminal.focus_handle(cx).is_focused(window));
+    });
   }
 
   #[gpui::test]

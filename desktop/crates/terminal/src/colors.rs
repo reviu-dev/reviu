@@ -12,6 +12,8 @@ pub struct TerminalPalette {
   background: Hsla,
   cursor: Hsla,
   selection: Hsla,
+  search_match: Hsla,
+  active_search_match: Hsla,
 }
 
 const TOKYO_NIGHT_DARK_ANSI: [Rgb; 16] = [
@@ -230,6 +232,8 @@ impl Default for TerminalPalette {
       background: rgb(0x1a1b26).into(),
       cursor: rgb(0x7aa2f7).into(),
       selection: rgb(0x33467a).into(),
+      search_match: rgb(0x5c4b22).into(),
+      active_search_match: rgb(0x9a6d20).into(),
     }
   }
 }
@@ -245,6 +249,8 @@ impl TerminalPalette {
       background: rgb(0xe1e2e7).into(),
       cursor: rgb(0x2563eb).into(),
       selection: rgb(0x60a5fa).into(),
+      search_match: rgb(0xf6d365).into(),
+      active_search_match: rgb(0xf0b429).into(),
     }
   }
 
@@ -275,6 +281,14 @@ impl TerminalPalette {
 
   pub fn selection(&self) -> Hsla {
     self.selection
+  }
+
+  pub fn search_match(&self) -> Hsla {
+    self.search_match
+  }
+
+  pub fn active_search_match(&self) -> Hsla {
+    self.active_search_match
   }
 
   pub fn resolve(&self, color: Color, colors: &Colors) -> Hsla {

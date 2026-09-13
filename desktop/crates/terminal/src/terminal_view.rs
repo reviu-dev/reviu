@@ -1,13 +1,16 @@
 use alacritty_terminal::{event::Event as TerminalEvent, term::cell::Flags};
 use gpui::{
-  Action, App, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Font, FontFallbacks,
-  FontFeatures, FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke,
-  Modifiers, MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task,
-  TouchPhase, Window, div, prelude::*, px, relative, rgb,
+  Action, App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, Font,
+  FontFallbacks, FontFeatures, FontStyle, FontWeight, InteractiveElement, IntoElement,
+  KeyDownEvent, Keystroke, Modifiers, MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent,
+  Styled, Subscription, Task, TouchPhase, Window, div, prelude::*, px, relative, rgb,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::Disableable as _;
+use gpui_component::IconName;
 use gpui_component::Sizable as _;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::tooltip::Tooltip;
 use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -17,6 +20,7 @@ use crate::{
   ViewportSelectionRange,
   colors::TerminalPalette,
   links::{TerminalLink, TerminalLinkTarget, link_at},
+  session::TerminalSearchMatch,
   terminal_element::TerminalElement,
 };
 
@@ -25,6 +29,7 @@ const TEST_SESSION_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const TERMINAL_SCREEN_DEBUG_SELECTOR: &str = "terminal-screen-bounds";
 const TERMINAL_SURFACE_DEBUG_SELECTOR: &str = "terminal-surface-bounds";
 const TERMINAL_BANNER_DEBUG_SELECTOR: &str = "terminal-banner";
+const TERMINAL_SEARCH_DEBUG_SELECTOR: &str = "terminal-search";
 
 fn collect_pending_session_events(
   first_event: TerminalEvent,
@@ -102,11 +107,17 @@ pub enum TerminalViewEvent {
   },
 }
 
+gpui::actions!(
+  terminal,
+  [OpenSearch, CloseSearch, SearchNext, SearchPrevious]
+);
+
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
 #[action(namespace = terminal, no_json)]
 pub struct SendKeystroke(pub String);
 
 pub const TERMINAL_CONTEXT: &str = "Terminal";
+pub const TERMINAL_SEARCH_CONTEXT: &str = "TerminalSearch";
 
 pub struct TerminalView {
   focus_handle: FocusHandle,
@@ -125,8 +136,18 @@ pub struct TerminalView {
   last_reported_mouse_state: Option<(ViewportPoint, Option<MouseButton>)>,
   scroll_remainder: Pixels,
   marked_text: Option<String>,
+  search_open: bool,
+  search_input: Option<Entity<InputState>>,
+  search_input_subscription: Option<Subscription>,
+  search_query: String,
+  search_matches: Vec<TerminalSearchMatch>,
+  search_active_match: Option<usize>,
+  visible_search_matches: Vec<ViewportSelectionRange>,
+  visible_active_search_match: Option<ViewportSelectionRange>,
+  search_generation: u64,
   _event_task: Task<()>,
   _working_directory_task: Task<()>,
+  _search_task: Task<()>,
 }
 
 impl TerminalView {
@@ -148,8 +169,18 @@ impl TerminalView {
       last_reported_mouse_state: None,
       scroll_remainder: px(0.0),
       marked_text: None,
+      search_open: false,
+      search_input: None,
+      search_input_subscription: None,
+      search_query: String::new(),
+      search_matches: Vec::new(),
+      search_active_match: None,
+      visible_search_matches: Vec::new(),
+      visible_active_search_match: None,
+      search_generation: 0,
       _event_task: Task::ready(()),
       _working_directory_task: Task::ready(()),
+      _search_task: Task::ready(()),
     };
     view.set_working_directory(working_directory, cx);
     view
@@ -479,6 +510,7 @@ impl TerminalView {
     self.reset_selection();
     self.hovered_hyperlink = None;
     self.refresh_snapshot();
+    self.refresh_visible_search_matches();
     cx.notify();
   }
 
@@ -490,7 +522,13 @@ impl TerminalView {
     self.last_reported_mouse_state = None;
     self.scroll_remainder = px(0.0);
     self.marked_text = None;
+    self.search_matches.clear();
+    self.search_active_match = None;
+    self.visible_search_matches.clear();
+    self.visible_active_search_match = None;
+    self.search_generation = self.search_generation.wrapping_add(1);
     self._working_directory_task = Task::ready(());
+    self._search_task = Task::ready(());
     self.session = self.working_directory.clone().and_then(|cwd| {
       match TerminalSession::spawn(cwd, self.last_bounds) {
         Ok(session) => Some(session),
@@ -503,6 +541,9 @@ impl TerminalView {
 
     self.refresh_snapshot();
     self.subscribe_to_session_events(cx);
+    if self.search_open && !self.search_query.is_empty() {
+      self.refresh_search_matches(cx);
+    }
   }
 
   fn subscribe_to_session_events(&mut self, cx: &mut Context<Self>) {
@@ -591,6 +632,219 @@ impl TerminalView {
         }
       });
     });
+  }
+
+  fn ensure_search_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.search_input.clone() {
+      return input;
+    }
+
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in terminal..."));
+    self.search_input_subscription = Some(cx.subscribe_in(&input, window, Self::on_search_input));
+    self.search_input = Some(input.clone());
+    input
+  }
+
+  fn on_search_input(
+    &mut self,
+    input: &Entity<InputState>,
+    event: &InputEvent,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => {
+        self.search_query = input.read(cx).value().to_string();
+        self.search_active_match = None;
+        self.refresh_search_matches(cx);
+      }
+      InputEvent::PressEnter { secondary, .. } => {
+        if *secondary {
+          self.search_previous(cx);
+        } else {
+          self.search_next(cx);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn refresh_search_matches(&mut self, cx: &mut Context<Self>) {
+    self.search_generation = self.search_generation.wrapping_add(1);
+    let generation = self.search_generation;
+    let query = self.search_query.clone();
+    let preferred_match = self.search_active_match;
+    self.visible_search_matches.clear();
+    self.visible_active_search_match = None;
+
+    let Some(search_handle) = self.session.as_ref().map(TerminalSession::search_handle) else {
+      self.search_matches.clear();
+      self.search_active_match = None;
+      self._search_task = Task::ready(());
+      cx.notify();
+      return;
+    };
+    if query.is_empty() {
+      self.search_matches.clear();
+      self.search_active_match = None;
+      self._search_task = Task::ready(());
+      cx.notify();
+      return;
+    }
+
+    let search = cx.background_spawn(async move { search_handle.find_matches(&query) });
+    self._search_task = cx.spawn(async move |this, cx| {
+      let matches = search.await;
+      let _ = this.update(cx, |this, cx| {
+        if !this.search_open || this.search_generation != generation {
+          return;
+        }
+
+        this.search_matches = matches;
+        if this.search_matches.is_empty() {
+          this.search_active_match = None;
+          this.visible_search_matches.clear();
+          this.visible_active_search_match = None;
+          cx.notify();
+          return;
+        }
+
+        let active_match = preferred_match
+          .unwrap_or_else(|| this.search_matches.len() - 1)
+          .min(this.search_matches.len() - 1);
+        this.activate_search_match(active_match, cx);
+      });
+    });
+  }
+
+  fn activate_search_match(&mut self, index: usize, cx: &mut Context<Self>) {
+    let Some(found) = self.search_matches.get(index).copied() else {
+      return;
+    };
+    let Some(session) = self.session.as_mut() else {
+      return;
+    };
+
+    self.search_active_match = Some(index);
+    session.scroll_to_search_match(found);
+    self.refresh_snapshot();
+    self.refresh_visible_search_matches();
+    cx.notify();
+  }
+
+  fn refresh_visible_search_matches(&mut self) {
+    let Some(session) = self.session.as_ref() else {
+      self.visible_search_matches.clear();
+      self.visible_active_search_match = None;
+      return;
+    };
+
+    self.visible_search_matches = session.visible_search_ranges(&self.search_matches);
+    self.visible_active_search_match = self
+      .search_active_match
+      .and_then(|index| self.search_matches.get(index).copied())
+      .and_then(|found| session.visible_search_ranges(&[found]).into_iter().next());
+  }
+
+  fn search_next(&mut self, cx: &mut Context<Self>) {
+    if self.search_matches.is_empty() {
+      return;
+    }
+    let next = self
+      .search_active_match
+      .map(|index| (index + 1) % self.search_matches.len())
+      .unwrap_or(0);
+    self.activate_search_match(next, cx);
+  }
+
+  fn search_previous(&mut self, cx: &mut Context<Self>) {
+    if self.search_matches.is_empty() {
+      return;
+    }
+    let previous = self
+      .search_active_match
+      .map(|index| {
+        if index == 0 {
+          self.search_matches.len() - 1
+        } else {
+          index - 1
+        }
+      })
+      .unwrap_or_else(|| self.search_matches.len() - 1);
+    self.activate_search_match(previous, cx);
+  }
+
+  fn search_query_from_selection(&self) -> Option<String> {
+    let selected = self.selection_text_for_copy()?.replace('\r', "");
+    let first_line = selected.split('\n').next().unwrap_or_default().trim_end();
+    (!first_line.is_empty()).then(|| first_line.to_string())
+  }
+
+  pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let was_open = self.search_open;
+    self.search_open = true;
+    let input = self.ensure_search_input(window, cx);
+    if !was_open {
+      let query = self
+        .search_query_from_selection()
+        .unwrap_or_else(|| input.read(cx).value().to_string());
+      input.update(cx, |input, cx| {
+        input.set_value(query.clone(), window, cx);
+      });
+      self.search_query = query;
+      self.search_active_match = None;
+      self.refresh_search_matches(cx);
+    }
+    input.update(cx, |input, cx| {
+      input.focus(window, cx);
+      input.select_all(window, cx);
+    });
+    cx.on_next_frame(window, |this, window, cx| {
+      if let Some(input) = this.search_input.clone() {
+        input.update(cx, |input, cx| {
+          input.focus(window, cx);
+          input.select_all(window, cx);
+        });
+      }
+    });
+    cx.notify();
+  }
+
+  pub fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    if !self.search_open {
+      return false;
+    }
+
+    self.search_open = false;
+    self.search_query.clear();
+    self.search_matches.clear();
+    self.search_active_match = None;
+    self.visible_search_matches.clear();
+    self.visible_active_search_match = None;
+    self.search_generation = self.search_generation.wrapping_add(1);
+    self._search_task = Task::ready(());
+    if let Some(input) = self.search_input.clone() {
+      input.update(cx, |input, cx| input.set_value(String::new(), window, cx));
+    }
+    self.focus_terminal(window, cx);
+    cx.notify();
+    true
+  }
+
+  pub fn is_search_open(&self) -> bool {
+    self.search_open
+  }
+
+  pub(crate) fn visible_search_matches(&self) -> &[ViewportSelectionRange] {
+    &self.visible_search_matches
+  }
+
+  pub(crate) fn visible_active_search_match(&self) -> Option<ViewportSelectionRange> {
+    self.visible_active_search_match
   }
 
   fn refresh_snapshot(&mut self) {
@@ -688,6 +942,9 @@ impl TerminalView {
       self.pending_link_activation = None;
       self.last_reported_mouse_state = None;
       self.refresh_snapshot_preserving_selection();
+      if self.search_open && !self.search_query.is_empty() {
+        self.refresh_search_matches(cx);
+      }
       cx.notify();
     }
     if result.wakeup {
@@ -709,6 +966,11 @@ impl TerminalView {
       self.reset_selection();
       self.last_reported_mouse_state = None;
       self.refresh_snapshot();
+      if self.search_open && !self.search_query.is_empty() {
+        self.refresh_search_matches(cx);
+      } else {
+        self.refresh_visible_search_matches();
+      }
       cx.notify();
     }
   }
@@ -753,6 +1015,32 @@ impl TerminalView {
     }
   }
 
+  fn open_search_action(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
+    self.open_search(window, cx);
+    cx.stop_propagation();
+  }
+
+  fn close_search_action(&mut self, _: &CloseSearch, window: &mut Window, cx: &mut Context<Self>) {
+    if self.close_search(window, cx) {
+      cx.stop_propagation();
+    }
+  }
+
+  fn search_next_action(&mut self, _: &SearchNext, _window: &mut Window, cx: &mut Context<Self>) {
+    self.search_next(cx);
+    cx.stop_propagation();
+  }
+
+  fn search_previous_action(
+    &mut self,
+    _: &SearchPrevious,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.search_previous(cx);
+    cx.stop_propagation();
+  }
+
   fn send_keystroke(
     &mut self,
     action: &SendKeystroke,
@@ -774,6 +1062,9 @@ impl TerminalView {
   }
 
   fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    if self.search_open {
+      return;
+    }
     self.focus_terminal(window, cx);
 
     if should_defer_to_ime(event) {
@@ -873,6 +1164,100 @@ impl TerminalView {
       TouchPhase::Ended | TouchPhase::Cancelled => None,
     }
   }
+
+  fn render_search_panel(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Option<gpui::AnyElement> {
+    if !self.search_open {
+      return None;
+    }
+
+    let input = self.ensure_search_input(window, cx);
+    let theme = cx.theme().clone();
+    let total_matches = self.search_matches.len();
+    let active_match = self
+      .search_active_match
+      .map(|index| index + 1)
+      .unwrap_or(0)
+      .min(total_matches);
+    let has_matches = total_matches > 0;
+    let previous_view = cx.entity().clone();
+    let next_view = cx.entity().clone();
+    let close_view = cx.entity().clone();
+
+    Some(
+      div()
+        .debug_selector(|| TERMINAL_SEARCH_DEBUG_SELECTOR.to_string())
+        .absolute()
+        .top(px(8.0))
+        .right(px(0.0))
+        .w_full()
+        .max_w(px(340.0))
+        .p_2()
+        .occlude()
+        .flex()
+        .items_center()
+        .gap_2()
+        .bg(theme.background)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+          div()
+            .flex_1()
+            .min_w(px(0.0))
+            .child(Input::new(&input).small().border_color(theme.border)),
+        )
+        .child(
+          div()
+            .w(px(52.0))
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format!("{active_match}/{total_matches}")),
+        )
+        .child(
+          Button::new("terminal-search-previous")
+            .icon(IconName::ArrowUp)
+            .ghost()
+            .xsmall()
+            .compact()
+            .tooltip("Previous match")
+            .disabled(!has_matches)
+            .on_click(move |_, _, cx| {
+              previous_view.update(cx, |view, cx| view.search_previous(cx));
+            }),
+        )
+        .child(
+          Button::new("terminal-search-next")
+            .icon(IconName::ArrowDown)
+            .ghost()
+            .xsmall()
+            .compact()
+            .tooltip("Next match")
+            .disabled(!has_matches)
+            .on_click(move |_, _, cx| {
+              next_view.update(cx, |view, cx| view.search_next(cx));
+            }),
+        )
+        .child(
+          Button::new("terminal-search-close")
+            .icon(IconName::Close)
+            .ghost()
+            .xsmall()
+            .compact()
+            .tooltip("Close find")
+            .on_click(move |_, window, cx| {
+              close_view.update(cx, |view, cx| {
+                view.close_search(window, cx);
+              });
+            }),
+        )
+        .into_any_element(),
+    )
+  }
 }
 
 impl EventEmitter<TerminalViewEvent> for TerminalView {}
@@ -932,6 +1317,7 @@ impl Render for TerminalView {
       .error
       .clone()
       .or_else(|| self.screen.exit_status.clone());
+    let search_panel = self.render_search_panel(window, cx);
 
     div()
       .id("terminal-scaffold")
@@ -946,8 +1332,16 @@ impl Render for TerminalView {
         }),
       )
       .on_key_down(cx.listener(Self::on_key_down))
+      .on_action(cx.listener(Self::open_search_action))
+      .on_action(cx.listener(Self::close_search_action))
+      .on_action(cx.listener(Self::search_next_action))
+      .on_action(cx.listener(Self::search_previous_action))
       .on_action(cx.listener(Self::send_keystroke))
-      .key_context(TERMINAL_CONTEXT)
+      .key_context(if self.search_open {
+        TERMINAL_SEARCH_CONTEXT
+      } else {
+        TERMINAL_CONTEXT
+      })
       .track_focus(&self.focus_handle)
       .when_some(banner_message, |this, message| {
         this.child(
@@ -978,7 +1372,14 @@ impl Render for TerminalView {
             ),
         )
       })
-      .child(div().flex_1().min_h_0().child(terminal_screen))
+      .child(
+        div()
+          .relative()
+          .flex_1()
+          .min_h_0()
+          .child(terminal_screen)
+          .when_some(search_panel, |this, search_panel| this.child(search_panel)),
+      )
   }
 }
 
@@ -1079,9 +1480,10 @@ fn selection_matches_screen_text(
 #[cfg(test)]
 mod tests {
   use super::{
-    TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalEvent, TerminalView,
-    TerminalViewEvent, collect_pending_session_events, selection_matches_screen_text,
-    selection_mode_for_click_count, selection_text_from_screen, should_defer_to_ime,
+    TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_SEARCH_DEBUG_SELECTOR,
+    TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalEvent, TerminalView, TerminalViewEvent,
+    collect_pending_session_events, selection_matches_screen_text, selection_mode_for_click_count,
+    selection_text_from_screen, should_defer_to_ime,
   };
   use crate::{
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
@@ -1090,8 +1492,8 @@ mod tests {
   use alacritty_terminal::term::cell::Flags;
   use alacritty_terminal::vte::ansi::{Color, NamedColor};
   use gpui::{
-    AppContext, ClipboardItem, Context, InteractiveElement, KeyDownEvent, Keystroke, Modifiers,
-    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, ScrollDelta,
+    AppContext, ClipboardItem, Context, Focusable, InteractiveElement, KeyDownEvent, Keystroke,
+    Modifiers, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, ScrollDelta,
     ScrollWheelEvent, Styled, TestAppContext, TouchPhase, VisualTestContext, Window, div, point,
     px,
   };
@@ -1701,6 +2103,34 @@ mod tests {
       focused,
       "terminal should receive focus after clicking its screen"
     );
+  }
+
+  #[gpui::test]
+  fn terminal_search_opens_and_restores_terminal_focus_when_closed(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(None, cx));
+    let cx: &mut VisualTestContext = cx;
+    view.update_in(cx, |view, window, cx| view.open_search(window, cx));
+
+    assert!(view.read_with(cx, |view, _| view.is_search_open()));
+    assert!(cx.debug_bounds(TERMINAL_SEARCH_DEBUG_SELECTOR).is_some());
+    let search_input = view
+      .read_with(cx, |view, _| view.search_input.clone())
+      .expect("search input should exist");
+    let search_focused =
+      cx.update(|window, app| search_input.read(app).focus_handle(app).is_focused(window));
+    assert!(search_focused);
+
+    view.update_in(cx, |view, window, cx| {
+      assert!(view.close_search(window, cx));
+    });
+
+    assert!(!view.read_with(cx, |view, _| view.is_search_open()));
+    assert!(cx.debug_bounds(TERMINAL_SEARCH_DEBUG_SELECTOR).is_none());
+    let terminal_focused =
+      cx.update(|window, app| view.read_with(app, |view, _| view.focus_handle.is_focused(window)));
+    assert!(terminal_focused);
   }
 
   #[gpui::test]

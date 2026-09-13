@@ -34,6 +34,8 @@ struct RenderCellState {
 pub(crate) struct TerminalPrepaintState {
   hitbox: Hitbox,
   screen: ScreenSnapshot,
+  search_matches: Arc<[crate::ViewportSelectionRange]>,
+  active_search_match: Option<crate::ViewportSelectionRange>,
   row_layouts: Arc<[RowLayout]>,
   line_height: Pixels,
   cell_width: Pixels,
@@ -210,7 +212,14 @@ impl Element for TerminalElement {
     self.view.update(cx, |view, cx| {
       view.sync_bounds(terminal_bounds, cx);
     });
-    let screen = self.view.read(cx).screen().clone();
+    let (screen, search_matches, active_search_match) = {
+      let view = self.view.read(cx);
+      (
+        view.screen().clone(),
+        Arc::from(view.visible_search_matches()),
+        view.visible_active_search_match(),
+      )
+    };
     let row_layouts = build_row_layouts(&screen, &self.palette, window);
     let line_height = px(f32::from(terminal_bounds.cell_height));
     let cell_width = px(f32::from(terminal_bounds.cell_width));
@@ -219,6 +228,8 @@ impl Element for TerminalElement {
       hitbox: window.insert_hitbox(bounds, HitboxBehavior::Normal),
       cursor_bounds: terminal_cursor_bounds(bounds, &screen, &row_layouts, line_height),
       screen,
+      search_matches,
+      active_search_match,
       row_layouts: row_layouts.into(),
       line_height,
       cell_width,
@@ -284,6 +295,35 @@ impl Element for TerminalElement {
           cx,
         )
         .ok();
+
+      for search_match in prepaint.search_matches.iter().copied() {
+        if let Some((match_start, match_end)) =
+          row_selection_bounds(row_layout, &prepaint.screen, search_match)
+        {
+          let match_bounds = Bounds::from_corners(
+            point(bounds.left() + match_start, row_origin.y),
+            point(
+              bounds.left() + match_end,
+              row_origin.y + prepaint.line_height,
+            ),
+          );
+          window.paint_quad(fill(match_bounds, self.palette.search_match()));
+        }
+      }
+
+      if let Some(active_search_match) = prepaint.active_search_match
+        && let Some((match_start, match_end)) =
+          row_selection_bounds(row_layout, &prepaint.screen, active_search_match)
+      {
+        let match_bounds = Bounds::from_corners(
+          point(bounds.left() + match_start, row_origin.y),
+          point(
+            bounds.left() + match_end,
+            row_origin.y + prepaint.line_height,
+          ),
+        );
+        window.paint_quad(fill(match_bounds, self.palette.active_search_match()));
+      }
 
       if let Some(selection) = selection
         && let Some((selection_start, selection_end)) =
