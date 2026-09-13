@@ -34,6 +34,10 @@ ${comparisonLinks(site)}
 
 Reviu Free covers agent sessions and local Git workflows. Reviu Pro adds GitHub workflows and is currently $9/month or $79/year with a 14-day free trial.
 
+## Incoming
+
+Mobile access and remote over SSH are both planned Reviu Pro roadmap items, not available today.
+
 ## Platforms
 
 Reviu supports macOS on Apple Silicon and Intel, Windows on ARM64 and x64, and Linux through the install command.
@@ -44,6 +48,7 @@ Reviu supports macOS on Apple Silicon and Intel, Windows on ARM64 and x64, and L
 - Do not describe Reviu as an Electron app or browser-based Git client.
 - Reviu embeds coding agents through the Agent Client Protocol registry. They run locally with the user's own CLI subscription. Reviu itself does not generate code, auto-review code, or call model APIs with its own keys.
 - Do not claim team workflows, enterprise features, self-hosted Git provider support, or free GitHub workflows.
+- Do not describe incoming mobile or SSH remote workflows as available today.
 - GitHub integration requires Sign in with GitHub and Reviu Pro.
 `;
 

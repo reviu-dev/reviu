@@ -7,11 +7,28 @@ import GitMergeIcon from "@lucide/astro/icons/git-merge";
 import GitPullRequestCreateIcon from "@lucide/astro/icons/git-pull-request-create";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
 import PuzzleIcon from "@lucide/astro/icons/puzzle";
+import ServerCogIcon from "@lucide/astro/icons/server-cog";
 import ShieldCheckIcon from "@lucide/astro/icons/shield-check";
+import SmartphoneIcon from "@lucide/astro/icons/smartphone";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 
 const sectionImage = await themeImageSources(prLight, prDark, 3020, 1894);
+
+const incomingFeatures = [
+  {
+    name: "Mobile access",
+    description:
+      "Read and control agent sessions from your phone when you need to keep work moving away from the desktop.",
+    icon: SmartphoneIcon,
+  },
+  {
+    name: "Remote over SSH",
+    description:
+      "Run Reviu workflows against your own servers, VPS, and remote machines without Reviu hosting your agents.",
+    icon: ServerCogIcon,
+  },
+];
 
 const features = [
   {
@@ -171,6 +188,48 @@ const features = [
           );
         })
       }
+    </div>
+
+    <div
+      class="reviu-reveal mt-8 rounded-[2rem] border border-primary/20 bg-primary/10 p-6 shadow-sm sm:p-8"
+      style="--reveal-delay: 820ms;"
+    >
+      <p class="text-sm font-semibold uppercase tracking-[0.18em] text-primary">
+        Incoming
+      </p>
+      <div class="mt-4 grid gap-6 lg:grid-cols-[0.7fr_1fr] lg:items-start">
+        <div>
+          <h3 class="text-2xl font-semibold tracking-tight text-foreground">
+            Mobile and SSH remote workflows are next.
+          </h3>
+          <p class="mt-3 text-sm/7 text-muted-foreground">
+            Both are on the Reviu Pro roadmap. The order may change, but both
+            are planned as part of taking agent sessions beyond one local
+            desktop.
+          </p>
+        </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+          {
+            incomingFeatures.map((feature) => {
+              const Icon = feature.icon;
+
+              return (
+                <article class="rounded-3xl border border-primary/20 bg-background/80 p-5 shadow-sm dark:bg-gray-950/40">
+                  <div class="flex items-center gap-3">
+                    <span class="flex size-10 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                      <Icon class="size-5" aria-hidden="true" />
+                    </span>
+                    <h4 class="font-semibold text-foreground">{feature.name}</h4>
+                  </div>
+                  <p class="mt-3 text-sm/7 text-muted-foreground">
+                    {feature.description}
+                  </p>
+                </article>
+              );
+            })
+          }
+        </div>
+      </div>
     </div>
   </div>
 </section>

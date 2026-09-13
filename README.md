@@ -40,6 +40,11 @@ Reviu keeps the coding-agent review loop in one native app. Start Claude Code, C
 - **Use real Git, fast**: stage by hunk, commit, amend, branch, merge, rebase, cherry-pick, stash, resolve conflicts, and work from a command palette.
 - **Finish pull requests in Reviu Pro**: GitHub notifications, saved PR lists, pull request diffs, review threads, checks, merge actions, and optional AI briefs.
 
+## Incoming
+
+- **Mobile access**: read and control agent sessions from your phone.
+- **Remote over SSH**: run Reviu workflows against your own servers, VPS, and remote machines.
+
 ## Download
 
 Download the latest build from [reviu.dev](https://reviu.dev/#downloads) or [GitHub Releases](https://github.com/reviu-dev/reviu/releases).
