@@ -35,6 +35,23 @@ const TERMINAL_SEARCH_DEBUG_SELECTOR: &str = "terminal-search";
 const TERMINAL_SCROLLBAR_DEBUG_SELECTOR: &str = "terminal-scrollbar";
 const TERMINAL_JUMP_TO_BOTTOM_DEBUG_SELECTOR: &str = "terminal-jump-to-bottom";
 
+fn updated_unseen_output_lines(
+  current: usize,
+  previous_total_lines: usize,
+  previous_display_offset: usize,
+  total_lines: usize,
+  display_offset: usize,
+) -> usize {
+  if previous_display_offset == 0 || display_offset == 0 {
+    return 0;
+  }
+
+  let appended_lines = total_lines
+    .saturating_sub(previous_total_lines)
+    .max(display_offset.saturating_sub(previous_display_offset));
+  current.saturating_add(appended_lines)
+}
+
 fn collect_pending_session_events(
   first_event: TerminalEvent,
   receiver: &async_channel::Receiver<TerminalEvent>,
@@ -151,6 +168,7 @@ pub struct TerminalView {
   last_reported_mouse_state: Option<(ViewportPoint, Option<MouseButton>)>,
   scroll_remainder: Pixels,
   scroll_handle: TerminalScrollHandle,
+  unseen_output_lines: usize,
   marked_text: Option<String>,
   search_open: bool,
   search_input: Option<Entity<InputState>>,
@@ -185,6 +203,7 @@ impl TerminalView {
       last_reported_mouse_state: None,
       scroll_remainder: px(0.0),
       scroll_handle: TerminalScrollHandle::new(),
+      unseen_output_lines: 0,
       marked_text: None,
       search_open: false,
       search_input: None,
@@ -230,8 +249,12 @@ impl TerminalView {
   }
 
   #[doc(hidden)]
-  pub fn scrollback_state_for_driver(&self) -> (usize, usize) {
-    (self.screen.display_offset, self.screen.total_lines)
+  pub fn scrollback_state_for_driver(&self) -> (usize, usize, usize) {
+    (
+      self.screen.display_offset,
+      self.screen.total_lines,
+      self.unseen_output_lines,
+    )
   }
 
   #[doc(hidden)]
@@ -947,6 +970,9 @@ impl TerminalView {
       .as_ref()
       .map(TerminalSession::snapshot)
       .unwrap_or_default();
+    if self.screen.display_offset == 0 {
+      self.unseen_output_lines = 0;
+    }
   }
 
   fn preserve_selection_before_refresh(&self) -> Option<PreservedSelection> {
@@ -1035,7 +1061,16 @@ impl TerminalView {
       self.hovered_hyperlink = None;
       self.pending_link_activation = None;
       self.last_reported_mouse_state = None;
+      let previous_total_lines = self.screen.total_lines;
+      let previous_display_offset = self.screen.display_offset;
       self.refresh_snapshot_preserving_selection();
+      self.unseen_output_lines = updated_unseen_output_lines(
+        self.unseen_output_lines,
+        previous_total_lines,
+        previous_display_offset,
+        self.screen.total_lines,
+        self.screen.display_offset,
+      );
       if self.search_open && !self.search_query.is_empty() {
         self.refresh_search_matches(cx);
       }
@@ -1328,6 +1363,7 @@ impl TerminalView {
     }
 
     let theme = cx.theme().clone();
+    let unseen_output_lines = self.unseen_output_lines;
     Some(
       div()
         .debug_selector(|| TERMINAL_JUMP_TO_BOTTOM_DEBUG_SELECTOR.to_string())
@@ -1347,6 +1383,13 @@ impl TerminalView {
             .child(
               Button::new("terminal-jump-to-bottom")
                 .icon(IconName::ChevronDown)
+                .when(unseen_output_lines > 0, |button| {
+                  button.label(if unseen_output_lines == 1 {
+                    "1 new line".to_string()
+                  } else {
+                    format!("{unseen_output_lines} new lines")
+                  })
+                })
                 .ghost()
                 .small()
                 .rounded(px(999.0))
@@ -1714,7 +1757,7 @@ mod tests {
     TERMINAL_SCROLLBAR_DEBUG_SELECTOR, TERMINAL_SEARCH_DEBUG_SELECTOR,
     TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalEvent, TerminalView, TerminalViewEvent,
     collect_pending_session_events, selection_matches_screen_text, selection_mode_for_click_count,
-    selection_text_from_screen, should_defer_to_ime,
+    selection_text_from_screen, should_defer_to_ime, updated_unseen_output_lines,
   };
   use crate::{
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
@@ -1905,6 +1948,23 @@ mod tests {
         .size_full()
         .child(div().w(px(240.)).h(px(180.)).child(self.terminal.clone()))
     }
+  }
+
+  #[test]
+  fn unseen_output_counts_new_lines_while_scrolled_back() {
+    assert_eq!(updated_unseen_output_lines(0, 100, 20, 103, 23), 3);
+    assert_eq!(updated_unseen_output_lines(3, 103, 23, 105, 25), 5);
+  }
+
+  #[test]
+  fn unseen_output_uses_offset_growth_after_history_reaches_its_limit() {
+    assert_eq!(updated_unseen_output_lines(4, 100, 20, 100, 22), 6);
+  }
+
+  #[test]
+  fn unseen_output_resets_at_the_latest_output() {
+    assert_eq!(updated_unseen_output_lines(7, 100, 20, 103, 0), 0);
+    assert_eq!(updated_unseen_output_lines(7, 100, 0, 103, 3), 0);
   }
 
   #[test]

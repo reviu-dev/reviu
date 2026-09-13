@@ -1938,7 +1938,7 @@ impl SessionPage {
       .terminal_for_tab(active_tab)
       .ok_or_else(|| SharedString::from("No terminal is active."))?;
     let terminal = terminal.read(cx);
-    let (display_offset, total_lines) = terminal.scrollback_state_for_driver();
+    let (display_offset, total_lines, unseen_output_lines) = terminal.scrollback_state_for_driver();
     let (search_open, active_search_match, search_match_count) = terminal.search_state_for_driver();
 
     Ok(crate::DriverTerminalState {
@@ -1949,6 +1949,7 @@ impl SessionPage {
       visible_text: terminal.visible_text_for_driver(),
       display_offset,
       total_lines,
+      unseen_output_lines,
       search_open,
       active_search_match,
       search_match_count,

@@ -7,6 +7,7 @@ pub struct DriverTerminalState {
   pub visible_text: String,
   pub display_offset: usize,
   pub total_lines: usize,
+  pub unseen_output_lines: usize,
   pub search_open: bool,
   pub active_search_match: Option<usize>,
   pub search_match_count: usize,

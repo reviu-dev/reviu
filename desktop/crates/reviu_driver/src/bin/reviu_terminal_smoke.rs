@@ -171,19 +171,6 @@ fn run_terminal_scenario(args: &TerminalSmokeArgs, run_dir: &Path) -> Result<()>
   })
   .context("waiting for terminal search navigation")?;
 
-  if args.backend == "visual" {
-    let screenshot = args
-      .screenshot
-      .clone()
-      .unwrap_or_else(|| run_dir.join("terminal-search-and-scrollback.png"));
-    driver.command(json!({
-      "cmd": "screenshot",
-      "path": screenshot.display().to_string()
-    }))?;
-    verify_png(&screenshot)?;
-    println!("screenshot: {}", screenshot.display());
-  }
-
   driver.command(json!({ "cmd": "key", "keystrokes": "escape" }))?;
   wait_for_terminal_state(&mut driver, |state| {
     state.get("search_open").and_then(Value::as_bool) == Some(false)
@@ -198,9 +185,43 @@ fn run_terminal_scenario(args: &TerminalSmokeArgs, run_dir: &Path) -> Result<()>
       .is_some_and(|offset| offset > 0)
   })
   .context("waiting to reach the top of terminal scrollback")?;
+
+  let unseen_output_command = if cfg!(windows) {
+    "Write-Output 'new output one'; Write-Output 'new output two'"
+  } else {
+    "printf 'new output one\\nnew output two\\n'"
+  };
+  driver.command(json!({ "cmd": "type", "text": unseen_output_command }))?;
+  driver.command(json!({ "cmd": "key", "keystrokes": "enter" }))?;
+  wait_for_terminal_state(&mut driver, |state| {
+    state
+      .get("unseen_output_lines")
+      .and_then(Value::as_u64)
+      .is_some_and(|lines| lines >= 2)
+      && state
+        .get("display_offset")
+        .and_then(Value::as_u64)
+        .is_some_and(|offset| offset > 0)
+  })
+  .context("waiting for unseen terminal output")?;
+
+  if args.backend == "visual" {
+    let screenshot = args
+      .screenshot
+      .clone()
+      .unwrap_or_else(|| run_dir.join("terminal-unseen-output.png"));
+    driver.command(json!({
+      "cmd": "screenshot",
+      "path": screenshot.display().to_string()
+    }))?;
+    verify_png(&screenshot)?;
+    println!("screenshot: {}", screenshot.display());
+  }
+
   driver.command(json!({ "cmd": "key", "keystrokes": "shift-end" }))?;
   wait_for_terminal_state(&mut driver, |state| {
     state.get("display_offset").and_then(Value::as_u64) == Some(0)
+      && state.get("unseen_output_lines").and_then(Value::as_u64) == Some(0)
   })
   .context("waiting to return to the latest terminal output")?;
 

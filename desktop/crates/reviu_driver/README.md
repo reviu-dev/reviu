@@ -185,7 +185,7 @@ cargo build -p reviu_driver --bins
 target/debug/reviu-terminal-smoke --driver-bin target/debug/reviu-driver
 ```
 
-On macOS, the same scenario can use the visual backend and capture the search and scrollback UI:
+On macOS, the same scenario can use the visual backend and capture the scrollback and unseen-output UI:
 
 ```sh
 target/debug/reviu-terminal-smoke \
@@ -198,7 +198,7 @@ Useful options:
 
 - `--backend test|visual`: select the driver backend.
 - `--driver-bin <path>`: use a prebuilt driver binary instead of `cargo run`.
-- `--screenshot <path>`: capture the visual search and scrollback state.
+- `--screenshot <path>`: capture the visual scrollback and unseen-output state.
 - `--keep-temp`: keep the isolated repository, profile, and driver logs.
 
 ## `reviu-visual-smoke`
