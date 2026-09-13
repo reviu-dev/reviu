@@ -173,6 +173,7 @@ pub struct TerminalCellSnapshot {
   pub row: usize,
   pub col: usize,
   pub c: char,
+  pub zerowidth: Arc<[char]>,
   pub fg: Color,
   pub bg: Color,
   pub flags: Flags,
@@ -409,6 +410,10 @@ impl TerminalSession {
     self.send_text(input::encode_paste(text, self.mode()));
   }
 
+  pub(crate) fn input(&mut self, text: &str) {
+    self.send_text(text.to_string());
+  }
+
   pub fn scroll_display(&mut self, delta_lines: i32) {
     if delta_lines == 0 {
       return;
@@ -547,11 +552,7 @@ fn snapshot_from_term<T: EventListener>(
     let Some(point) = point_to_viewport(display_offset, cell.point) else {
       continue;
     };
-    if point.line >= rows
-      || cell
-        .flags
-        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-    {
+    if point.line >= rows {
       continue;
     }
 
@@ -562,6 +563,7 @@ fn snapshot_from_term<T: EventListener>(
         '\t' => ' ',
         ch => ch,
       },
+      zerowidth: cell.zerowidth().unwrap_or_default().into(),
       fg: cell.fg,
       bg: cell.bg,
       flags: cell.flags,
@@ -730,6 +732,50 @@ mod tests {
         .iter()
         .any(|cell| cell.row == 0 && cell.col == 1 && cell.c == 'i')
     );
+  }
+
+  #[test]
+  fn snapshot_preserves_wide_cells_and_combining_marks() {
+    let bounds = TerminalBounds {
+      columns: 8,
+      lines: 3,
+      ..TerminalBounds::default()
+    };
+    let mut term = Term::new(Config::default(), &bounds, VoidListener);
+    let mut processor: Processor = Processor::new();
+
+    processor.advance(&mut term, "日Ae\u{301}👩\u{200d}💻".as_bytes());
+
+    let snapshot = snapshot_from_term(&term, None, None);
+    let wide = snapshot
+      .cells
+      .iter()
+      .find(|cell| cell.row == 0 && cell.col == 0)
+      .expect("wide cell should exist");
+    let spacer = snapshot
+      .cells
+      .iter()
+      .find(|cell| cell.row == 0 && cell.col == 1)
+      .expect("wide spacer should exist");
+    let combined = snapshot
+      .cells
+      .iter()
+      .find(|cell| cell.row == 0 && cell.col == 3)
+      .expect("combined cell should exist");
+
+    let emoji = snapshot
+      .cells
+      .iter()
+      .find(|cell| cell.row == 0 && cell.col == 4)
+      .expect("emoji cell should exist");
+
+    assert_eq!(wide.c, '日');
+    assert!(wide.flags.contains(Flags::WIDE_CHAR));
+    assert!(spacer.flags.contains(Flags::WIDE_CHAR_SPACER));
+    assert_eq!(combined.c, 'e');
+    assert_eq!(&*combined.zerowidth, &['\u{301}']);
+    assert_eq!(emoji.c, '👩');
+    assert_eq!(&*emoji.zerowidth, &['\u{200d}']);
   }
 
   #[test]

@@ -1,8 +1,9 @@
 use gpui::{
-  App, Bounds, CursorStyle, DispatchPhase, Element, ElementId, Entity, FontStyle, FontWeight,
-  GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent, ShapedLine,
-  StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative,
+  App, Bounds, CursorStyle, DispatchPhase, Element, ElementId, Entity, Focusable, FontStyle,
+  FontWeight, GlobalElementId, Hitbox, HitboxBehavior, InputHandler, InspectorElementId,
+  IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+  ScrollWheelEvent, ShapedLine, StrikethroughStyle, Style, TextAlign, TextRun, UTF16Selection,
+  UnderlineStyle, Window, fill, point, px, relative,
 };
 use std::sync::Arc;
 
@@ -23,11 +24,20 @@ struct RowLayout {
   shaped: ShapedLine,
 }
 
+#[derive(Default)]
+struct RenderCellState {
+  previous_cell_had_joiner: bool,
+  awaiting_join_target: bool,
+  joined_width_compensation: usize,
+}
+
 pub(crate) struct TerminalPrepaintState {
   hitbox: Hitbox,
   screen: ScreenSnapshot,
   row_layouts: Arc<[RowLayout]>,
   line_height: Pixels,
+  cell_width: Pixels,
+  cursor_bounds: Option<Bounds<Pixels>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -65,6 +75,100 @@ impl IntoElement for TerminalElement {
 
   fn into_element(self) -> Self::Element {
     self
+  }
+}
+
+struct TerminalInputHandler {
+  view: Entity<TerminalView>,
+  cursor_bounds: Option<Bounds<Pixels>>,
+  cell_width: Pixels,
+  element_bounds: Bounds<Pixels>,
+}
+
+impl InputHandler for TerminalInputHandler {
+  fn selected_text_range(
+    &mut self,
+    _ignore_disabled_input: bool,
+    _window: &mut Window,
+    _cx: &mut App,
+  ) -> Option<UTF16Selection> {
+    Some(UTF16Selection {
+      range: 0..0,
+      reversed: false,
+    })
+  }
+
+  fn marked_text_range(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut App,
+  ) -> Option<std::ops::Range<usize>> {
+    self.view.read(cx).marked_text_range()
+  }
+
+  fn text_for_range(
+    &mut self,
+    _range_utf16: std::ops::Range<usize>,
+    _adjusted_range: &mut Option<std::ops::Range<usize>>,
+    _window: &mut Window,
+    _cx: &mut App,
+  ) -> Option<String> {
+    None
+  }
+
+  fn replace_text_in_range(
+    &mut self,
+    _replacement_range: Option<std::ops::Range<usize>>,
+    text: &str,
+    _window: &mut Window,
+    cx: &mut App,
+  ) {
+    self.view.update(cx, |view, cx| view.commit_text(text, cx));
+  }
+
+  fn replace_and_mark_text_in_range(
+    &mut self,
+    _range_utf16: Option<std::ops::Range<usize>>,
+    new_text: &str,
+    _new_selected_range: Option<std::ops::Range<usize>>,
+    _window: &mut Window,
+    cx: &mut App,
+  ) {
+    self
+      .view
+      .update(cx, |view, cx| view.set_marked_text(new_text, cx));
+  }
+
+  fn unmark_text(&mut self, _window: &mut Window, cx: &mut App) {
+    self.view.update(cx, TerminalView::clear_marked_text);
+  }
+
+  fn bounds_for_range(
+    &mut self,
+    range_utf16: std::ops::Range<usize>,
+    _window: &mut Window,
+    _cx: &mut App,
+  ) -> Option<Bounds<Pixels>> {
+    let mut bounds = self.cursor_bounds?;
+    bounds.origin.x += self.cell_width * range_utf16.start as f32;
+    Some(bounds)
+  }
+
+  fn character_index_for_point(
+    &mut self,
+    _point: Point<Pixels>,
+    _window: &mut Window,
+    _cx: &mut App,
+  ) -> Option<usize> {
+    None
+  }
+
+  fn element_bounds(&mut self, _window: &mut Window, _cx: &mut App) -> Option<Bounds<Pixels>> {
+    Some(self.element_bounds)
+  }
+
+  fn apple_press_and_hold_enabled(&mut self) -> bool {
+    false
   }
 }
 
@@ -108,12 +212,16 @@ impl Element for TerminalElement {
     });
     let screen = self.view.read(cx).screen().clone();
     let row_layouts = build_row_layouts(&screen, &self.palette, window);
+    let line_height = px(f32::from(terminal_bounds.cell_height));
+    let cell_width = px(f32::from(terminal_bounds.cell_width));
 
     TerminalPrepaintState {
       hitbox: window.insert_hitbox(bounds, HitboxBehavior::Normal),
+      cursor_bounds: terminal_cursor_bounds(bounds, &screen, &row_layouts, line_height),
       screen,
       row_layouts: row_layouts.into(),
-      line_height: px(f32::from(terminal_bounds.cell_height)),
+      line_height,
+      cell_width,
     }
   }
 
@@ -127,6 +235,17 @@ impl Element for TerminalElement {
     window: &mut Window,
     cx: &mut App,
   ) {
+    let marked_text = self.view.read(cx).marked_text().map(str::to_string);
+    window.handle_input(
+      &self.view.read(cx).focus_handle(cx),
+      TerminalInputHandler {
+        view: self.view.clone(),
+        cursor_bounds: prepaint.cursor_bounds,
+        cell_width: prepaint.cell_width,
+        element_bounds: bounds,
+      },
+      cx,
+    );
     window.paint_quad(fill(bounds, self.palette.background()));
 
     if prepaint.hitbox.is_hovered(window) {
@@ -193,16 +312,28 @@ impl Element for TerminalElement {
         .ok();
     }
 
-    paint_cursor(
-      window,
-      cx,
-      &self.palette,
-      bounds,
-      &prepaint.screen,
-      &prepaint.row_layouts,
-      prepaint.line_height,
-      self.is_focused,
-    );
+    if let Some(marked_text) = marked_text {
+      paint_marked_text(
+        &marked_text,
+        window,
+        cx,
+        &self.palette,
+        &prepaint.screen,
+        prepaint.cursor_bounds,
+        prepaint.line_height,
+      );
+    } else {
+      paint_cursor(
+        window,
+        cx,
+        &self.palette,
+        bounds,
+        &prepaint.screen,
+        &prepaint.row_layouts,
+        prepaint.line_height,
+        self.is_focused,
+      );
+    }
 
     window.on_mouse_event({
       let view = self.view.clone();
@@ -363,6 +494,7 @@ fn build_row_layouts(
       let mut runs = Vec::new();
       let mut active_style = None;
       let mut active_len = 0usize;
+      let mut render_state = RenderCellState::default();
 
       byte_offsets.push(0);
 
@@ -370,20 +502,23 @@ fn build_row_layouts(
       #[allow(clippy::needless_range_loop)]
       for col in 0..screen.cols {
         let cell = cell_grid[row][col];
-        let ch = rendered_char(cell);
-        text.push(ch);
+        let text_start = text.len();
+        append_rendered_cell(&mut text, cell, &mut render_state);
         byte_offsets.push(text.len());
 
+        let cell_len = text.len() - text_start;
+        if cell_len == 0 {
+          continue;
+        }
         let style = style_for_cell(cell, palette, &screen.colors);
-        let char_len = ch.len_utf8();
         if active_style == Some(style) {
-          active_len += char_len;
+          active_len += cell_len;
         } else {
           if let Some(previous_style) = active_style.take() {
             runs.push(text_run_for_style(active_len, &font, previous_style));
           }
           active_style = Some(style);
-          active_len = char_len;
+          active_len = cell_len;
         }
       }
 
@@ -404,15 +539,51 @@ fn build_row_layouts(
     .collect()
 }
 
-fn rendered_char(cell: Option<&TerminalCellSnapshot>) -> char {
+fn append_rendered_cell(
+  text: &mut String,
+  cell: Option<&TerminalCellSnapshot>,
+  state: &mut RenderCellState,
+) {
   let Some(cell) = cell else {
-    return ' ';
+    flush_joined_width_compensation(text, state);
+    text.push(' ');
+    state.previous_cell_had_joiner = false;
+    state.awaiting_join_target = false;
+    return;
   };
-  if cell.flags.contains(Flags::HIDDEN) {
-    ' '
-  } else {
-    cell.c
+  if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if state.previous_cell_had_joiner {
+      state.awaiting_join_target = true;
+      state.previous_cell_had_joiner = false;
+    } else {
+      flush_joined_width_compensation(text, state);
+    }
+    return;
   }
+
+  if state.previous_cell_had_joiner {
+    state.awaiting_join_target = true;
+  } else if !state.awaiting_join_target {
+    flush_joined_width_compensation(text, state);
+  }
+
+  if cell.flags.contains(Flags::HIDDEN) {
+    text.push(' ');
+  } else {
+    text.push(cell.c);
+    text.extend(cell.zerowidth.iter().copied());
+  }
+
+  if state.awaiting_join_target {
+    state.joined_width_compensation += usize::from(cell.flags.contains(Flags::WIDE_CHAR)) + 1;
+    state.awaiting_join_target = false;
+  }
+  state.previous_cell_had_joiner = cell.zerowidth.contains(&'\u{200d}');
+}
+
+fn flush_joined_width_compensation(text: &mut String, state: &mut RenderCellState) {
+  text.extend(std::iter::repeat_n(' ', state.joined_width_compensation));
+  state.joined_width_compensation = 0;
 }
 
 fn style_for_cell(
@@ -555,6 +726,77 @@ fn row_selection_bounds(
   ))
 }
 
+fn terminal_cursor_bounds(
+  bounds: Bounds<Pixels>,
+  screen: &ScreenSnapshot,
+  row_layouts: &[RowLayout],
+  line_height: Pixels,
+) -> Option<Bounds<Pixels>> {
+  let cursor = screen.cursor?;
+  let row_layout = row_layouts.get(cursor.point.row)?;
+  let cursor_width = cursor_span(screen, cursor.point);
+  let left = bounds.left() + x_for_column(row_layout, cursor.point.col);
+  let right = bounds.left() + x_for_column(row_layout, cursor.point.col + cursor_width);
+  let top = row_top(bounds, cursor.point.row, line_height);
+  Some(Bounds::from_corners(
+    point(left, top),
+    point(right, top + line_height),
+  ))
+}
+
+fn paint_marked_text(
+  marked_text: &str,
+  window: &mut Window,
+  cx: &mut App,
+  palette: &TerminalPalette,
+  screen: &ScreenSnapshot,
+  cursor_bounds: Option<Bounds<Pixels>>,
+  line_height: Pixels,
+) {
+  let Some(cursor_bounds) = cursor_bounds else {
+    return;
+  };
+  let text = marked_text.replace(['\r', '\n'], " ");
+  if text.is_empty() {
+    return;
+  }
+
+  let text_style = window.text_style();
+  let font_size = text_style.font_size.to_pixels(window.rem_size());
+  let foreground = palette.resolve(Color::Named(NamedColor::Foreground), &screen.colors);
+  let run = TextRun {
+    len: text.len(),
+    font: text_style.font(),
+    color: foreground,
+    background_color: Some(palette.background()),
+    underline: Some(UnderlineStyle {
+      color: Some(foreground),
+      thickness: px(1.0),
+      wavy: false,
+    }),
+    strikethrough: None,
+  };
+  let shaped = window
+    .text_system()
+    .shape_line(text.into(), font_size, &[run], None);
+  let right = cursor_bounds.left() + shaped.width().max(cursor_bounds.size.width);
+  window.paint_quad(fill(
+    Bounds::from_corners(
+      cursor_bounds.origin,
+      point(right, cursor_bounds.top() + line_height),
+    ),
+    palette.background(),
+  ));
+  let _ = shaped.paint(
+    cursor_bounds.origin,
+    line_height,
+    TextAlign::Left,
+    None,
+    window,
+    cx,
+  );
+}
+
 fn paint_cursor(
   window: &mut Window,
   cx: &mut App,
@@ -693,8 +935,9 @@ fn paint_cursor_glyph(
     font.style = FontStyle::Italic;
   }
 
-  let mut buf = String::with_capacity(ch.len_utf8());
+  let mut buf = String::with_capacity(ch.len_utf8() + cell.zerowidth.len());
   buf.push(ch);
+  buf.extend(cell.zerowidth.iter().copied());
   let run = TextRun {
     len: buf.len(),
     font,
@@ -773,7 +1016,7 @@ fn x_for_column(row_layout: &RowLayout, column: usize) -> Pixels {
 
 #[cfg(test)]
 mod tests {
-  use super::{column_for_byte_index, style_for_cell};
+  use super::{RenderCellState, append_rendered_cell, column_for_byte_index, style_for_cell};
   use crate::{TerminalCellSnapshot, colors::TerminalPalette};
   use alacritty_terminal::{
     term::{cell::Flags, color::Colors},
@@ -802,6 +1045,66 @@ mod tests {
   }
 
   #[test]
+  fn rendered_cells_preserve_combining_marks_and_wide_spacing() {
+    let combined = TerminalCellSnapshot {
+      row: 0,
+      col: 0,
+      c: 'e',
+      zerowidth: Arc::from(['\u{301}']),
+      fg: Color::Named(NamedColor::Foreground),
+      bg: Color::Named(NamedColor::Background),
+      flags: Flags::empty(),
+      underline_color: None,
+      hyperlink_uri: None,
+    };
+    let mut text = String::new();
+    let mut state = RenderCellState::default();
+
+    append_rendered_cell(&mut text, Some(&combined), &mut state);
+
+    assert_eq!(text, "e\u{301}");
+  }
+
+  #[test]
+  fn rendered_cells_shape_emoji_zwj_sequences_without_losing_grid_width() {
+    let base = TerminalCellSnapshot {
+      row: 0,
+      col: 0,
+      c: '👩',
+      zerowidth: Arc::from(['\u{200d}']),
+      fg: Color::Named(NamedColor::Foreground),
+      bg: Color::Named(NamedColor::Background),
+      flags: Flags::WIDE_CHAR,
+      underline_color: None,
+      hyperlink_uri: None,
+    };
+    let mut spacer = base.clone();
+    spacer.col = 1;
+    spacer.c = ' ';
+    spacer.zerowidth = Arc::default();
+    spacer.flags = Flags::WIDE_CHAR_SPACER;
+    let mut laptop = base.clone();
+    laptop.col = 2;
+    laptop.c = '💻';
+    laptop.zerowidth = Arc::default();
+    let mut trailing_spacer = spacer.clone();
+    trailing_spacer.col = 3;
+    let mut ascii = base.clone();
+    ascii.col = 4;
+    ascii.c = 'x';
+    ascii.zerowidth = Arc::default();
+    ascii.flags = Flags::empty();
+    let mut text = String::new();
+    let mut state = RenderCellState::default();
+
+    for cell in [&base, &spacer, &laptop, &trailing_spacer, &ascii] {
+      append_rendered_cell(&mut text, Some(cell), &mut state);
+    }
+
+    assert_eq!(text, "👩\u{200d}💻  x");
+  }
+
+  #[test]
   fn style_for_cell_maps_font_and_decoration_flags() {
     let palette = TerminalPalette::default();
     let colors = Colors::default();
@@ -809,6 +1112,7 @@ mod tests {
       row: 0,
       col: 0,
       c: 'x',
+      zerowidth: Arc::default(),
       fg: Color::Named(NamedColor::Green),
       bg: Color::Named(NamedColor::Background),
       flags: Flags::BOLD | Flags::ITALIC | Flags::UNDERCURL | Flags::STRIKEOUT,
@@ -843,6 +1147,7 @@ mod tests {
       row: 0,
       col: 0,
       c: 'x',
+      zerowidth: Arc::default(),
       fg: Color::Named(NamedColor::Blue),
       bg: Color::Named(NamedColor::Black),
       flags: Flags::DOUBLE_UNDERLINE | Flags::DASHED_UNDERLINE,
@@ -869,6 +1174,7 @@ mod tests {
       row: 0,
       col: 0,
       c: 'x',
+      zerowidth: Arc::default(),
       fg: Color::Named(NamedColor::Foreground),
       bg: Color::Named(NamedColor::Background),
       flags: Flags::empty(),

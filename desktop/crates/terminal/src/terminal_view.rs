@@ -23,6 +23,18 @@ const TERMINAL_SCREEN_DEBUG_SELECTOR: &str = "terminal-screen-bounds";
 const TERMINAL_SURFACE_DEBUG_SELECTOR: &str = "terminal-surface-bounds";
 const TERMINAL_BANNER_DEBUG_SELECTOR: &str = "terminal-banner";
 
+fn should_defer_to_ime(event: &KeyDownEvent) -> bool {
+  event.prefer_character_input
+    && !event.keystroke.modifiers.control
+    && !event.keystroke.modifiers.platform
+    && !event.keystroke.modifiers.function
+    && event
+      .keystroke
+      .key_char
+      .as_deref()
+      .is_some_and(|text| text.chars().any(|character| !character.is_control()))
+}
+
 fn selection_mode_for_click_count(click_count: usize) -> TerminalSelectionMode {
   match click_count {
     2 => TerminalSelectionMode::Semantic,
@@ -67,6 +79,7 @@ pub struct TerminalView {
   pending_link_activation: Option<PendingLinkActivation>,
   last_reported_mouse_state: Option<(ViewportPoint, Option<MouseButton>)>,
   scroll_remainder: Pixels,
+  marked_text: Option<String>,
   _poll_task: Task<()>,
 }
 
@@ -98,6 +111,7 @@ impl TerminalView {
       pending_link_activation: None,
       last_reported_mouse_state: None,
       scroll_remainder: px(0.0),
+      marked_text: None,
       _poll_task: poll_task,
     };
     view.set_working_directory(working_directory, cx);
@@ -423,6 +437,7 @@ impl TerminalView {
     self.pending_link_activation = None;
     self.last_reported_mouse_state = None;
     self.scroll_remainder = px(0.0);
+    self.marked_text = None;
     self.session = self.working_directory.clone().and_then(|cwd| {
       match TerminalSession::spawn(cwd, self.last_bounds) {
         Ok(session) => Some(session),
@@ -553,6 +568,42 @@ impl TerminalView {
     self.focus_handle.focus(window, cx);
   }
 
+  pub(crate) fn marked_text(&self) -> Option<&str> {
+    self.marked_text.as_deref()
+  }
+
+  pub(crate) fn marked_text_range(&self) -> Option<std::ops::Range<usize>> {
+    self
+      .marked_text
+      .as_ref()
+      .map(|text| 0..text.encode_utf16().count())
+  }
+
+  pub(crate) fn set_marked_text(&mut self, text: &str, cx: &mut Context<Self>) {
+    self.marked_text = (!text.is_empty()).then(|| text.to_string());
+    cx.notify();
+  }
+
+  pub(crate) fn clear_marked_text(&mut self, cx: &mut Context<Self>) {
+    if self.marked_text.take().is_some() {
+      cx.notify();
+    }
+  }
+
+  pub(crate) fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {
+    self.clear_marked_text(cx);
+    if text.is_empty() {
+      return;
+    }
+
+    self.reset_selection();
+    if let Some(session) = self.session.as_mut() {
+      session.input(text);
+      self.refresh_snapshot();
+      cx.notify();
+    }
+  }
+
   fn send_keystroke(
     &mut self,
     action: &SendKeystroke,
@@ -575,6 +626,12 @@ impl TerminalView {
 
   fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
     self.focus_terminal(window, cx);
+
+    if should_defer_to_ime(event) {
+      return;
+    }
+
+    self.clear_marked_text(cx);
 
     if self.matches_copy_shortcut(event) {
       self.copy_selection_to_clipboard(cx);
@@ -827,14 +884,19 @@ fn selection_text_from_screen(
   }
 
   let range = clamp_selection_to_screen(range, screen.rows, screen.cols);
-  let mut cells = vec![' '; screen.rows * screen.cols];
+  let mut cells = vec![" ".to_string(); screen.rows * screen.cols];
   for cell in &screen.cells {
     if cell.row < screen.rows && cell.col < screen.cols {
-      cells[cell.row * screen.cols + cell.col] = if cell.flags.contains(Flags::HIDDEN) {
-        ' '
+      let text = if cell.flags.contains(Flags::HIDDEN) {
+        " ".to_string()
+      } else if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+        String::new()
       } else {
-        cell.c
+        let mut text = cell.c.to_string();
+        text.extend(cell.zerowidth.iter().copied());
+        text
       };
+      cells[cell.row * screen.cols + cell.col] = text;
     }
   }
 
@@ -852,7 +914,7 @@ fn selection_text_from_screen(
     };
 
     for col in start_col..=end_col {
-      text.push(cells[row * screen.cols + col]);
+      text.push_str(&cells[row * screen.cols + col]);
     }
 
     if row < range.end.row {
@@ -876,6 +938,7 @@ mod tests {
   use super::{
     TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalView,
     selection_matches_screen_text, selection_mode_for_click_count, selection_text_from_screen,
+    should_defer_to_ime,
   };
   use crate::{
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
@@ -910,6 +973,7 @@ mod tests {
           row,
           col,
           c: ch,
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1068,6 +1132,26 @@ mod tests {
   }
 
   #[test]
+  fn ime_only_handles_printable_unmodified_keys() {
+    let mut printable = key_event("a", Modifiers::default());
+    printable.prefer_character_input = true;
+    assert!(should_defer_to_ime(&printable));
+
+    let mut enter = key_event("enter", Modifiers::default());
+    enter.keystroke.key_char = Some("\n".to_string());
+    enter.prefer_character_input = true;
+    assert!(!should_defer_to_ime(&enter));
+
+    let modifiers = Modifiers {
+      control: true,
+      ..Modifiers::default()
+    };
+    let mut control = key_event("c", modifiers);
+    control.prefer_character_input = true;
+    assert!(!should_defer_to_ime(&control));
+  }
+
+  #[test]
   fn selection_mode_for_click_count_uses_word_and_line_modes() {
     assert_eq!(
       selection_mode_for_click_count(1),
@@ -1097,6 +1181,7 @@ mod tests {
           row: 0,
           col: 0,
           c: 't',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1107,6 +1192,7 @@ mod tests {
           row: 0,
           col: 1,
           c: 'e',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1117,6 +1203,7 @@ mod tests {
           row: 0,
           col: 2,
           c: 's',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1127,6 +1214,7 @@ mod tests {
           row: 0,
           col: 3,
           c: 't',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1137,6 +1225,7 @@ mod tests {
           row: 1,
           col: 0,
           c: 'o',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1147,6 +1236,7 @@ mod tests {
           row: 1,
           col: 1,
           c: 'k',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1169,6 +1259,27 @@ mod tests {
   }
 
   #[test]
+  fn selection_text_omits_wide_spacers_and_keeps_combining_marks() {
+    let mut screen = screen_from_lines(&["日 e"]);
+    screen.cols = 3;
+    screen.cells[0].flags = Flags::WIDE_CHAR;
+    screen.cells[1].flags = Flags::WIDE_CHAR_SPACER;
+    screen.cells[2].c = 'e';
+    screen.cells[2].zerowidth = Arc::from(['\u{301}']);
+
+    assert_eq!(
+      selection_text_from_screen(
+        &screen,
+        ViewportSelectionRange {
+          start: ViewportPoint { row: 0, col: 0 },
+          end: ViewportPoint { row: 0, col: 2 },
+        },
+      ),
+      Some("日e\u{301}".to_string())
+    );
+  }
+
+  #[test]
   fn selection_matches_screen_text_detects_screen_changes() {
     let mut screen = ScreenSnapshot {
       rows: 1,
@@ -1178,6 +1289,7 @@ mod tests {
           row: 0,
           col: 0,
           c: 'c',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1188,6 +1300,7 @@ mod tests {
           row: 0,
           col: 1,
           c: 'a',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1198,6 +1311,7 @@ mod tests {
           row: 0,
           col: 2,
           c: 't',
+          zerowidth: Arc::default(),
           fg: Color::Named(NamedColor::Foreground),
           bg: Color::Named(NamedColor::Background),
           flags: Flags::empty(),
@@ -1217,6 +1331,22 @@ mod tests {
     screen.cells[2].c = 'r';
 
     assert!(!selection_matches_screen_text(&screen, selection, "cat"));
+  }
+
+  #[gpui::test]
+  fn marked_text_range_uses_utf16_offsets(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let view = cx.new(|cx| TerminalView::new(None, cx));
+    view.update(cx, |view, cx| {
+      view.set_marked_text("日😀", cx);
+      assert_eq!(view.marked_text(), Some("日😀"));
+      assert_eq!(view.marked_text_range(), Some(0..3));
+
+      view.clear_marked_text(cx);
+      assert_eq!(view.marked_text(), None);
+      assert_eq!(view.marked_text_range(), None);
+    });
   }
 
   #[gpui::test]
