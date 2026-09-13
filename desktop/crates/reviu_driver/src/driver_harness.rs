@@ -69,11 +69,14 @@ impl DriverProcess {
       let home = run_dir.join("home");
       let config = run_dir.join("config");
       fs::create_dir_all(&home)?;
-      fs::create_dir_all(config.join("reviu.dev"))?;
-      fs::write(
-        config.join("reviu.dev/settings.json"),
-        json!({ "agent_notifications": false }).to_string(),
-      )?;
+      let settings = json!({ "onboarding_done": true, "agent_notifications": false }).to_string();
+      for profile_dir in [
+        config.join("reviu.dev"),
+        home.join("Library/Application Support/reviu.dev"),
+      ] {
+        fs::create_dir_all(&profile_dir)?;
+        fs::write(profile_dir.join("settings.json"), &settings)?;
+      }
       command
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", &config)

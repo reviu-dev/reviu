@@ -1926,6 +1926,63 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn terminal_state_for_driver(
+    &self,
+    cx: &App,
+  ) -> Result<crate::DriverTerminalState, SharedString> {
+    let active_tab = self
+      .active_center_tab
+      .as_ref()
+      .ok_or_else(|| SharedString::from("No center tab is active."))?;
+    let terminal = self
+      .terminal_for_tab(active_tab)
+      .ok_or_else(|| SharedString::from("No terminal is active."))?;
+    let terminal = terminal.read(cx);
+    let (display_offset, total_lines) = terminal.scrollback_state_for_driver();
+    let (search_open, active_search_match, search_match_count) = terminal.search_state_for_driver();
+
+    Ok(crate::DriverTerminalState {
+      working_directory: terminal
+        .working_directory()
+        .map(|path| path.to_string_lossy().into_owned()),
+      title: terminal.title_for_driver().map(str::to_string),
+      visible_text: terminal.visible_text_for_driver(),
+      display_offset,
+      total_lines,
+      search_open,
+      active_search_match,
+      search_match_count,
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn open_first_terminal_file_link_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let terminal_id = self
+      .active_center_tab
+      .as_ref()
+      .and_then(CenterTab::terminal_id)
+      .ok_or_else(|| SharedString::from("No terminal is active."))?;
+    let event = self
+      .terminal_views
+      .get(&terminal_id)
+      .and_then(|terminal| terminal.view.read(cx).first_visible_file_link_for_driver())
+      .ok_or_else(|| SharedString::from("No file link is visible in the terminal."))?;
+    let TerminalViewEvent::OpenFile { path, line, column } = event else {
+      return Err(SharedString::from(
+        "The visible terminal link is not a file.",
+      ));
+    };
+    self.open_file_from_terminal(terminal_id, &path, line, column, window, cx);
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn open_agent_diff_snapshot_for_driver(
     &mut self,
     window: &mut Window,

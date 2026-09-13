@@ -11,6 +11,7 @@ use gpui_component::IconName;
 use gpui_component::Sizable as _;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::tooltip::Tooltip;
 use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -22,6 +23,7 @@ use crate::{
   links::{TerminalLink, TerminalLinkTarget, link_at},
   session::TerminalSearchMatch,
   terminal_element::TerminalElement,
+  terminal_scrollbar::TerminalScrollHandle,
 };
 
 const MAX_COALESCED_SESSION_EVENTS: usize = 100;
@@ -30,6 +32,8 @@ const TERMINAL_SCREEN_DEBUG_SELECTOR: &str = "terminal-screen-bounds";
 const TERMINAL_SURFACE_DEBUG_SELECTOR: &str = "terminal-surface-bounds";
 const TERMINAL_BANNER_DEBUG_SELECTOR: &str = "terminal-banner";
 const TERMINAL_SEARCH_DEBUG_SELECTOR: &str = "terminal-search";
+const TERMINAL_SCROLLBAR_DEBUG_SELECTOR: &str = "terminal-scrollbar";
+const TERMINAL_JUMP_TO_BOTTOM_DEBUG_SELECTOR: &str = "terminal-jump-to-bottom";
 
 fn collect_pending_session_events(
   first_event: TerminalEvent,
@@ -109,7 +113,18 @@ pub enum TerminalViewEvent {
 
 gpui::actions!(
   terminal,
-  [OpenSearch, CloseSearch, SearchNext, SearchPrevious]
+  [
+    OpenSearch,
+    CloseSearch,
+    SearchNext,
+    SearchPrevious,
+    ScrollLineUp,
+    ScrollLineDown,
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollToTop,
+    ScrollToBottom,
+  ]
 );
 
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
@@ -135,6 +150,7 @@ pub struct TerminalView {
   pending_link_activation: Option<PendingLinkActivation>,
   last_reported_mouse_state: Option<(ViewportPoint, Option<MouseButton>)>,
   scroll_remainder: Pixels,
+  scroll_handle: TerminalScrollHandle,
   marked_text: Option<String>,
   search_open: bool,
   search_input: Option<Entity<InputState>>,
@@ -168,6 +184,7 @@ impl TerminalView {
       pending_link_activation: None,
       last_reported_mouse_state: None,
       scroll_remainder: px(0.0),
+      scroll_handle: TerminalScrollHandle::new(),
       marked_text: None,
       search_open: false,
       search_input: None,
@@ -188,6 +205,62 @@ impl TerminalView {
 
   pub fn working_directory(&self) -> Option<&std::path::Path> {
     self.working_directory.as_deref()
+  }
+
+  #[doc(hidden)]
+  pub fn visible_text_for_driver(&self) -> String {
+    if self.screen.rows == 0 || self.screen.cols == 0 {
+      return String::new();
+    }
+    selection_text_from_screen(
+      &self.screen,
+      ViewportSelectionRange {
+        start: ViewportPoint { row: 0, col: 0 },
+        end: ViewportPoint {
+          row: self.screen.rows - 1,
+          col: self.screen.cols - 1,
+        },
+      },
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(str::trim_end)
+    .collect::<Vec<_>>()
+    .join("\n")
+  }
+
+  #[doc(hidden)]
+  pub fn scrollback_state_for_driver(&self) -> (usize, usize) {
+    (self.screen.display_offset, self.screen.total_lines)
+  }
+
+  #[doc(hidden)]
+  pub fn search_state_for_driver(&self) -> (bool, Option<usize>, usize) {
+    (
+      self.search_open,
+      self.search_active_match.map(|index| index + 1),
+      self.search_matches.len(),
+    )
+  }
+
+  #[doc(hidden)]
+  pub fn title_for_driver(&self) -> Option<&str> {
+    self.screen.title.as_deref()
+  }
+
+  #[doc(hidden)]
+  pub fn first_visible_file_link_for_driver(&self) -> Option<TerminalViewEvent> {
+    for row in 0..self.screen.rows {
+      for col in 0..self.screen.cols {
+        let Some(link) = self.hyperlink_at(ViewportPoint { row, col }) else {
+          continue;
+        };
+        if let TerminalLinkTarget::Path { path, line, column } = link.target {
+          return Some(TerminalViewEvent::OpenFile { path, line, column });
+        }
+      }
+    }
+    None
   }
 
   pub fn set_working_directory(
@@ -507,8 +580,29 @@ impl TerminalView {
     }
 
     session.scroll_display(delta_lines);
+    self.finish_scrollback_change(cx);
+  }
+
+  fn scroll_scrollback_by(&mut self, delta_lines: i32, cx: &mut Context<Self>) {
+    let Some(session) = self.session.as_mut() else {
+      return;
+    };
+    session.scroll_display(delta_lines);
+    self.finish_scrollback_change(cx);
+  }
+
+  fn scroll_to_display_offset(&mut self, display_offset: usize, cx: &mut Context<Self>) {
+    let Some(session) = self.session.as_mut() else {
+      return;
+    };
+    session.set_display_offset(display_offset);
+    self.finish_scrollback_change(cx);
+  }
+
+  fn finish_scrollback_change(&mut self, cx: &mut Context<Self>) {
     self.reset_selection();
     self.hovered_hyperlink = None;
+    self.pending_link_activation = None;
     self.refresh_snapshot();
     self.refresh_visible_search_matches();
     cx.notify();
@@ -1041,6 +1135,69 @@ impl TerminalView {
     cx.stop_propagation();
   }
 
+  fn scroll_line_up_action(
+    &mut self,
+    _: &ScrollLineUp,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.scroll_scrollback_by(1, cx);
+    cx.stop_propagation();
+  }
+
+  fn scroll_line_down_action(
+    &mut self,
+    _: &ScrollLineDown,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.scroll_scrollback_by(-1, cx);
+    cx.stop_propagation();
+  }
+
+  fn scroll_page_up_action(
+    &mut self,
+    _: &ScrollPageUp,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let page_lines = self.screen.rows.saturating_sub(1).max(1) as i32;
+    self.scroll_scrollback_by(page_lines, cx);
+    cx.stop_propagation();
+  }
+
+  fn scroll_page_down_action(
+    &mut self,
+    _: &ScrollPageDown,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let page_lines = self.screen.rows.saturating_sub(1).max(1) as i32;
+    self.scroll_scrollback_by(-page_lines, cx);
+    cx.stop_propagation();
+  }
+
+  fn scroll_to_top_action(
+    &mut self,
+    _: &ScrollToTop,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let maximum_offset = self.screen.total_lines.saturating_sub(self.screen.rows);
+    self.scroll_to_display_offset(maximum_offset, cx);
+    cx.stop_propagation();
+  }
+
+  fn scroll_to_bottom_action(
+    &mut self,
+    _: &ScrollToBottom,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.scroll_to_display_offset(0, cx);
+    cx.stop_propagation();
+  }
+
   fn send_keystroke(
     &mut self,
     action: &SendKeystroke,
@@ -1165,6 +1322,44 @@ impl TerminalView {
     }
   }
 
+  fn render_jump_to_bottom(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    if self.screen.display_offset == 0 {
+      return None;
+    }
+
+    let theme = cx.theme().clone();
+    Some(
+      div()
+        .debug_selector(|| TERMINAL_JUMP_TO_BOTTOM_DEBUG_SELECTOR.to_string())
+        .absolute()
+        .bottom(px(12.0))
+        .left_0()
+        .right(Scrollbar::width())
+        .flex()
+        .justify_center()
+        .child(
+          div()
+            .rounded(px(999.0))
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .overflow_hidden()
+            .child(
+              Button::new("terminal-jump-to-bottom")
+                .icon(IconName::ChevronDown)
+                .ghost()
+                .small()
+                .rounded(px(999.0))
+                .tooltip("Jump to latest output")
+                .on_click(cx.listener(|this, _, _, cx| {
+                  this.scroll_to_display_offset(0, cx);
+                })),
+            ),
+        )
+        .into_any_element(),
+    )
+  }
+
   fn render_search_panel(
     &mut self,
     window: &mut Window,
@@ -1270,6 +1465,13 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let line_height = px(f32::from(self.last_bounds.cell_height.max(1)));
+    self.scroll_handle.update(&self.screen, line_height);
+    if let Some(display_offset) = self.scroll_handle.take_pending_display_offset() {
+      self.scroll_to_display_offset(display_offset, cx);
+      self.scroll_handle.update(&self.screen, line_height);
+    }
+
     let theme = cx.theme().clone();
     let is_dark = theme.is_dark();
     let (cursor_color, selection_color) = if is_dark {
@@ -1287,7 +1489,11 @@ impl Render for TerminalView {
     let terminal_screen = div()
       .id("terminal-screen")
       .debug_selector(|| TERMINAL_SCREEN_DEBUG_SELECTOR.to_string())
-      .size_full()
+      .absolute()
+      .top_0()
+      .left_0()
+      .right(Scrollbar::width())
+      .bottom_0()
       .overflow_hidden()
       .bg(theme.background)
       .child(
@@ -1318,6 +1524,22 @@ impl Render for TerminalView {
       .clone()
       .or_else(|| self.screen.exit_status.clone());
     let search_panel = self.render_search_panel(window, cx);
+    let jump_to_bottom = self.render_jump_to_bottom(cx);
+    let scrollbar = (self.screen.total_lines > self.screen.rows).then(|| {
+      div()
+        .debug_selector(|| TERMINAL_SCROLLBAR_DEBUG_SELECTOR.to_string())
+        .absolute()
+        .top_0()
+        .right_0()
+        .bottom_0()
+        .w(Scrollbar::width())
+        .child(
+          Scrollbar::vertical(&self.scroll_handle)
+            .id("terminal-scrollback")
+            .mode(ScrollbarMode::Always)
+            .viewport_from_layout(),
+        )
+    });
 
     div()
       .id("terminal-scaffold")
@@ -1336,6 +1558,12 @@ impl Render for TerminalView {
       .on_action(cx.listener(Self::close_search_action))
       .on_action(cx.listener(Self::search_next_action))
       .on_action(cx.listener(Self::search_previous_action))
+      .on_action(cx.listener(Self::scroll_line_up_action))
+      .on_action(cx.listener(Self::scroll_line_down_action))
+      .on_action(cx.listener(Self::scroll_page_up_action))
+      .on_action(cx.listener(Self::scroll_page_down_action))
+      .on_action(cx.listener(Self::scroll_to_top_action))
+      .on_action(cx.listener(Self::scroll_to_bottom_action))
       .on_action(cx.listener(Self::send_keystroke))
       .key_context(if self.search_open {
         TERMINAL_SEARCH_CONTEXT
@@ -1378,7 +1606,9 @@ impl Render for TerminalView {
           .flex_1()
           .min_h_0()
           .child(terminal_screen)
-          .when_some(search_panel, |this, search_panel| this.child(search_panel)),
+          .when_some(scrollbar, |this, scrollbar| this.child(scrollbar))
+          .when_some(search_panel, |this, search_panel| this.child(search_panel))
+          .when_some(jump_to_bottom, |this, jump| this.child(jump)),
       )
   }
 }
@@ -1480,7 +1710,8 @@ fn selection_matches_screen_text(
 #[cfg(test)]
 mod tests {
   use super::{
-    TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_SEARCH_DEBUG_SELECTOR,
+    TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_JUMP_TO_BOTTOM_DEBUG_SELECTOR,
+    TERMINAL_SCROLLBAR_DEBUG_SELECTOR, TERMINAL_SEARCH_DEBUG_SELECTOR,
     TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalEvent, TerminalView, TerminalViewEvent,
     collect_pending_session_events, selection_matches_screen_text, selection_mode_for_click_count,
     selection_text_from_screen, should_defer_to_ime,
@@ -2172,6 +2403,42 @@ mod tests {
       refocused,
       "terminal should regain focus after clicking it again"
     );
+  }
+
+  #[gpui::test]
+  fn terminal_scrollbar_and_jump_button_reflect_scrollback(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(None, cx));
+    let cx: &mut VisualTestContext = cx;
+    view.update(cx, |view, cx| {
+      view.screen = screen_from_lines(&["one", "two", "three"]);
+      view.screen.total_lines = 12;
+      view.screen.display_offset = 4;
+      cx.notify();
+    });
+
+    assert!(cx.debug_bounds(TERMINAL_SCROLLBAR_DEBUG_SELECTOR).is_some());
+    assert!(
+      cx.debug_bounds(TERMINAL_JUMP_TO_BOTTOM_DEBUG_SELECTOR)
+        .is_some()
+    );
+
+    view.update(cx, |view, cx| {
+      view.screen.display_offset = 0;
+      cx.notify();
+    });
+    assert!(
+      cx.debug_bounds(TERMINAL_JUMP_TO_BOTTOM_DEBUG_SELECTOR)
+        .is_none()
+    );
+    assert!(cx.debug_bounds(TERMINAL_SCROLLBAR_DEBUG_SELECTOR).is_some());
+
+    view.update(cx, |view, cx| {
+      view.screen.total_lines = view.screen.rows;
+      cx.notify();
+    });
+    assert!(cx.debug_bounds(TERMINAL_SCROLLBAR_DEBUG_SELECTOR).is_none());
   }
 
   #[gpui::test]

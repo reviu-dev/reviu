@@ -55,7 +55,7 @@ impl SessionPage {
     cx.notify();
   }
 
-  fn open_file_from_terminal(
+  pub(super) fn open_file_from_terminal(
     &mut self,
     terminal_id: u64,
     path: &Path,

@@ -5,7 +5,7 @@ default:
   @just --list
 
 # CI-safe desktop verification.
-verify: desktop-fmt desktop-clippy desktop-test git-smoke
+verify: desktop-fmt desktop-clippy desktop-test git-smoke terminal-smoke
 
 # CI-safe checks without the smoke runner.
 desktop-check: desktop-fmt desktop-clippy desktop-test
@@ -29,6 +29,10 @@ driver-bins:
 # Run the CI-compatible local Git smoke suite.
 git-smoke: driver-bins
   cd desktop && target/debug/reviu-git-smoke --driver-bin target/debug/reviu-driver
+
+# Run the isolated terminal smoke scenario.
+terminal-smoke: driver-bins
+  cd desktop && target/debug/reviu-terminal-smoke --driver-bin target/debug/reviu-driver --backend test
 
 # Run one local Git smoke scenario.
 git-smoke-scenario scenario: driver-bins

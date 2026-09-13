@@ -1262,8 +1262,6 @@ fn terminal_key_bindings() -> Vec<KeyBinding> {
     ("down", "down"),
     ("left", "left"),
     ("right", "right"),
-    ("shift-up", "shift-up"),
-    ("shift-down", "shift-down"),
     ("shift-left", "shift-left"),
     ("shift-right", "shift-right"),
     ("alt-left", "alt-b"),
@@ -1272,8 +1270,6 @@ fn terminal_key_bindings() -> Vec<KeyBinding> {
     ("cmd-right", "ctrl-e"),
     ("home", "home"),
     ("end", "end"),
-    ("shift-home", "shift-home"),
-    ("shift-end", "shift-end"),
     ("pageup", "pageup"),
     ("pagedown", "pagedown"),
   ]
@@ -1293,6 +1289,36 @@ fn terminal_key_bindings() -> Vec<KeyBinding> {
     ("ctrl-f", "ctrl-g", "ctrl-shift-g")
   };
   bindings.extend([
+    KeyBinding::new(
+      "shift-up",
+      terminal::ScrollLineUp,
+      Some(terminal::TERMINAL_CONTEXT),
+    ),
+    KeyBinding::new(
+      "shift-down",
+      terminal::ScrollLineDown,
+      Some(terminal::TERMINAL_CONTEXT),
+    ),
+    KeyBinding::new(
+      "shift-pageup",
+      terminal::ScrollPageUp,
+      Some(terminal::TERMINAL_CONTEXT),
+    ),
+    KeyBinding::new(
+      "shift-pagedown",
+      terminal::ScrollPageDown,
+      Some(terminal::TERMINAL_CONTEXT),
+    ),
+    KeyBinding::new(
+      "shift-home",
+      terminal::ScrollToTop,
+      Some(terminal::TERMINAL_CONTEXT),
+    ),
+    KeyBinding::new(
+      "shift-end",
+      terminal::ScrollToBottom,
+      Some(terminal::TERMINAL_CONTEXT),
+    ),
     KeyBinding::new(find, terminal::OpenSearch, Some(terminal::TERMINAL_CONTEXT)),
     KeyBinding::new(
       find,
@@ -1318,6 +1344,26 @@ fn terminal_key_bindings() -> Vec<KeyBinding> {
 
   if cfg!(target_os = "macos") {
     bindings.extend([
+      KeyBinding::new(
+        "cmd-up",
+        terminal::ScrollPageUp,
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+      KeyBinding::new(
+        "cmd-down",
+        terminal::ScrollPageDown,
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+      KeyBinding::new(
+        "cmd-home",
+        terminal::ScrollToTop,
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+      KeyBinding::new(
+        "cmd-end",
+        terminal::ScrollToBottom,
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
       KeyBinding::new(
         "cmd-c",
         terminal::SendKeystroke("cmd-c".to_string()),
@@ -1697,6 +1743,48 @@ mod tests {
         ),
         Some(<terminal::SendKeystroke as Action>::name_for_type()),
         "{keystroke} should reach the terminal",
+      );
+    }
+  }
+
+  #[test]
+  fn terminal_scrollback_shortcuts_override_terminal_input() {
+    let cases = [
+      (
+        "shift-up",
+        <terminal::ScrollLineUp as Action>::name_for_type(),
+      ),
+      (
+        "shift-down",
+        <terminal::ScrollLineDown as Action>::name_for_type(),
+      ),
+      (
+        "shift-pageup",
+        <terminal::ScrollPageUp as Action>::name_for_type(),
+      ),
+      (
+        "shift-pagedown",
+        <terminal::ScrollPageDown as Action>::name_for_type(),
+      ),
+      (
+        "shift-home",
+        <terminal::ScrollToTop as Action>::name_for_type(),
+      ),
+      (
+        "shift-end",
+        <terminal::ScrollToBottom as Action>::name_for_type(),
+      ),
+    ];
+
+    for (keystroke, expected_action) in cases {
+      assert_eq!(
+        first_binding_action_name(
+          "workspace",
+          &[terminal::TERMINAL_CONTEXT],
+          keystroke,
+          app_and_workspace_key_bindings(),
+        ),
+        Some(expected_action),
       );
     }
   }

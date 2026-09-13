@@ -38,6 +38,10 @@ name = "reviu-visual-smoke"
 path = "src/bin/reviu_visual_smoke.rs"
 
 [[bin]]
+name = "reviu-terminal-smoke"
+path = "src/bin/reviu_terminal_smoke.rs"
+
+[[bin]]
 name = "reviu-github-smoke"
 path = "src/bin/reviu_github_smoke.rs"
 

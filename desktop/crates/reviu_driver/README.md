@@ -123,7 +123,7 @@ Core tools:
 
 - lifecycle: `start`, `restart`, `status`, `quit`
 - UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `park`, `scroll`
-- app state: `path_prompt`, `open_file`, `open_code_file`, `open_pull_request_file`, `open_terminal`, `open_agent_diff_snapshot`, `focus_agent_chat`, `focus_agent_chat_by_title`, `new_agent_session`, `seed_agent_message`, `split_center_with_chat`, `resize_dock`, `set_editor_scroll`, `expand_sidebar_projects`, `resize_sidebar`, `wait_until_editor_ready`, `show_changes`, `show_pull_request`, `expand_pull_request_details`, `show_review`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`, `github_notifications`
+- app state: `path_prompt`, `open_file`, `open_code_file`, `open_pull_request_file`, `open_terminal`, `terminal_state`, `open_terminal_file_link`, `open_agent_diff_snapshot`, `focus_agent_chat`, `focus_agent_chat_by_title`, `new_agent_session`, `seed_agent_message`, `split_center_with_chat`, `resize_dock`, `set_editor_scroll`, `expand_sidebar_projects`, `resize_sidebar`, `wait_until_editor_ready`, `show_changes`, `show_pull_request`, `expand_pull_request_details`, `show_review`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`, `github_notifications`
 - Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `refresh_github_notifications`, `open_github_notification`, `mark_github_notification_done`, `run_git_action`, `create_pull_request_review_comment`, `submit_pull_request_review`, `discard_pull_request_review`
 - visual: `screenshot` with `--backend visual` on macOS
 
@@ -173,6 +173,33 @@ On failure, the runner keeps the temp directory and prints:
 - the tail of `driver.stderr.log`
 
 CI runs the smoke suite on Unix runners. Windows is skipped because the existing desktop tests assume Unix-style paths.
+
+## `reviu-terminal-smoke`
+
+`reviu-terminal-smoke` runs a real shell in an isolated temporary profile and verifies Unicode output, full-history search, keyboard scrollback navigation, return-to-latest behavior, working-directory tracking, and file-location output.
+
+Run the CI-compatible scenario from `desktop/`:
+
+```sh
+cargo build -p reviu_driver --bins
+target/debug/reviu-terminal-smoke --driver-bin target/debug/reviu-driver
+```
+
+On macOS, the same scenario can use the visual backend and capture the search and scrollback UI:
+
+```sh
+target/debug/reviu-terminal-smoke \
+  --driver-bin target/debug/reviu-driver \
+  --backend visual \
+  --screenshot /tmp/reviu-terminal-smoke.png
+```
+
+Useful options:
+
+- `--backend test|visual`: select the driver backend.
+- `--driver-bin <path>`: use a prebuilt driver binary instead of `cargo run`.
+- `--screenshot <path>`: capture the visual search and scrollback state.
+- `--keep-temp`: keep the isolated repository, profile, and driver logs.
 
 ## `reviu-visual-smoke`
 

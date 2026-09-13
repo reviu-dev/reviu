@@ -214,6 +214,7 @@ pub struct TerminalCursorSnapshot {
 pub struct ScreenSnapshot {
   pub rows: usize,
   pub cols: usize,
+  pub total_lines: usize,
   pub display_offset: usize,
   pub colors: Colors,
   pub cells: Vec<TerminalCellSnapshot>,
@@ -666,6 +667,17 @@ impl TerminalSession {
     self.term.lock().scroll_display(Scroll::Delta(delta_lines));
   }
 
+  pub fn set_display_offset(&mut self, display_offset: usize) {
+    let mut term = self.term.lock();
+    let current_offset = term.grid().display_offset();
+    let maximum_offset = term.total_lines().saturating_sub(term.screen_lines());
+    let target_offset = display_offset.min(maximum_offset);
+    let delta = target_offset as i32 - current_offset as i32;
+    if delta != 0 {
+      term.scroll_display(Scroll::Delta(delta));
+    }
+  }
+
   pub fn send_mouse_press(
     &mut self,
     button: MouseButton,
@@ -883,6 +895,7 @@ fn snapshot_from_term<T: EventListener>(
   ScreenSnapshot {
     rows,
     cols,
+    total_lines: term.total_lines(),
     display_offset,
     colors,
     cells,
@@ -1134,6 +1147,7 @@ mod tests {
 
     assert_eq!(snapshot.rows, 3);
     assert_eq!(snapshot.cols, 8);
+    assert_eq!(snapshot.total_lines, 3);
     assert_eq!(snapshot.title.as_deref(), Some("shell"));
     assert_eq!(
       snapshot.cursor.map(|cursor| cursor.point),

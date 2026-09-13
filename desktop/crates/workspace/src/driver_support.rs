@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Serialize)]
+pub struct DriverTerminalState {
+  pub working_directory: Option<String>,
+  pub title: Option<String>,
+  pub visible_text: String,
+  pub display_offset: usize,
+  pub total_lines: usize,
+  pub search_open: bool,
+  pub active_search_match: Option<usize>,
+  pub search_match_count: usize,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DriverNotificationKind {

@@ -427,6 +427,9 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
       "cmd": "open_file",
       "path": required_string(&arguments, "path")?,
     }),
+    "open_terminal" => json!({ "cmd": "open_terminal" }),
+    "terminal_state" => json!({ "cmd": "terminal_state" }),
+    "open_terminal_file_link" => json!({ "cmd": "open_terminal_file_link" }),
     "open_pull_request_file" => json!({
       "cmd": "open_pull_request_file",
       "path": optional_string(&arguments, "path")?,
@@ -639,6 +642,21 @@ fn tools() -> Vec<Value> {
       "open_file",
       "Open a repository-relative file path in the center editor.",
       object_schema(vec![string_property("path", "Repository-relative path.")]).required(["path"]),
+    ),
+    tool(
+      "open_terminal",
+      "Open a terminal center tab.",
+      empty_schema(),
+    ),
+    tool(
+      "terminal_state",
+      "Inspect the active terminal output, working directory, search, and scrollback state.",
+      empty_schema(),
+    ),
+    tool(
+      "open_terminal_file_link",
+      "Open the first visible file link in the active terminal.",
+      empty_schema(),
     ),
     tool(
       "open_pull_request_file",

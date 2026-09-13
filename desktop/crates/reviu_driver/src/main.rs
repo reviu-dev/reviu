@@ -196,6 +196,10 @@ enum Command {
   },
   /// Direct driver hook: open a terminal center tab.
   OpenTerminal,
+  /// Inspect the active terminal's visible output and navigation state.
+  TerminalState,
+  /// Open the first visible terminal file link.
+  OpenTerminalFileLink,
   /// Direct driver hook: open the first agent tool diff snapshot in the center editor.
   OpenAgentDiffSnapshot,
   /// Direct driver hook: focus the active agent chat center tab.
@@ -561,6 +565,25 @@ fn handle_test_command(
       });
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
+    }
+    Command::TerminalState => {
+      let state = view.read_with(cx, |view, cx| view.terminal_state_for_driver(cx));
+      match state {
+        Ok(state) => respond(ok(serde_json::json!(state))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::OpenTerminalFileLink => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.open_first_terminal_file_link_for_driver(window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
     }
     Command::OpenAgentDiffSnapshot => {
       let result = cx.update(|window, cx| {
@@ -1050,6 +1073,14 @@ fn handle_visual_command(
       Err(error) => respond(err(error)),
     },
     Command::OpenTerminal => match open_terminal_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::TerminalState => match terminal_state_directly(cx, view) {
+      Ok(state) => respond(ok(state)),
+      Err(error) => respond(err(error)),
+    },
+    Command::OpenTerminalFileLink => match open_terminal_file_link_directly(cx, window, view) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
@@ -1698,6 +1729,34 @@ fn editor_stats_directly(
   view: &Entity<WorkspaceView>,
 ) -> Result<serde_json::Value, String> {
   Ok(view.read_with(cx, |view, cx| view.editor_stats_for_driver(cx)))
+}
+
+#[cfg(target_os = "macos")]
+fn open_terminal_file_link_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.open_first_terminal_file_link_for_driver(window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn terminal_state_directly(
+  cx: &mut VisualTestAppContext,
+  view: &Entity<WorkspaceView>,
+) -> Result<serde_json::Value, String> {
+  view
+    .read_with(cx, |view, cx| view.terminal_state_for_driver(cx))
+    .map(|state| serde_json::json!(state))
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "macos")]
