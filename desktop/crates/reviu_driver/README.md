@@ -176,7 +176,7 @@ CI runs the smoke suite on Unix runners. Windows is skipped because the existing
 
 ## `reviu-terminal-smoke`
 
-`reviu-terminal-smoke` runs a real shell in an isolated temporary profile and verifies Unicode output, full-history search, keyboard scrollback navigation, return-to-latest behavior, working-directory tracking, and file-location output.
+`reviu-terminal-smoke` runs a real shell in an isolated temporary profile and verifies Unicode output, full-history search, keyboard scrollback navigation, return-to-latest behavior, working-directory tracking, file-location output, and terminal restoration in a fresh driver process.
 
 Run the CI-compatible scenario from `desktop/`:
 
@@ -185,7 +185,7 @@ cargo build -p reviu_driver --bins
 target/debug/reviu-terminal-smoke --driver-bin target/debug/reviu-driver
 ```
 
-On macOS, the same scenario can use the visual backend and capture the scrollback and unseen-output UI:
+On macOS, the same scenario can use the visual backend and capture the restored terminal UI:
 
 ```sh
 target/debug/reviu-terminal-smoke \
@@ -198,7 +198,7 @@ Useful options:
 
 - `--backend test|visual`: select the driver backend.
 - `--driver-bin <path>`: use a prebuilt driver binary instead of `cargo run`.
-- `--screenshot <path>`: capture the visual scrollback and unseen-output state.
+- `--screenshot <path>`: capture the restored terminal state in the fresh process.
 - `--keep-temp`: keep the isolated repository, profile, and driver logs.
 
 ## `reviu-visual-smoke`

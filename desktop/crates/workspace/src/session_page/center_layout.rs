@@ -1,4 +1,37 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
 use super::center_tab::{CenterTab, CenterTabKind};
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PersistedTerminalSplitDirection {
+  Up,
+  Down,
+  Left,
+  Right,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum PersistedTerminalNode {
+  Pane {
+    terminals: Vec<u64>,
+    active_terminal: u64,
+  },
+  Split {
+    direction: PersistedTerminalSplitDirection,
+    first: Box<PersistedTerminalNode>,
+    second: Box<PersistedTerminalNode>,
+  },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(super) struct PersistedTerminalLayout {
+  pub(super) root: PersistedTerminalNode,
+  pub(super) active_terminal: u64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CenterSurface {
@@ -465,6 +498,116 @@ pub(super) struct CenterLayout {
   next_pane_id: u64,
 }
 
+fn persisted_terminal_node(
+  node: &CenterNode,
+  terminal_keys: &HashMap<u64, u64>,
+) -> Option<PersistedTerminalNode> {
+  match node {
+    CenterNode::Pane(pane) => {
+      let terminals = pane
+        .surfaces
+        .iter()
+        .filter_map(|surface| surface.tab().terminal_id())
+        .filter_map(|terminal_id| terminal_keys.get(&terminal_id).copied())
+        .collect::<Vec<_>>();
+      let active_terminal = pane
+        .active_surface
+        .tab()
+        .terminal_id()
+        .and_then(|terminal_id| terminal_keys.get(&terminal_id).copied())
+        .or_else(|| terminals.first().copied())?;
+      Some(PersistedTerminalNode::Pane {
+        terminals,
+        active_terminal,
+      })
+    }
+    CenterNode::Split(split) => {
+      let first = persisted_terminal_node(&split.first, terminal_keys);
+      let second = persisted_terminal_node(&split.second, terminal_keys);
+      match (first, second) {
+        (Some(first), Some(second)) => Some(PersistedTerminalNode::Split {
+          direction: match split.direction {
+            CenterSplitDirection::Up => PersistedTerminalSplitDirection::Up,
+            CenterSplitDirection::Down => PersistedTerminalSplitDirection::Down,
+            CenterSplitDirection::Left => PersistedTerminalSplitDirection::Left,
+            CenterSplitDirection::Right => PersistedTerminalSplitDirection::Right,
+          },
+          first: Box::new(first),
+          second: Box::new(second),
+        }),
+        (Some(node), None) | (None, Some(node)) => Some(node),
+        (None, None) => None,
+      }
+    }
+  }
+}
+
+fn first_persisted_terminal(node: &PersistedTerminalNode) -> u64 {
+  match node {
+    PersistedTerminalNode::Pane { terminals, .. } => terminals.first().copied().unwrap_or_default(),
+    PersistedTerminalNode::Split { first, .. } => first_persisted_terminal(first),
+  }
+}
+
+fn center_node_from_persisted(
+  node: &PersistedTerminalNode,
+  terminals: &HashMap<u64, CenterTab>,
+  next_id: &mut u64,
+) -> Option<CenterNode> {
+  match node {
+    PersistedTerminalNode::Pane {
+      terminals: terminal_keys,
+      active_terminal,
+    } => {
+      let surfaces = terminal_keys
+        .iter()
+        .filter_map(|key| terminals.get(key).cloned())
+        .map(CenterSurface::from_tab)
+        .collect::<Vec<_>>();
+      let active_surface = terminals
+        .get(active_terminal)
+        .filter(|tab| surfaces.iter().any(|surface| surface.tab() == *tab))
+        .cloned()
+        .map(CenterSurface::from_tab)
+        .or_else(|| surfaces.first().cloned())?;
+      let pane_id = CenterPaneId(*next_id);
+      *next_id = (*next_id).saturating_add(1);
+      Some(CenterNode::Pane(CenterPane {
+        id: pane_id,
+        surfaces,
+        active_surface,
+      }))
+    }
+    PersistedTerminalNode::Split {
+      direction,
+      first,
+      second,
+    } => {
+      let first = center_node_from_persisted(first, terminals, next_id);
+      let second = center_node_from_persisted(second, terminals, next_id);
+      match (first, second) {
+        (Some(first), Some(second)) => {
+          let split_id = CenterSplitId(*next_id);
+          *next_id = (*next_id).saturating_add(1);
+          Some(CenterNode::Split(CenterSplit {
+            id: split_id,
+            direction: match direction {
+              PersistedTerminalSplitDirection::Up => CenterSplitDirection::Up,
+              PersistedTerminalSplitDirection::Down => CenterSplitDirection::Down,
+              PersistedTerminalSplitDirection::Left => CenterSplitDirection::Left,
+              PersistedTerminalSplitDirection::Right => CenterSplitDirection::Right,
+            },
+            first: Box::new(first),
+            second: Box::new(second),
+          }))
+        }
+        (Some(node), None) | (None, Some(node)) => Some(node),
+        (None, None) => None,
+      }
+    }
+  }
+}
+
 impl CenterLayout {
   pub(super) fn single(active_surface: CenterSurface) -> Self {
     let active_tab = active_surface.tab().clone();
@@ -473,6 +616,40 @@ impl CenterLayout {
       active_tab,
       next_pane_id: 1,
     }
+  }
+
+  pub(super) fn persisted_terminal_layout(
+    &self,
+    terminal_keys: &HashMap<u64, u64>,
+  ) -> Option<PersistedTerminalLayout> {
+    let root = persisted_terminal_node(&self.root, terminal_keys)?;
+    let active_terminal = self
+      .active_tab()
+      .terminal_id()
+      .and_then(|terminal_id| terminal_keys.get(&terminal_id).copied())
+      .unwrap_or_else(|| first_persisted_terminal(&root));
+    Some(PersistedTerminalLayout {
+      root,
+      active_terminal,
+    })
+  }
+
+  pub(super) fn from_persisted_terminal_layout(
+    persisted: &PersistedTerminalLayout,
+    terminals: &HashMap<u64, CenterTab>,
+  ) -> Option<Self> {
+    let mut next_id = 0;
+    let root = center_node_from_persisted(&persisted.root, terminals, &mut next_id)?;
+    let active_tab = terminals
+      .get(&persisted.active_terminal)
+      .filter(|tab| root.contains_tab(tab))
+      .cloned()
+      .unwrap_or_else(|| root.first_active_surface().tab().clone());
+    Some(Self {
+      root,
+      active_tab,
+      next_pane_id: next_id,
+    })
   }
 
   fn allocate_pane_id(&mut self) -> CenterPaneId {
@@ -665,6 +842,62 @@ mod tests {
       panic!("layout should be a single pane");
     };
     pane.id
+  }
+
+  #[test]
+  fn terminal_layout_round_trips_with_fresh_runtime_ids() {
+    let first = CenterTab::terminal(1);
+    let second = CenterTab::terminal(2);
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(first.clone()));
+    let pane_id = root_pane_id(&layout);
+    assert!(layout.split_pane(
+      pane_id,
+      CenterSurface::from_tab(second.clone()),
+      CenterSplitDirection::Right,
+    ));
+    let persisted = layout
+      .persisted_terminal_layout(&HashMap::from([(1, 10), (2, 20)]))
+      .expect("persisted terminal layout");
+
+    let restored_first = CenterTab::terminal(101);
+    let restored_second = CenterTab::terminal(102);
+    let restored = CenterLayout::from_persisted_terminal_layout(
+      &persisted,
+      &HashMap::from([(10, restored_first.clone()), (20, restored_second.clone())]),
+    )
+    .expect("restored terminal layout");
+
+    assert_split_tabs(
+      &restored,
+      CenterSplitDirection::Right,
+      &restored_first,
+      &restored_second,
+    );
+    assert_eq!(restored.active_tab(), &restored_second);
+  }
+
+  #[test]
+  fn terminal_layout_drops_non_terminal_split_panes() {
+    let terminal = CenterTab::terminal(1);
+    let file = CenterTab::file(PathBuf::from("README.md"));
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(terminal.clone()));
+    let pane_id = root_pane_id(&layout);
+    assert!(layout.split_pane(
+      pane_id,
+      CenterSurface::from_tab(file),
+      CenterSplitDirection::Right,
+    ));
+
+    let persisted = layout
+      .persisted_terminal_layout(&HashMap::from([(1, 10)]))
+      .expect("persisted terminal layout");
+    assert_eq!(
+      persisted.root,
+      PersistedTerminalNode::Pane {
+        terminals: vec![10],
+        active_terminal: 10,
+      }
+    );
   }
 
   #[test]

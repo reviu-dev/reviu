@@ -71,13 +71,19 @@ const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS merge_methods (repo TEXT PRIMARY KEY, method TEXT NOT NULL)",
 };
 
+const TERMINAL_WORKSPACES_TABLE: ConfigTable = ConfigTable {
+  name: "terminal_workspaces",
+  create_sql: "CREATE TABLE IF NOT EXISTS terminal_workspaces (checkout_path TEXT PRIMARY KEY, project_path TEXT NOT NULL, state TEXT NOT NULL)",
+};
+
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 4] = [
+const CONFIG_TABLES: [ConfigTable; 5] = [
   PROJECTS_TABLE,
   COMMAND_USAGES_TABLE,
   ANALYTICS_META_TABLE,
   MERGE_METHODS_TABLE,
+  TERMINAL_WORKSPACES_TABLE,
 ];
 
 type Migration = fn(&Connection) -> rusqlite::Result<()>;
@@ -94,6 +100,7 @@ const MIGRATIONS: &[Migration] = [
   migrate_v6_drop_legacy_project_tables,
   migrate_v7_drop_retired_github_home_tables,
   migrate_v8_ensure_final_config_tables,
+  migrate_v9_terminal_workspaces,
 ]
 .as_slice();
 
@@ -229,6 +236,11 @@ fn migrate_v7_drop_retired_github_home_tables(conn: &Connection) -> rusqlite::Re
 
 fn migrate_v8_ensure_final_config_tables(conn: &Connection) -> rusqlite::Result<()> {
   create_baseline_tables(conn)
+}
+
+fn migrate_v9_terminal_workspaces(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(TERMINAL_WORKSPACES_TABLE.create_sql, [])?;
+  Ok(())
 }
 
 fn merge_method_storage_key(method: GithubPullRequestMergeMethod) -> &'static str {
@@ -812,6 +824,71 @@ impl ConfigStore {
     }
   }
 
+  pub fn load_terminal_workspace(checkout_path: &Path) -> Option<String> {
+    let store = Self::open_with_tables()?;
+    store
+      .conn
+      .query_row(
+        &format!(
+          "SELECT state FROM {} WHERE checkout_path = ?1",
+          TERMINAL_WORKSPACES_TABLE.name
+        ),
+        params![checkout_path.to_string_lossy().as_ref()],
+        |row| row.get(0),
+      )
+      .ok()
+  }
+
+  pub fn persist_terminal_workspace(checkout_path: &Path, project_path: &Path, state: &str) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    if let Err(err) = store.conn.execute(
+      &format!(
+        "INSERT INTO {} (checkout_path, project_path, state) VALUES (?1, ?2, ?3)
+         ON CONFLICT(checkout_path) DO UPDATE SET project_path = excluded.project_path, state = excluded.state",
+        TERMINAL_WORKSPACES_TABLE.name
+      ),
+      params![
+        checkout_path.to_string_lossy().as_ref(),
+        project_path.to_string_lossy().as_ref(),
+        state
+      ],
+    ) {
+      log::warn!("Failed to persist terminal workspace: {}", err);
+    }
+  }
+
+  pub fn forget_terminal_workspace(checkout_path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    if let Err(err) = store.conn.execute(
+      &format!(
+        "DELETE FROM {} WHERE checkout_path = ?1",
+        TERMINAL_WORKSPACES_TABLE.name
+      ),
+      params![checkout_path.to_string_lossy().as_ref()],
+    ) {
+      log::warn!("Failed to forget terminal workspace: {}", err);
+    }
+  }
+
+  pub fn forget_terminal_workspaces_for_project(project_path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    if let Err(err) = store.conn.execute(
+      &format!(
+        "DELETE FROM {} WHERE project_path = ?1",
+        TERMINAL_WORKSPACES_TABLE.name
+      ),
+      params![project_path.to_string_lossy().as_ref()],
+    ) {
+      log::warn!("Failed to forget project terminal workspaces: {}", err);
+    }
+  }
+
   pub fn load_app_settings() -> AppSettings {
     crate::settings_file::load()
   }
@@ -1328,6 +1405,38 @@ mod tests {
   }
 
   #[test]
+  fn terminal_workspace_round_trips_per_checkout() {
+    let db_path = unique_test_db_path("terminal-workspace");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let first = PathBuf::from("/tmp/reviu-terminal-first");
+    let second = PathBuf::from("/tmp/reviu-terminal-second");
+    let project = PathBuf::from("/tmp/reviu-terminal-project");
+    ConfigStore::persist_terminal_workspace(&first, &project, "{\"terminals\":[1]}");
+    ConfigStore::persist_terminal_workspace(&second, &project, "{\"terminals\":[2]}");
+    assert_eq!(
+      ConfigStore::load_terminal_workspace(&first).as_deref(),
+      Some("{\"terminals\":[1]}")
+    );
+    assert_eq!(
+      ConfigStore::load_terminal_workspace(&second).as_deref(),
+      Some("{\"terminals\":[2]}")
+    );
+
+    ConfigStore::forget_terminal_workspace(&first);
+    assert_eq!(ConfigStore::load_terminal_workspace(&first), None);
+    assert!(ConfigStore::load_terminal_workspace(&second).is_some());
+
+    ConfigStore::persist_terminal_workspace(&first, &project, "{\"terminals\":[1]}");
+    ConfigStore::forget_terminal_workspaces_for_project(&project);
+    assert_eq!(ConfigStore::load_terminal_workspace(&first), None);
+    assert_eq!(ConfigStore::load_terminal_workspace(&second), None);
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
   fn a_merge_method_this_build_does_not_know_reads_as_nothing() {
     assert_eq!(merge_method_from_storage("rocket"), None);
     assert_eq!(
@@ -1642,6 +1751,7 @@ mod tests {
     "command_usages",
     "analytics_meta",
     "merge_methods",
+    "terminal_workspaces",
   ];
 
   const LEGACY_PROJECT_TABLES: &[&str] = &[

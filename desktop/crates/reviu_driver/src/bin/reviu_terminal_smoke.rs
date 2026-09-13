@@ -205,19 +205,6 @@ fn run_terminal_scenario(args: &TerminalSmokeArgs, run_dir: &Path) -> Result<()>
   })
   .context("waiting for unseen terminal output")?;
 
-  if args.backend == "visual" {
-    let screenshot = args
-      .screenshot
-      .clone()
-      .unwrap_or_else(|| run_dir.join("terminal-unseen-output.png"));
-    driver.command(json!({
-      "cmd": "screenshot",
-      "path": screenshot.display().to_string()
-    }))?;
-    verify_png(&screenshot)?;
-    println!("screenshot: {}", screenshot.display());
-  }
-
   driver.command(json!({ "cmd": "key", "keystrokes": "shift-end" }))?;
   wait_for_terminal_state(&mut driver, |state| {
     state.get("display_offset").and_then(Value::as_u64) == Some(0)
@@ -260,6 +247,33 @@ fn run_terminal_scenario(args: &TerminalSmokeArgs, run_dir: &Path) -> Result<()>
   .context("waiting for the shell cd command")?;
 
   driver.command(json!({ "cmd": "quit" }))?;
+  drop(driver);
+
+  let mut restored =
+    DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, run_dir, true)?;
+  wait_for_terminal_state(&mut restored, |state| {
+    state.get("terminal_count").and_then(Value::as_u64) == Some(2)
+      && state
+        .get("working_directory")
+        .and_then(Value::as_str)
+        .is_some_and(|path| Path::new(path) == expected_cwd)
+  })
+  .context("waiting for terminal tabs to restore in a fresh driver")?;
+
+  if args.backend == "visual" {
+    let screenshot = args
+      .screenshot
+      .clone()
+      .unwrap_or_else(|| run_dir.join("terminal-restored.png"));
+    restored.command(json!({
+      "cmd": "screenshot",
+      "path": screenshot.display().to_string()
+    }))?;
+    verify_png(&screenshot)?;
+    println!("screenshot: {}", screenshot.display());
+  }
+
+  restored.command(json!({ "cmd": "quit" }))?;
   Ok(())
 }
 
@@ -276,7 +290,10 @@ fn wait_for_terminal_state(
         last = state;
         predicate(&last)
       }
-      Err(_) => false,
+      Err(error) => {
+        last = json!({ "error": error.to_string() });
+        false
+      }
     }
   }) {
     bail!("{error}:\n{}", pretty_json(&last));

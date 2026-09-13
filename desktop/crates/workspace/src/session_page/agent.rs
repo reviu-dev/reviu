@@ -57,10 +57,14 @@ impl SessionPage {
         .as_ref()
         .and_then(|store| store.read(cx).active_meta()),
     };
+    let preserve_restored_terminal = self.center == CenterView::Terminal
+      && self.center_layout.active_tab().kind == CenterTabKind::Terminal;
     let view = self.build_fallback_chat_panel(resume, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
-    self.remember_active_chat_tab(cx);
+    if !preserve_restored_terminal {
+      self.remember_active_chat_tab(cx);
+    }
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
   }

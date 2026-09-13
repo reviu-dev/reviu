@@ -1564,6 +1564,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::Terminal => self.focus_terminal_tab(&remaining_tab, window, cx),
     }
+    self.persist_current_terminal_workspace(cx);
     cx.notify();
   }
 
@@ -1592,6 +1593,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
     }
+    self.persist_current_terminal_workspace(cx);
     cx.notify();
   }
 
@@ -1649,6 +1651,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
     }
+    self.persist_current_terminal_workspace(cx);
     cx.notify();
   }
 
@@ -1790,6 +1793,7 @@ impl SessionPage {
         self.clear_terminal_tab(&layout_tab);
       }
     }
+    self.persist_current_terminal_workspace(cx);
 
     if !selected_closed {
       cx.notify();
@@ -1822,6 +1826,7 @@ impl SessionPage {
     self.clear_editor_tab(&tab);
     if tab.kind == CenterTabKind::Terminal {
       self.clear_terminal_tab(&tab);
+      self.persist_current_terminal_workspace(cx);
     }
     if editor_closed {
       self.open_file_task = None;

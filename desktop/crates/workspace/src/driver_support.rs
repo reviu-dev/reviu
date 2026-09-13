@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DriverTerminalState {
+  pub terminal_count: usize,
   pub working_directory: Option<String>,
   pub title: Option<String>,
   pub visible_text: String,

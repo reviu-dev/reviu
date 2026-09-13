@@ -57,7 +57,8 @@ use crate::project_files::list_project_files;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus, session_row_title};
 use crate::session_page::center_layout::{
-  CenterDropTarget, CenterLayout, CenterSplitDirection, CenterSurface,
+  CenterDropTarget, CenterLayout, CenterSplitDirection, CenterSurface, PersistedTerminalLayout,
+  PersistedTerminalNode,
 };
 use crate::session_page::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
 use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
@@ -630,7 +631,7 @@ impl SessionPage {
       dock_panel,
       inbox,
       session_list,
-      synced_checkout: fallback_repo.clone(),
+      synced_checkout: None,
       project_root,
       fallback_repo,
       checkout_override: None,
@@ -1099,6 +1100,7 @@ impl SessionPage {
       return;
     }
     if let Some(previous_checkout) = self.synced_checkout.clone() {
+      self.persist_terminal_workspace(&previous_checkout, cx);
       let tabs = self
         .center_tabs
         .iter()
@@ -1125,6 +1127,9 @@ impl SessionPage {
       }
     }
 
+    if let Some(checkout) = checkout.as_ref() {
+      self.restore_terminal_workspace(checkout, window, cx);
+    }
     let restored_tabs = CenterTab::with_chat_tab(
       checkout
         .as_ref()
@@ -1408,14 +1413,7 @@ impl SessionPage {
       CenterTabKind::Terminal => tab
         .terminal_id()
         .and_then(|id| self.terminal_views.get(&id))
-        .and_then(|terminal| {
-          terminal
-            .view
-            .read(cx)
-            .working_directory()
-            .map(Path::to_path_buf)
-        })
-        .is_some_and(|path| path == checkout),
+        .is_some_and(|terminal| terminal.checkout_root == checkout),
     }
   }
 
@@ -1759,6 +1757,7 @@ impl SessionPage {
         CenterView::Diff | CenterView::InteractiveRebase => {}
         CenterView::Terminal => self.focus_terminal_tab(&focused_tab, window, cx),
       }
+      self.persist_current_terminal_workspace(cx);
       cx.notify();
       return;
     }
@@ -1804,6 +1803,7 @@ impl SessionPage {
         cx.notify();
       }
     }
+    self.persist_current_terminal_workspace(cx);
   }
 
   /// Opens the dock on a tab without the toggle: something outside asked for
@@ -1930,18 +1930,31 @@ impl SessionPage {
     &self,
     cx: &App,
   ) -> Result<crate::DriverTerminalState, SharedString> {
-    let active_tab = self
-      .active_center_tab
-      .as_ref()
-      .ok_or_else(|| SharedString::from("No center tab is active."))?;
+    let active_tab = if self.center == CenterView::Terminal {
+      self.center_layout.active_tab()
+    } else {
+      self
+        .active_center_tab
+        .as_ref()
+        .ok_or_else(|| SharedString::from("No center tab is active."))?
+    };
     let terminal = self
       .terminal_for_tab(active_tab)
       .ok_or_else(|| SharedString::from("No terminal is active."))?;
     let terminal = terminal.read(cx);
     let (display_offset, total_lines, unseen_output_lines) = terminal.scrollback_state_for_driver();
     let (search_open, active_search_match, search_match_count) = terminal.search_state_for_driver();
+    let checkout_root = self
+      .checkout_root(cx)
+      .and_then(|path| path.canonicalize().ok());
+    let terminal_count = self
+      .terminal_views
+      .values()
+      .filter(|terminal| Some(terminal.checkout_root.as_path()) == checkout_root.as_deref())
+      .count();
 
     Ok(crate::DriverTerminalState {
+      terminal_count,
       working_directory: terminal
         .working_directory()
         .map(|path| path.to_string_lossy().into_owned()),
@@ -2092,6 +2105,7 @@ impl SessionPage {
     self.remember_center_layout_tab(active_tab.clone());
     self.activate_center_tab(active_tab, OpenIntent::Open, window, cx);
     self.sync_agent_chat_close_control(cx);
+    self.persist_current_terminal_workspace(cx);
     cx.notify();
     Ok(())
   }
