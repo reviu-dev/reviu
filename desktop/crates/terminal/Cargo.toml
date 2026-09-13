@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 alacritty_terminal = "0.26.0"
 anyhow = { workspace = true }
+async-channel = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 parking_lot = { workspace = true }

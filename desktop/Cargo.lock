@@ -9071,6 +9071,7 @@ version = "0.18.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "async-channel",
  "gpui",
  "gpui-component",
  "parking_lot",

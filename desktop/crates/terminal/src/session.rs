@@ -2,8 +2,7 @@ use std::{
   path::{Path, PathBuf},
   sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
-    mpsc::{Receiver, Sender, channel},
+    atomic::{AtomicBool, AtomicU64, Ordering},
   },
 };
 
@@ -21,6 +20,7 @@ use alacritty_terminal::{
   vte::ansi::{Color, CursorShape},
 };
 use anyhow::{Context as _, Result};
+use async_channel::{Receiver, Sender, unbounded};
 use gpui::{Modifiers, MouseButton};
 use parking_lot::Mutex;
 
@@ -201,7 +201,7 @@ pub struct ScreenSnapshot {
 }
 
 #[derive(Default)]
-pub struct SessionPollResult {
+pub struct SessionEventResult {
   pub changed: bool,
   pub clipboard_store: Vec<String>,
   pub clipboard_load_requests: Vec<ClipboardLoadFormatter>,
@@ -212,6 +212,7 @@ struct TerminalListener {
   event_tx: Sender<Event>,
   pty_tx: Arc<Mutex<Option<EventLoopSender>>>,
   window_size: Arc<Mutex<WindowSize>>,
+  wakeup_pending: Arc<AtomicBool>,
 }
 
 impl TerminalListener {
@@ -220,6 +221,7 @@ impl TerminalListener {
       event_tx,
       pty_tx: Arc::new(Mutex::new(None)),
       window_size: Arc::new(Mutex::new(window_size)),
+      wakeup_pending: Arc::new(AtomicBool::new(false)),
     }
   }
 
@@ -237,10 +239,18 @@ impl TerminalListener {
     };
     sender.send(Msg::Input(bytes.into())).is_ok()
   }
+
+  fn acknowledge_wakeup(&self) {
+    self.wakeup_pending.store(false, Ordering::Release);
+  }
 }
 
 impl EventListener for TerminalListener {
   fn send_event(&self, event: Event) {
+    if matches!(event, Event::Wakeup) && self.wakeup_pending.swap(true, Ordering::AcqRel) {
+      return;
+    }
+
     match &event {
       Event::PtyWrite(text) if self.write_to_pty(text.as_bytes().to_vec()) => {
         return;
@@ -254,7 +264,7 @@ impl EventListener for TerminalListener {
       _ => {}
     }
 
-    let _ = self.event_tx.send(event);
+    let _ = self.event_tx.try_send(event);
   }
 }
 
@@ -283,7 +293,7 @@ impl TerminalSession {
       ..Config::default()
     };
     let window_size = bounds.window_size();
-    let (event_tx, event_rx) = channel();
+    let (event_tx, event_rx) = unbounded();
     let listener = TerminalListener::new(event_tx, window_size);
     let term = Arc::new(FairMutex::new(Term::new(config, &bounds, listener.clone())));
     let window_id = NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
@@ -348,12 +358,20 @@ impl TerminalSession {
     input::can_report_mouse_move(self.mode(), pressed_button)
   }
 
-  pub fn poll(&mut self) -> SessionPollResult {
-    let mut result = SessionPollResult::default();
+  pub(crate) fn event_receiver(&self) -> Receiver<Event> {
+    self.event_rx.clone()
+  }
 
-    while let Ok(event) = self.event_rx.try_recv() {
+  pub(crate) fn process_events(
+    &mut self,
+    events: impl IntoIterator<Item = Event>,
+  ) -> SessionEventResult {
+    let mut result = SessionEventResult::default();
+
+    for event in events {
       match event {
         Event::Wakeup => {
+          self.listener.acknowledge_wakeup();
           result.changed = true;
         }
         Event::Title(title) => {
@@ -665,15 +683,30 @@ fn selection_type_for_mode(mode: TerminalSelectionMode) -> SelectionType {
 #[cfg(test)]
 mod tests {
   use super::{
-    TerminalBounds, TerminalSelectionMode, ViewportPoint, ViewportSelectionRange,
+    TerminalBounds, TerminalListener, TerminalSelectionMode, ViewportPoint, ViewportSelectionRange,
     selection_range_for_term, selection_text_for_term, snapshot_from_term,
   };
   use alacritty_terminal::{
     Term,
-    event::VoidListener,
+    event::{EventListener, VoidListener},
     term::{Config, cell::Flags},
     vte::ansi::{Processor, Rgb},
   };
+
+  #[test]
+  fn listener_coalesces_wakeups_until_the_previous_one_is_acknowledged() {
+    let (sender, receiver) = async_channel::unbounded();
+    let listener = TerminalListener::new(sender, TerminalBounds::default().window_size());
+
+    for _ in 0..4 {
+      listener.send_event(alacritty_terminal::event::Event::Wakeup);
+    }
+    assert_eq!(receiver.len(), 1);
+
+    listener.acknowledge_wakeup();
+    listener.send_event(alacritty_terminal::event::Event::Wakeup);
+    assert_eq!(receiver.len(), 2);
+  }
 
   #[test]
   fn terminal_bounds_clamp_to_minimum_size() {

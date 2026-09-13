@@ -1,4 +1,4 @@
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::{event::Event as TerminalEvent, term::cell::Flags};
 use gpui::{
   Action, App, ClipboardItem, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
   FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, Modifiers,
@@ -10,18 +10,42 @@ use gpui_component::Sizable as _;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::tooltip::Tooltip;
 use serde::Deserialize;
-use std::time::Duration;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
   ScreenSnapshot, TerminalBounds, TerminalSelectionMode, TerminalSession, ViewportPoint,
   ViewportSelectionRange, colors::TerminalPalette, terminal_element::TerminalElement,
 };
 
-const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const MAX_COALESCED_SESSION_EVENTS: usize = 100;
+const TEST_SESSION_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const TERMINAL_SCREEN_DEBUG_SELECTOR: &str = "terminal-screen-bounds";
 const TERMINAL_SURFACE_DEBUG_SELECTOR: &str = "terminal-surface-bounds";
 const TERMINAL_BANNER_DEBUG_SELECTOR: &str = "terminal-banner";
+
+fn collect_pending_session_events(
+  first_event: TerminalEvent,
+  receiver: &async_channel::Receiver<TerminalEvent>,
+) -> Vec<TerminalEvent> {
+  let mut wakeup_collected = matches!(first_event, TerminalEvent::Wakeup);
+  let mut events = vec![first_event];
+
+  for _ in 1..MAX_COALESCED_SESSION_EVENTS {
+    let Ok(event) = receiver.try_recv() else {
+      break;
+    };
+    if matches!(event, TerminalEvent::Wakeup) {
+      if !wakeup_collected {
+        events.push(event);
+        wakeup_collected = true;
+      }
+    } else {
+      events.push(event);
+    }
+  }
+
+  events
+}
 
 fn should_defer_to_ime(event: &KeyDownEvent) -> bool {
   event.prefer_character_input
@@ -80,21 +104,11 @@ pub struct TerminalView {
   last_reported_mouse_state: Option<(ViewportPoint, Option<MouseButton>)>,
   scroll_remainder: Pixels,
   marked_text: Option<String>,
-  _poll_task: Task<()>,
+  _event_task: Task<()>,
 }
 
 impl TerminalView {
   pub fn new(working_directory: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
-    let poll_task = cx.spawn(async move |this, cx| {
-      loop {
-        cx.background_executor().timer(SESSION_POLL_INTERVAL).await;
-        let Some(this) = this.upgrade() else {
-          break;
-        };
-        this.update(cx, |this, cx| this.poll_session(cx));
-      }
-    });
-
     let mut view = Self {
       focus_handle: cx.focus_handle(),
       working_directory: None,
@@ -112,7 +126,7 @@ impl TerminalView {
       last_reported_mouse_state: None,
       scroll_remainder: px(0.0),
       marked_text: None,
-      _poll_task: poll_task,
+      _event_task: Task::ready(()),
     };
     view.set_working_directory(working_directory, cx);
     view
@@ -132,7 +146,7 @@ impl TerminalView {
     }
 
     self.working_directory = working_directory;
-    self.restart_session();
+    self.restart_session(cx);
     cx.notify();
   }
 
@@ -430,7 +444,7 @@ impl TerminalView {
     cx.notify();
   }
 
-  pub fn restart_session(&mut self) {
+  pub fn restart_session(&mut self, cx: &mut Context<Self>) {
     self.error = None;
     self.reset_selection();
     self.hovered_hyperlink = None;
@@ -449,6 +463,57 @@ impl TerminalView {
     });
 
     self.refresh_snapshot();
+    self.subscribe_to_session_events(cx);
+  }
+
+  fn subscribe_to_session_events(&mut self, cx: &mut Context<Self>) {
+    let Some(receiver) = self.session.as_ref().map(TerminalSession::event_receiver) else {
+      self._event_task = Task::ready(());
+      return;
+    };
+
+    if cx
+      .background_executor()
+      .scheduler_executor()
+      .scheduler()
+      .as_test()
+      .is_some()
+    {
+      self._event_task = cx.spawn(async move |this, cx| {
+        loop {
+          cx.background_executor()
+            .timer(TEST_SESSION_POLL_INTERVAL)
+            .await;
+          let Ok(first_event) = receiver.try_recv() else {
+            continue;
+          };
+          let events = collect_pending_session_events(first_event, &receiver);
+          if this
+            .update(cx, |this, cx| {
+              this.process_session_events(events, cx);
+            })
+            .is_err()
+          {
+            return;
+          }
+        }
+      });
+      return;
+    }
+
+    self._event_task = cx.spawn(async move |this, cx| {
+      while let Ok(first_event) = receiver.recv().await {
+        let events = collect_pending_session_events(first_event, &receiver);
+        if this
+          .update(cx, |this, cx| {
+            this.process_session_events(events, cx);
+          })
+          .is_err()
+        {
+          return;
+        }
+      }
+    });
   }
 
   fn refresh_snapshot(&mut self) {
@@ -514,12 +579,16 @@ impl TerminalView {
     self.restore_selection_after_refresh(preserved);
   }
 
-  fn poll_session(&mut self, cx: &mut Context<Self>) {
+  fn process_session_events(
+    &mut self,
+    events: impl IntoIterator<Item = TerminalEvent>,
+    cx: &mut Context<Self>,
+  ) {
     let Some(session) = self.session.as_mut() else {
       return;
     };
 
-    let result = session.poll();
+    let result = session.process_events(events);
     if result.clipboard_store.is_empty()
       && result.clipboard_load_requests.is_empty()
       && !result.changed
@@ -829,7 +898,7 @@ impl Render for TerminalView {
                 .with_variant(ButtonVariant::Secondary)
                 .xsmall()
                 .on_click(cx.listener(|this, _, _window, cx| {
-                  this.restart_session();
+                  this.restart_session(cx);
                   cx.notify();
                 })),
             ),
@@ -936,9 +1005,9 @@ fn selection_matches_screen_text(
 #[cfg(test)]
 mod tests {
   use super::{
-    TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalView,
-    selection_matches_screen_text, selection_mode_for_click_count, selection_text_from_screen,
-    should_defer_to_ime,
+    TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalEvent, TerminalView,
+    collect_pending_session_events, selection_matches_screen_text, selection_mode_for_click_count,
+    selection_text_from_screen, should_defer_to_ime,
   };
   use crate::{
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
@@ -1129,6 +1198,39 @@ mod tests {
         .size_full()
         .child(div().w(px(240.)).h(px(180.)).child(self.terminal.clone()))
     }
+  }
+
+  #[test]
+  fn pending_terminal_events_coalesce_wakeups() {
+    let (sender, receiver) = async_channel::unbounded();
+    for _ in 0..4 {
+      sender
+        .try_send(TerminalEvent::Wakeup)
+        .expect("wakeup should queue");
+    }
+    sender
+      .try_send(TerminalEvent::Title("shell".to_string()))
+      .expect("title should queue");
+    sender
+      .try_send(TerminalEvent::Wakeup)
+      .expect("wakeup should queue");
+
+    let first_event = receiver.try_recv().expect("first event should be queued");
+    let events = collect_pending_session_events(first_event, &receiver);
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+      events
+        .iter()
+        .filter(|event| matches!(event, TerminalEvent::Wakeup))
+        .count(),
+      1
+    );
+    assert!(
+      events
+        .iter()
+        .any(|event| matches!(event, TerminalEvent::Title(title) if title == "shell"))
+    );
   }
 
   #[test]
@@ -1838,10 +1940,10 @@ mod tests {
 
     let view = cx.new(|cx| TerminalView::new(Some(std::env::temp_dir()), cx));
 
-    view.update(cx, |view, _| {
+    view.update(cx, |view, cx| {
       assert!(view.session.is_some(), "initial spawn should succeed");
       view.error = Some("forced error".to_string());
-      view.restart_session();
+      view.restart_session(cx);
 
       assert!(view.error.is_none(), "restart should clear error");
       assert!(view.session.is_some(), "restart should respawn session");
