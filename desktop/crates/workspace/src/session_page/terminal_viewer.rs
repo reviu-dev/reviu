@@ -1,5 +1,13 @@
 use super::*;
 
+fn terminal_relative_path(checkout_root: &Path, path: &Path) -> Option<PathBuf> {
+  let path = path.canonicalize().ok()?;
+  if !path.is_file() {
+    return None;
+  }
+  path.strip_prefix(checkout_root).ok().map(Path::to_path_buf)
+}
+
 impl SessionPage {
   pub(super) fn new_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let Some(working_directory) = self.checkout_root(cx).or_else(|| self.creation_root(cx)) else {
@@ -13,14 +21,28 @@ impl SessionPage {
       .project_root(cx)
       .unwrap_or_else(|| working_directory.clone());
     let project_root = project_root.canonicalize().unwrap_or(project_root);
+    let checkout_root = working_directory
+      .canonicalize()
+      .unwrap_or_else(|_| working_directory.clone());
 
     let terminal_id = self.next_terminal_id;
     self.next_terminal_id = self.next_terminal_id.saturating_add(1);
     let terminal = cx.new(|cx| TerminalView::new(Some(working_directory), cx));
+    cx.subscribe_in(
+      &terminal,
+      window,
+      move |this, _terminal, event: &TerminalViewEvent, window, cx| match event {
+        TerminalViewEvent::OpenFile { path, line, column } => {
+          this.open_file_from_terminal(terminal_id, path, *line, *column, window, cx)
+        }
+      },
+    )
+    .detach();
     self.terminal_views.insert(
       terminal_id,
       TerminalPane {
         project_root,
+        checkout_root,
         view: terminal,
       },
     );
@@ -30,6 +52,40 @@ impl SessionPage {
     self.remember_center_tab(tab.clone());
     self.focus_terminal_tab(&tab, window, cx);
     cx.notify();
+  }
+
+  fn open_file_from_terminal(
+    &mut self,
+    terminal_id: u64,
+    path: &Path,
+    line: Option<u32>,
+    column: Option<u32>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(terminal) = self.terminal_views.get(&terminal_id) else {
+      return;
+    };
+    let checkout_root = terminal.checkout_root.clone();
+    let Some(relative_path) = terminal_relative_path(&checkout_root, path) else {
+      window.push_notification(
+        Notification::warning("This file is outside the terminal's checkout."),
+        cx,
+      );
+      return;
+    };
+    let active_checkout = self
+      .checkout_root(cx)
+      .and_then(|path| path.canonicalize().ok());
+    if active_checkout.as_deref() != Some(checkout_root.as_path()) {
+      window.push_notification(
+        Notification::warning("Return to this terminal's checkout before opening its files."),
+        cx,
+      );
+      return;
+    }
+
+    self.open_file(relative_path, line, column, OpenIntent::Open, window, cx);
   }
 
   pub(super) fn terminal_for_tab(&self, tab: &CenterTab) -> Option<Entity<TerminalView>> {

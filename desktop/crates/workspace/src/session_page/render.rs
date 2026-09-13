@@ -4781,6 +4781,53 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn terminal_file_links_open_at_the_reported_position(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-terminal-file-link");
+    commit_text_file(
+      &repo.path,
+      Path::new("src/main.rs"),
+      "first\nsecond line\n",
+      "initial",
+    );
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+
+    let terminal = page.read_with(cx, |page, _| {
+      page
+        .terminal_for_tab(&CenterTab::terminal(1))
+        .expect("terminal")
+    });
+    terminal.update(cx, |_, cx| {
+      cx.emit(TerminalViewEvent::OpenFile {
+        path: repo.path.join("src/main.rs"),
+        line: Some(2),
+        column: Some(4),
+      });
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.active_center_tab,
+        Some(CenterTab::file(PathBuf::from("src/main.rs")))
+      );
+      assert_eq!(
+        page
+          .warm_editor()
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .cursor_offset(),
+        9
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn split_terminal_header_matches_pane_header_height(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let repo = TempRepo::init("session-page-terminal-header-height");

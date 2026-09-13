@@ -1,5 +1,6 @@
 mod colors;
 mod input;
+mod links;
 mod session;
 mod terminal_element;
 mod terminal_view;
@@ -8,4 +9,4 @@ pub use session::{
   ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalCursorSnapshot,
   TerminalSelectionMode, TerminalSession, ViewportPoint, ViewportSelectionRange,
 };
-pub use terminal_view::{SendKeystroke, TERMINAL_CONTEXT, TerminalView};
+pub use terminal_view::{SendKeystroke, TERMINAL_CONTEXT, TerminalView, TerminalViewEvent};

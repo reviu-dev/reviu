@@ -11,6 +11,7 @@ async-channel = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 parking_lot = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]

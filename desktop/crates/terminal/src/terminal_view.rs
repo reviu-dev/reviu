@@ -1,20 +1,23 @@
 use alacritty_terminal::{event::Event as TerminalEvent, term::cell::Flags};
 use gpui::{
-  Action, App, ClipboardItem, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
-  FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, Modifiers,
-  MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task, TouchPhase, Window,
-  div, prelude::*, px, relative, rgb,
+  Action, App, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Font, FontFallbacks,
+  FontFeatures, FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke,
+  Modifiers, MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task,
+  TouchPhase, Window, div, prelude::*, px, relative, rgb,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::tooltip::Tooltip;
 use serde::Deserialize;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use crate::{
   ScreenSnapshot, TerminalBounds, TerminalSelectionMode, TerminalSession, ViewportPoint,
-  ViewportSelectionRange, colors::TerminalPalette, terminal_element::TerminalElement,
+  ViewportSelectionRange,
+  colors::TerminalPalette,
+  links::{TerminalLink, TerminalLinkTarget, link_at},
+  terminal_element::TerminalElement,
 };
 
 const MAX_COALESCED_SESSION_EVENTS: usize = 100;
@@ -76,9 +79,24 @@ struct PreservedSelection {
   dragging: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HoveredTerminalLink {
+  point: ViewportPoint,
+  link: TerminalLink,
+}
+
 #[derive(Clone)]
 struct PendingLinkActivation {
-  uri: Arc<str>,
+  target: TerminalLinkTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TerminalViewEvent {
+  OpenFile {
+    path: PathBuf,
+    line: Option<u32>,
+    column: Option<u32>,
+  },
 }
 
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
@@ -99,7 +117,7 @@ pub struct TerminalView {
   selection_mode: TerminalSelectionMode,
   resolved_selection: Option<ViewportSelectionRange>,
   selection_dragging: bool,
-  hovered_hyperlink: Option<Arc<str>>,
+  hovered_hyperlink: Option<HoveredTerminalLink>,
   pending_link_activation: Option<PendingLinkActivation>,
   last_reported_mouse_state: Option<(ViewportPoint, Option<MouseButton>)>,
   scroll_remainder: Pixels,
@@ -196,7 +214,11 @@ impl TerminalView {
   }
 
   pub(crate) fn should_show_link_cursor(&self, point: ViewportPoint, modifiers: Modifiers) -> bool {
-    self.hyperlink_activation_enabled(modifiers) && self.hyperlink_at(point).is_some()
+    self.hyperlink_activation_enabled(modifiers)
+      && self
+        .hovered_hyperlink
+        .as_ref()
+        .is_some_and(|hovered| hovered.point == point)
   }
 
   pub(crate) fn update_hovered_hyperlink(
@@ -204,7 +226,11 @@ impl TerminalView {
     point: Option<ViewportPoint>,
     cx: &mut Context<Self>,
   ) {
-    let next = point.and_then(|point| self.hyperlink_at(point));
+    let next = point.and_then(|point| {
+      self
+        .hyperlink_at(point)
+        .map(|link| HoveredTerminalLink { point, link })
+    });
     if self.hovered_hyperlink != next {
       self.hovered_hyperlink = next;
       cx.notify();
@@ -307,10 +333,12 @@ impl TerminalView {
 
     if button == MouseButton::Left
       && self.hyperlink_activation_enabled(modifiers)
-      && let Some(uri) = self.hyperlink_at(point)
+      && let Some(link) = self.hyperlink_at(point)
     {
       self.last_reported_mouse_state = None;
-      self.pending_link_activation = Some(PendingLinkActivation { uri });
+      self.pending_link_activation = Some(PendingLinkActivation {
+        target: link.target,
+      });
       cx.notify();
       return;
     }
@@ -352,7 +380,7 @@ impl TerminalView {
       let still_hovering_same_link = pressed_button == Some(MouseButton::Left)
         && self
           .hyperlink_at(point)
-          .is_some_and(|uri| uri.as_ref() == pending.uri.as_ref());
+          .is_some_and(|link| link.target == pending.target);
       if !still_hovering_same_link {
         self.pending_link_activation = None;
         cx.notify();
@@ -394,9 +422,14 @@ impl TerminalView {
         && self.hyperlink_activation_enabled(modifiers)
         && self
           .hyperlink_at(point)
-          .is_some_and(|uri| uri.as_ref() == pending.uri.as_ref())
+          .is_some_and(|link| link.target == pending.target)
       {
-        cx.open_url(pending.uri.as_ref());
+        match pending.target {
+          TerminalLinkTarget::Url(url) => cx.open_url(url.as_ref()),
+          TerminalLinkTarget::Path { path, line, column } => {
+            cx.emit(TerminalViewEvent::OpenFile { path, line, column });
+          }
+        }
       }
       return;
     }
@@ -772,17 +805,8 @@ impl TerminalView {
     modifiers.secondary() && !modifiers.shift
   }
 
-  fn hyperlink_at(&self, point: ViewportPoint) -> Option<Arc<str>> {
-    if point.row >= self.screen.rows || point.col >= self.screen.cols {
-      return None;
-    }
-
-    self
-      .screen
-      .cells
-      .iter()
-      .find(|cell| cell.row == point.row && cell.col == point.col)
-      .and_then(|cell| cell.hyperlink_uri.clone())
+  fn hyperlink_at(&self, point: ViewportPoint) -> Option<TerminalLink> {
+    link_at(&self.screen, point, self.working_directory.as_deref())
   }
 
   fn scroll_lines_for_event(&mut self, event: &ScrollWheelEvent) -> Option<i32> {
@@ -803,6 +827,8 @@ impl TerminalView {
     }
   }
 }
+
+impl EventEmitter<TerminalViewEvent> for TerminalView {}
 
 impl Focusable for TerminalView {
   fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -847,9 +873,10 @@ impl Render for TerminalView {
             self.focus_handle.is_focused(window),
           )),
       );
-    let terminal_screen = if let Some(url) = self.hovered_hyperlink.clone() {
-      terminal_screen
-        .tooltip(move |window, cx| Tooltip::new(url.as_ref().to_string()).build(window, cx))
+    let terminal_screen = if let Some(hovered) = self.hovered_hyperlink.clone() {
+      terminal_screen.tooltip(move |window, cx| {
+        Tooltip::new(hovered.link.tooltip.as_ref().to_string()).build(window, cx)
+      })
     } else {
       terminal_screen
     };
@@ -1006,8 +1033,8 @@ fn selection_matches_screen_text(
 mod tests {
   use super::{
     TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalEvent, TerminalView,
-    collect_pending_session_events, selection_matches_screen_text, selection_mode_for_click_count,
-    selection_text_from_screen, should_defer_to_ime,
+    TerminalViewEvent, collect_pending_session_events, selection_matches_screen_text,
+    selection_mode_for_click_count, selection_text_from_screen, should_defer_to_ime,
   };
   use crate::{
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
@@ -1021,7 +1048,7 @@ mod tests {
     ScrollWheelEvent, Styled, TestAppContext, TouchPhase, VisualTestContext, Window, div, point,
     px,
   };
-  use std::sync::Arc;
+  use std::{cell::RefCell, rc::Rc, sync::Arc};
 
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
@@ -1231,6 +1258,47 @@ mod tests {
         .iter()
         .any(|event| matches!(event, TerminalEvent::Title(title) if title == "shell"))
     );
+  }
+
+  #[gpui::test]
+  fn clicking_a_path_emits_its_file_position(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let root =
+      std::env::temp_dir().join(format!("reviu-terminal-path-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("src")).expect("link fixture directory should be created");
+    let path = root.join("src/main.rs");
+    std::fs::write(&path, "fn main() {}\n").expect("link fixture should be written");
+    let canonical_path = path.canonicalize().expect("link fixture should resolve");
+
+    let view = cx.new(|cx| TerminalView::new(None, cx));
+    let events: Rc<RefCell<Vec<TerminalViewEvent>>> = Rc::default();
+    cx.update(|cx| {
+      let events = events.clone();
+      cx.subscribe(&view, move |_, event: &TerminalViewEvent, _| {
+        events.borrow_mut().push(event.clone());
+      })
+      .detach();
+    });
+    view.update(cx, |view, cx| {
+      view.working_directory = Some(root.clone());
+      view.screen = screen_from_lines(&["src/main.rs:42:8"]);
+      let modifiers = secondary_click_modifiers();
+      let point = ViewportPoint { row: 0, col: 4 };
+      view.handle_mouse_down(MouseButton::Left, point, 1, modifiers, cx);
+      view.handle_mouse_up(MouseButton::Left, point, modifiers, cx);
+    });
+
+    assert_eq!(
+      events.borrow().as_slice(),
+      [TerminalViewEvent::OpenFile {
+        path: canonical_path,
+        line: Some(42),
+        column: Some(8),
+      }]
+    );
+    std::fs::remove_dir_all(root).expect("link fixture should be removed");
   }
 
   #[test]
@@ -1668,7 +1736,12 @@ mod tests {
       view.update_hovered_hyperlink(Some(ViewportPoint { row: 0, col: 1 }), cx);
     });
 
-    let hovered = view.read_with(cx, |view, _| view.hovered_hyperlink.clone());
+    let hovered = view.read_with(cx, |view, _| {
+      view
+        .hovered_hyperlink
+        .as_ref()
+        .map(|hovered| hovered.link.tooltip.clone())
+    });
     assert_eq!(hovered.as_deref(), Some("https://example.com"));
   }
 

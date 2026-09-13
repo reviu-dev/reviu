@@ -29,7 +29,7 @@ use gpui_component::{
   tab::{Tab, TabBar},
   v_flex,
 };
-use terminal::TerminalView;
+use terminal::{TerminalView, TerminalViewEvent};
 
 use crate::agent_chat_state::{
   AGENT_CHAT_STATE_MAX_AGE, AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT, agent_chat_state_dir,
@@ -245,6 +245,7 @@ struct CheckoutOverride {
 
 struct TerminalPane {
   project_root: PathBuf,
+  checkout_root: PathBuf,
   view: Entity<TerminalView>,
 }
 
