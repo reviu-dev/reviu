@@ -349,7 +349,7 @@ impl SessionPage {
         // A browse leaves it where it is, or the arrow keys would land here.
         if this.center == CenterView::Diff && intent.takes_focus() {
           let _ = cx.update_window(this.window_handle, |_, window, cx| {
-            let focus_handle = editor.read(cx).focus_handle(cx);
+            let focus_handle = this.focus_handle(cx);
             window.focus(&focus_handle, cx);
           });
         }
@@ -709,7 +709,7 @@ impl SessionPage {
         this.sync_git_telemetry(cx);
         if this.center == CenterView::Diff && intent.takes_focus() {
           let _ = cx.update_window(this.window_handle, |_, window, cx| {
-            let focus_handle = editor.read(cx).focus_handle(cx);
+            let focus_handle = this.focus_handle(cx);
             window.focus(&focus_handle, cx);
           });
         }
@@ -1314,7 +1314,7 @@ impl SessionPage {
   /// The editor of the open file, unless the center shows something else or a
   /// rendered file hides the diff.
   pub(super) fn diff_editor(&self) -> Option<Entity<Editor>> {
-    if self.show_preview && self.shown_previewable() {
+    if self.shown_binary_preview().is_some() || (self.show_preview && self.shown_previewable()) {
       return None;
     }
     self.shown_editor()
@@ -2098,10 +2098,8 @@ impl SessionPage {
     let view = cx.entity().downgrade();
     window.on_next_frame(move |window, cx| {
       let _ = view.update(cx, |this, cx| {
-        if let Some(editor) = this.warm_editor() {
-          let focus_handle = editor.read(cx).focus_handle(cx);
-          window.focus(&focus_handle, cx);
-        }
+        let focus_handle = this.focus_handle(cx);
+        window.focus(&focus_handle, cx);
       });
     });
   }

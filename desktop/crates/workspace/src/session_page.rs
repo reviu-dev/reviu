@@ -2652,8 +2652,11 @@ impl Focusable for SessionPage {
     {
       return terminal.view.read(cx).focus_handle(cx);
     }
-    if let Some(editor) = self.diff_editor() {
-      return editor.read(cx).focus_handle(cx);
+    if self.center == CenterView::Diff {
+      if let Some(editor) = self.diff_editor() {
+        return editor.read(cx).focus_handle(cx);
+      }
+      return self.focus_handle.clone();
     }
     if let Some(view) = self.agent_chat_view.as_ref() {
       return view.read(cx).input_focus_handle(cx);

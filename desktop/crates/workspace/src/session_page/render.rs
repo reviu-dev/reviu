@@ -2151,8 +2151,13 @@ impl SessionPage {
         active: self.show_preview,
         disabled: false,
         debug_selector: PREVIEW_TOGGLE_DEBUG_SELECTOR,
-        on_toggle: Rc::new(move |_, cx| {
-          view.update(cx, |this, cx| this.toggle_preview(cx));
+        on_toggle: Rc::new(move |window, cx| {
+          view.update(cx, |this, cx| {
+            this.toggle_preview(cx);
+            let focus_handle = this.focus_handle(cx);
+            window.focus(&focus_handle, cx);
+            this.focus_editor_on_next_frame(window, cx);
+          });
         }),
       });
     }
@@ -2848,6 +2853,16 @@ mod tests {
       .set_str("user.email", "tests@reviu.local")
       .expect("set git user.email");
     (temp_dir, path)
+  }
+
+  fn bind_file_search_shortcut(cx: &mut gpui::VisualTestContext) {
+    cx.update(|_, cx| {
+      cx.bind_keys([gpui::KeyBinding::new(
+        "cmd-p",
+        crate::ShowFileSearch,
+        Some("WorkspaceSession"),
+      )]);
+    });
   }
 
   #[gpui::test]
@@ -3614,6 +3629,123 @@ mod tests {
       content.size.width >= pane.size.width - gpui::px(1.0),
       "the preview should take the whole pane, not half of it"
     );
+  }
+
+  #[gpui::test]
+  async fn a_binary_preview_keeps_workspace_shortcuts_alive(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-binary-preview-focus");
+    std::fs::write(
+      repo.path.join("asset.png"),
+      crate::workspace::STATUS_BAR_ICON_PNG,
+    )
+    .expect("write image");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    bind_file_search_shortcut(cx);
+    page.update_in(cx, |page, window, cx| {
+      page.ensure_agent_chat_view(window, cx);
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("asset.png"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(page.shown_binary_preview().is_some());
+    });
+    let page_focus = page.read_with(cx, |page, cx| page.focus_handle(cx));
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert_eq!(focused.as_ref(), Some(&page_focus));
+
+    let preview = cx
+      .debug_bounds(crate::file_view::BINARY_PREVIEW_DEBUG_SELECTOR)
+      .expect("image preview bounds");
+    cx.simulate_click(preview.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("cmd-p");
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+  }
+
+  #[gpui::test]
+  async fn preview_toggle_keeps_workspace_shortcuts_alive(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-preview-focus");
+    commit_text_file(&repo.path, Path::new("README.md"), "# Title\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    bind_file_search_shortcut(cx);
+    page.update_in(cx, |page, window, cx| {
+      page.ensure_agent_chat_view(window, cx);
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let toggle = cx
+      .debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR)
+      .expect("preview toggle bounds");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(page.show_preview));
+    let preview_focus = page.read_with(cx, |page, cx| page.focus_handle(cx));
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert_eq!(focused.as_ref(), Some(&preview_focus));
+
+    cx.simulate_keystrokes("cmd-p");
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    let toggle = cx
+      .debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR)
+      .expect("code toggle bounds");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(!page.show_preview));
+    let editor_focus = page.read_with(cx, |page, cx| {
+      page
+        .warm_editor()
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .focus_handle(cx)
+    });
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert_eq!(focused.as_ref(), Some(&editor_focus));
+
+    cx.simulate_keystrokes("cmd-p");
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
   }
 
   #[gpui::test]
