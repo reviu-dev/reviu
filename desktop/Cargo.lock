@@ -1706,9 +1706,9 @@ checksum = "75984efb6ed102a0d42db99afb6c1948f0380d1d91808d5529916e6c08b49d8d"
 
 [[package]]
 name = "comrak"
-version = "0.54.0"
+version = "0.55.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d5910408554659ed848ff469e67ec83b30f179e72cec286cfdae64d1616f466"
+checksum = "daa3d1ea6b01ce72405fa3f826768f51c7a44917527c89b37856ffdd17ee57e4"
 dependencies = [
  "bon",
  "caseless",
@@ -2353,7 +2353,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -4254,7 +4254,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tokio",
  "tower-service",
  "tracing",
@@ -6921,7 +6921,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -6960,7 +6960,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.60.2",
 ]
