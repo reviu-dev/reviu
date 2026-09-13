@@ -10,7 +10,7 @@ use gpui_component::Sizable as _;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::tooltip::Tooltip;
 use serde::Deserialize;
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
   ScreenSnapshot, TerminalBounds, TerminalSelectionMode, TerminalSession, ViewportPoint,
@@ -97,6 +97,9 @@ pub enum TerminalViewEvent {
     line: Option<u32>,
     column: Option<u32>,
   },
+  WorkingDirectoryChanged {
+    path: PathBuf,
+  },
 }
 
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
@@ -123,6 +126,7 @@ pub struct TerminalView {
   scroll_remainder: Pixels,
   marked_text: Option<String>,
   _event_task: Task<()>,
+  _working_directory_task: Task<()>,
 }
 
 impl TerminalView {
@@ -145,6 +149,7 @@ impl TerminalView {
       scroll_remainder: px(0.0),
       marked_text: None,
       _event_task: Task::ready(()),
+      _working_directory_task: Task::ready(()),
     };
     view.set_working_directory(working_directory, cx);
     view
@@ -485,6 +490,7 @@ impl TerminalView {
     self.last_reported_mouse_state = None;
     self.scroll_remainder = px(0.0);
     self.marked_text = None;
+    self._working_directory_task = Task::ready(());
     self.session = self.working_directory.clone().and_then(|cwd| {
       match TerminalSession::spawn(cwd, self.last_bounds) {
         Ok(session) => Some(session),
@@ -546,6 +552,44 @@ impl TerminalView {
           return;
         }
       }
+    });
+  }
+
+  fn refresh_working_directory(&mut self, cx: &mut Context<Self>) {
+    let Some(tracker) = self
+      .session
+      .as_ref()
+      .map(TerminalSession::working_directory_tracker)
+    else {
+      return;
+    };
+    if !tracker.begin_refresh() {
+      return;
+    }
+
+    let refreshed_tracker = Arc::clone(&tracker);
+    let refresh = cx.background_spawn(async move { refreshed_tracker.refresh() });
+    self._working_directory_task = cx.spawn(async move |this, cx| {
+      let Some(working_directory) = refresh.await else {
+        return;
+      };
+      let _ = this.update(cx, |this, cx| {
+        let belongs_to_current_session = this
+          .session
+          .as_ref()
+          .map(TerminalSession::working_directory_tracker)
+          .is_some_and(|current| Arc::ptr_eq(&current, &tracker));
+        if belongs_to_current_session && this.working_directory.as_ref() != Some(&working_directory)
+        {
+          this.working_directory = Some(working_directory.clone());
+          this.hovered_hyperlink = None;
+          this.pending_link_activation = None;
+          cx.emit(TerminalViewEvent::WorkingDirectoryChanged {
+            path: working_directory,
+          });
+          cx.notify();
+        }
+      });
     });
   }
 
@@ -645,6 +689,9 @@ impl TerminalView {
       self.last_reported_mouse_state = None;
       self.refresh_snapshot_preserving_selection();
       cx.notify();
+    }
+    if result.wakeup {
+      self.refresh_working_directory(cx);
     }
   }
 

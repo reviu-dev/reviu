@@ -9077,6 +9077,7 @@ dependencies = [
  "parking_lot",
  "regex",
  "serde",
+ "sysinfo",
 ]
 
 [[package]]

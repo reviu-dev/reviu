@@ -13,6 +13,7 @@ gpui-component = { workspace = true }
 parking_lot = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
+sysinfo = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

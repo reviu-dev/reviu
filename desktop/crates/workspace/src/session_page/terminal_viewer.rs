@@ -35,6 +35,7 @@ impl SessionPage {
         TerminalViewEvent::OpenFile { path, line, column } => {
           this.open_file_from_terminal(terminal_id, path, *line, *column, window, cx)
         }
+        TerminalViewEvent::WorkingDirectoryChanged { .. } => cx.notify(),
       },
     )
     .detach();
@@ -96,11 +97,22 @@ impl SessionPage {
       .map(|terminal| terminal.view.clone())
   }
 
-  pub(super) fn terminal_label(&self, tab: &CenterTab) -> String {
-    match tab.terminal_id() {
+  pub(super) fn terminal_label(&self, tab: &CenterTab, cx: &App) -> String {
+    let name = match tab.terminal_id() {
       Some(1) | None => "Terminal".to_string(),
       Some(id) => format!("Terminal {id}"),
-    }
+    };
+    let directory = self
+      .terminal_for_tab(tab)
+      .and_then(|terminal| terminal.read(cx).working_directory().map(Path::to_path_buf))
+      .map(|path| {
+        path
+          .file_name()
+          .unwrap_or(path.as_os_str())
+          .to_string_lossy()
+          .into_owned()
+      });
+    directory.map_or(name.clone(), |directory| format!("{name} - {directory}"))
   }
 
   pub(super) fn focus_terminal_tab(

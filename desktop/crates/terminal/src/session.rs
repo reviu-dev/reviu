@@ -2,7 +2,7 @@ use std::{
   path::{Path, PathBuf},
   sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
   },
 };
 
@@ -22,7 +22,8 @@ use alacritty_terminal::{
 use anyhow::{Context as _, Result};
 use async_channel::{Receiver, Sender, unbounded};
 use gpui::{Modifiers, MouseButton};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 use crate::input;
 
@@ -203,6 +204,7 @@ pub struct ScreenSnapshot {
 #[derive(Default)]
 pub struct SessionEventResult {
   pub changed: bool,
+  pub wakeup: bool,
   pub clipboard_store: Vec<String>,
   pub clipboard_load_requests: Vec<ClipboardLoadFormatter>,
 }
@@ -268,15 +270,117 @@ impl EventListener for TerminalListener {
   }
 }
 
+pub(crate) struct WorkingDirectoryTracker {
+  process_id: Pid,
+  system: Mutex<System>,
+  current: RwLock<PathBuf>,
+  refresh_state: AtomicU8,
+}
+
+impl WorkingDirectoryTracker {
+  fn new(process_id: u32, working_directory: PathBuf) -> Self {
+    Self {
+      process_id: Pid::from_u32(process_id),
+      system: Mutex::new(System::new()),
+      current: RwLock::new(working_directory),
+      refresh_state: AtomicU8::new(0),
+    }
+  }
+
+  pub(crate) fn begin_refresh(&self) -> bool {
+    loop {
+      match self.refresh_state.load(Ordering::Acquire) {
+        0 => {
+          if self
+            .refresh_state
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+          {
+            return true;
+          }
+        }
+        1 => {
+          match self
+            .refresh_state
+            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+          {
+            Ok(_) => return false,
+            Err(0) => continue,
+            Err(_) => return false,
+          }
+        }
+        _ => return false,
+      }
+    }
+  }
+
+  pub(crate) fn refresh(&self) -> Option<PathBuf> {
+    let mut latest = None;
+    loop {
+      let next = {
+        let mut system = self.system.lock();
+        system.refresh_processes_specifics(
+          ProcessesToUpdate::Some(&[self.process_id]),
+          ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+        );
+        system
+          .process(self.process_id)
+          .and_then(|process| process.cwd())
+          .filter(|path| path.is_dir())
+          .map(Path::to_path_buf)
+      };
+      if let Some(next) = next {
+        *self.current.write() = next.clone();
+        latest = Some(next);
+      }
+
+      match self
+        .refresh_state
+        .compare_exchange(1, 0, Ordering::AcqRel, Ordering::Acquire)
+      {
+        Ok(_) => return latest,
+        Err(2) => {
+          if self
+            .refresh_state
+            .compare_exchange(2, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+          {
+            continue;
+          }
+        }
+        Err(_) => return latest,
+      }
+    }
+  }
+
+  pub(crate) fn current(&self) -> PathBuf {
+    self.current.read().clone()
+  }
+}
+
 pub struct TerminalSession {
   bounds: TerminalBounds,
   term: Arc<FairMutex<Term<TerminalListener>>>,
   event_rx: Receiver<Event>,
   pty_tx: EventLoopSender,
   listener: TerminalListener,
-  working_directory: PathBuf,
+  working_directory: Arc<WorkingDirectoryTracker>,
   title: Option<String>,
   exit_status: Option<String>,
+}
+
+#[cfg(not(windows))]
+fn shell_process_id(pty: &tty::Pty) -> u32 {
+  pty.child().id()
+}
+
+#[cfg(windows)]
+fn shell_process_id(pty: &tty::Pty) -> u32 {
+  pty
+    .child_watcher()
+    .pid()
+    .map(std::num::NonZeroU32::get)
+    .unwrap_or_default()
 }
 
 impl TerminalSession {
@@ -299,6 +403,10 @@ impl TerminalSession {
     let window_id = NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
     let pty = tty::new(&tty_options(&working_directory), window_size, window_id)
       .with_context(|| format!("Failed to create PTY in {}", working_directory.display()))?;
+    let working_directory = Arc::new(WorkingDirectoryTracker::new(
+      shell_process_id(&pty),
+      working_directory,
+    ));
 
     let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, false, false)
       .context("Failed to create terminal event loop")?;
@@ -318,8 +426,12 @@ impl TerminalSession {
     })
   }
 
-  pub fn working_directory(&self) -> &Path {
-    &self.working_directory
+  pub fn working_directory(&self) -> PathBuf {
+    self.working_directory.current()
+  }
+
+  pub(crate) fn working_directory_tracker(&self) -> Arc<WorkingDirectoryTracker> {
+    Arc::clone(&self.working_directory)
   }
 
   pub fn bounds(&self) -> TerminalBounds {
@@ -373,6 +485,7 @@ impl TerminalSession {
         Event::Wakeup => {
           self.listener.acknowledge_wakeup();
           result.changed = true;
+          result.wakeup = true;
         }
         Event::Title(title) => {
           self.title = Some(title);
@@ -684,7 +797,7 @@ fn selection_type_for_mode(mode: TerminalSelectionMode) -> SelectionType {
 mod tests {
   use super::{
     TerminalBounds, TerminalListener, TerminalSelectionMode, ViewportPoint, ViewportSelectionRange,
-    selection_range_for_term, selection_text_for_term, snapshot_from_term,
+    WorkingDirectoryTracker, selection_range_for_term, selection_text_for_term, snapshot_from_term,
   };
   use alacritty_terminal::{
     Term,
@@ -706,6 +819,45 @@ mod tests {
     listener.acknowledge_wakeup();
     listener.send_event(alacritty_terminal::event::Event::Wakeup);
     assert_eq!(receiver.len(), 2);
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn working_directory_tracker_follows_the_shell_process() {
+    let root =
+      std::env::temp_dir().join(format!("reviu-terminal-cwd-tracker-{}", std::process::id()));
+    let target = root.join("nested");
+    if root.exists() {
+      std::fs::remove_dir_all(&root).expect("stale tracker fixture should be removed");
+    }
+    std::fs::create_dir_all(&target).expect("tracker fixture should be created");
+    let target = target
+      .canonicalize()
+      .expect("tracker fixture should resolve");
+
+    let mut child = std::process::Command::new("sh")
+      .arg("-c")
+      .arg("cd -- \"$1\" && sleep 5")
+      .arg("reviu-terminal-cwd-test")
+      .arg(&target)
+      .spawn()
+      .expect("tracker shell should spawn");
+    let tracker = WorkingDirectoryTracker::new(child.id(), root.clone());
+    assert!(tracker.begin_refresh());
+    assert!(!tracker.begin_refresh());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut observed = tracker.refresh();
+    while observed.as_deref() != Some(target.as_path()) && std::time::Instant::now() < deadline {
+      assert!(tracker.begin_refresh());
+      observed = tracker.refresh();
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    child.kill().expect("tracker shell should stop");
+    child.wait().expect("tracker shell should be reaped");
+    std::fs::remove_dir_all(root).expect("tracker fixture should be removed");
+    assert_eq!(observed.as_deref(), Some(target.as_path()));
+    assert_eq!(tracker.current(), target);
   }
 
   #[test]

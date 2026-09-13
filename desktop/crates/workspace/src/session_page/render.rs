@@ -595,7 +595,7 @@ impl SessionPage {
         })
       }
       CenterTabKind::InteractiveRebase => Some("Interactive rebase".to_string()),
-      CenterTabKind::Terminal => Some(self.terminal_label(tab)),
+      CenterTabKind::Terminal => Some(self.terminal_label(tab, cx)),
     }
   }
 
@@ -2381,7 +2381,7 @@ impl SessionPage {
                   .truncate()
                   .text_xs()
                   .text_color(theme.foreground)
-                  .child(self.terminal_label(&tab)),
+                  .child(self.terminal_label(&tab, cx)),
               ),
           )
           .child(
