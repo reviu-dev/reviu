@@ -1,14 +1,15 @@
 use alacritty_terminal::term::cell::Flags;
 use gpui::{
-  App, ClipboardItem, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
+  Action, App, ClipboardItem, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
   FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, Modifiers,
   MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task, TouchPhase, Window,
-  actions, div, prelude::*, px, relative, rgb,
+  div, prelude::*, px, relative, rgb,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::tooltip::Tooltip;
+use serde::Deserialize;
 use std::time::Duration;
 use std::{path::PathBuf, sync::Arc};
 
@@ -44,10 +45,10 @@ struct PendingLinkActivation {
   uri: Arc<str>,
 }
 
-actions!(terminal, [SendTab, SendBackTab]);
+#[derive(Clone, Action, PartialEq, Eq, Deserialize)]
+#[action(namespace = terminal, no_json)]
+pub struct SendKeystroke(pub String);
 
-/// Tab belongs to the shell, so the terminal has to claim it: the window's own
-/// Tab moves the focus, and it runs before any key reaches the pty.
 pub const TERMINAL_CONTEXT: &str = "Terminal";
 
 pub struct TerminalView {
@@ -552,18 +553,13 @@ impl TerminalView {
     self.focus_handle.focus(window, cx);
   }
 
-  fn send_tab(&mut self, _: &SendTab, window: &mut Window, cx: &mut Context<Self>) {
-    self.send_keystroke("tab", window, cx);
-  }
-
-  fn send_back_tab(&mut self, _: &SendBackTab, window: &mut Window, cx: &mut Context<Self>) {
-    self.send_keystroke("shift-tab", window, cx);
-  }
-
-  /// Replays the key through the ordinary path, so the shell gets whatever the
-  /// encoder says it should, back-tab included.
-  fn send_keystroke(&mut self, keystroke: &str, window: &mut Window, cx: &mut Context<Self>) {
-    let Ok(keystroke) = Keystroke::parse(keystroke) else {
+  fn send_keystroke(
+    &mut self,
+    action: &SendKeystroke,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Ok(keystroke) = Keystroke::parse(&action.0) else {
       return;
     };
     self.on_key_down(
@@ -580,7 +576,8 @@ impl TerminalView {
   fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
     self.focus_terminal(window, cx);
 
-    if self.matches_copy_shortcut(event) && self.copy_selection_to_clipboard(cx) {
+    if self.matches_copy_shortcut(event) {
+      self.copy_selection_to_clipboard(cx);
       cx.stop_propagation();
       return;
     }
@@ -749,8 +746,7 @@ impl Render for TerminalView {
         }),
       )
       .on_key_down(cx.listener(Self::on_key_down))
-      .on_action(cx.listener(Self::send_tab))
-      .on_action(cx.listener(Self::send_back_tab))
+      .on_action(cx.listener(Self::send_keystroke))
       .key_context(TERMINAL_CONTEXT)
       .track_focus(&self.focus_handle)
       .when_some(banner_message, |this, message| {

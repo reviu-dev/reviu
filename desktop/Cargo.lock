@@ -9074,6 +9074,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "parking_lot",
+ "serde",
 ]
 
 [[package]]

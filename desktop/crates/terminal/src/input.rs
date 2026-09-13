@@ -8,10 +8,6 @@ pub fn encode_key_down(event: &KeyDownEvent, mode: TermMode) -> Option<String> {
   let keystroke = &event.keystroke;
   let modifiers = keystroke.modifiers;
 
-  if modifiers.function {
-    return None;
-  }
-
   if let Some(sequence) = encode_platform_key(keystroke.key.as_str(), modifiers) {
     return Some(sequence);
   }
@@ -49,9 +45,10 @@ pub fn encode_key_down(event: &KeyDownEvent, mode: TermMode) -> Option<String> {
 
 pub fn encode_paste(text: &str, mode: TermMode) -> String {
   if mode.contains(TermMode::BRACKETED_PASTE) {
+    let text = text.replace('\u{1b}', "");
     format!("\u{1b}[200~{text}\u{1b}[201~")
   } else {
-    text.to_string()
+    text.replace("\r\n", "\r").replace('\n', "\r")
   }
 }
 
@@ -196,7 +193,37 @@ fn encode_special_key(key: &str, modifiers: Modifiers, mode: TermMode) -> Option
     "delete" => encode_tilde_key(3, modifiers),
     "pageup" => encode_tilde_key(5, modifiers),
     "pagedown" => encode_tilde_key(6, modifiers),
+    "f1" => encode_function_key('P', modifiers),
+    "f2" => encode_function_key('Q', modifiers),
+    "f3" => encode_function_key('R', modifiers),
+    "f4" => encode_function_key('S', modifiers),
+    "f5" => encode_tilde_key(15, modifiers),
+    "f6" => encode_tilde_key(17, modifiers),
+    "f7" => encode_tilde_key(18, modifiers),
+    "f8" => encode_tilde_key(19, modifiers),
+    "f9" => encode_tilde_key(20, modifiers),
+    "f10" => encode_tilde_key(21, modifiers),
+    "f11" => encode_tilde_key(23, modifiers),
+    "f12" => encode_tilde_key(24, modifiers),
+    "f13" => encode_tilde_key(25, modifiers),
+    "f14" => encode_tilde_key(26, modifiers),
+    "f15" => encode_tilde_key(28, modifiers),
+    "f16" => encode_tilde_key(29, modifiers),
+    "f17" => encode_tilde_key(31, modifiers),
+    "f18" => encode_tilde_key(32, modifiers),
+    "f19" => encode_tilde_key(33, modifiers),
+    "f20" => encode_tilde_key(34, modifiers),
     _ => None,
+  }
+}
+
+fn encode_function_key(suffix: char, modifiers: Modifiers) -> Option<String> {
+  match modifier_parameter(modifiers) {
+    Some(parameter) => Some(format!("\u{1b}[1;{parameter}{suffix}")),
+    None if !modifiers.shift && !modifiers.alt && !modifiers.control && !modifiers.platform => {
+      Some(format!("\u{1b}O{suffix}"))
+    }
+    None => None,
   }
 }
 
@@ -520,6 +547,60 @@ mod tests {
     assert_eq!(
       encode_paste("git status", TermMode::BRACKETED_PASTE),
       "\u{1b}[200~git status\u{1b}[201~".to_string()
+    );
+  }
+
+  #[test]
+  fn encode_paste_strips_escape_characters_from_bracketed_content() {
+    assert_eq!(
+      encode_paste(
+        "safe\u{1b}[201~\nrm -rf important",
+        TermMode::BRACKETED_PASTE,
+      ),
+      "\u{1b}[200~safe[201~\nrm -rf important\u{1b}[201~".to_string()
+    );
+  }
+
+  #[test]
+  fn encode_paste_normalizes_line_endings_without_bracketed_mode() {
+    assert_eq!(
+      encode_paste("first\r\nsecond\nthird\rfourth", TermMode::empty()),
+      "first\rsecond\rthird\rfourth".to_string()
+    );
+  }
+
+  #[test]
+  fn function_keys_use_terminal_escape_sequences() {
+    assert_eq!(
+      encode_key_down(
+        &key_event("f1", None, Modifiers::default()),
+        TermMode::empty(),
+      )
+      .as_deref(),
+      Some("\u{1b}OP")
+    );
+    assert_eq!(
+      encode_key_down(
+        &key_event(
+          "f5",
+          None,
+          Modifiers {
+            function: true,
+            ..Default::default()
+          },
+        ),
+        TermMode::empty(),
+      )
+      .as_deref(),
+      Some("\u{1b}[15~")
+    );
+    assert_eq!(
+      encode_key_down(
+        &key_event("f20", None, Modifiers::control()),
+        TermMode::empty(),
+      )
+      .as_deref(),
+      Some("\u{1b}[34;5~")
     );
   }
 

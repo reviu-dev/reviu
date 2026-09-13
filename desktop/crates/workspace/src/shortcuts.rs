@@ -1198,7 +1198,7 @@ fn guarded_shortcut_context(context: &str) -> String {
 }
 
 fn default_app_key_bindings() -> Vec<KeyBinding> {
-  vec![
+  let mut bindings = vec![
     KeyBinding::new("enter", Enter, None),
     KeyBinding::new("tab", Tab, None),
     KeyBinding::new("backspace", Backspace, None),
@@ -1235,19 +1235,97 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("cmd-f", Find, None),
     KeyBinding::new("escape", CloseFind, Some("Editor")),
     KeyBinding::new("escape", ReturnFocusToEditor, Some(DOCK_PANEL_CONTEXT)),
-    // Deeper than the window's own Tab, so the shell gets the key instead of
-    // losing the focus to the next widget.
-    KeyBinding::new("tab", terminal::SendTab, Some(terminal::TERMINAL_CONTEXT)),
-    KeyBinding::new(
-      "shift-tab",
-      terminal::SendBackTab,
-      Some(terminal::TERMINAL_CONTEXT),
-    ),
     KeyBinding::new("home", Home, None),
     KeyBinding::new("end", End, None),
     KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
     KeyBinding::new("cmd-q", Quit, None),
+  ];
+  bindings.extend(terminal_key_bindings());
+  bindings
+}
+
+fn terminal_key_bindings() -> Vec<KeyBinding> {
+  let mut bindings = [
+    ("enter", "enter"),
+    ("shift-enter", "shift-enter"),
+    ("alt-enter", "alt-enter"),
+    ("escape", "escape"),
+    ("tab", "tab"),
+    ("shift-tab", "shift-tab"),
+    ("backspace", "backspace"),
+    ("shift-backspace", "shift-backspace"),
+    ("alt-backspace", "alt-backspace"),
+    ("cmd-backspace", "cmd-backspace"),
+    ("ctrl-backspace", "ctrl-w"),
+    ("delete", "delete"),
+    ("up", "up"),
+    ("down", "down"),
+    ("left", "left"),
+    ("right", "right"),
+    ("shift-up", "shift-up"),
+    ("shift-down", "shift-down"),
+    ("shift-left", "shift-left"),
+    ("shift-right", "shift-right"),
+    ("alt-left", "alt-b"),
+    ("alt-right", "alt-f"),
+    ("cmd-left", "ctrl-a"),
+    ("cmd-right", "ctrl-e"),
+    ("home", "home"),
+    ("end", "end"),
+    ("shift-home", "shift-home"),
+    ("shift-end", "shift-end"),
+    ("pageup", "pageup"),
+    ("pagedown", "pagedown"),
   ]
+  .into_iter()
+  .map(|(keystroke, terminal_keystroke)| {
+    KeyBinding::new(
+      keystroke,
+      terminal::SendKeystroke(terminal_keystroke.to_string()),
+      Some(terminal::TERMINAL_CONTEXT),
+    )
+  })
+  .collect::<Vec<_>>();
+
+  if cfg!(target_os = "macos") {
+    bindings.extend([
+      KeyBinding::new(
+        "cmd-c",
+        terminal::SendKeystroke("cmd-c".to_string()),
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+      KeyBinding::new(
+        "cmd-v",
+        terminal::SendKeystroke("cmd-v".to_string()),
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+    ]);
+  } else {
+    bindings.extend([
+      KeyBinding::new(
+        "ctrl-shift-c",
+        terminal::SendKeystroke("ctrl-shift-c".to_string()),
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+      KeyBinding::new(
+        "ctrl-insert",
+        terminal::SendKeystroke("ctrl-shift-c".to_string()),
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+      KeyBinding::new(
+        "ctrl-shift-v",
+        terminal::SendKeystroke("ctrl-shift-v".to_string()),
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+      KeyBinding::new(
+        "shift-insert",
+        terminal::SendKeystroke("ctrl-shift-v".to_string()),
+        Some(terminal::TERMINAL_CONTEXT),
+      ),
+    ]);
+  }
+
+  bindings
 }
 
 fn effective_shortcut_keystroke_text(
@@ -1554,6 +1632,44 @@ mod tests {
       first_binding_action_name("workspace", &[], "cmd-w", workspace_key_bindings(),),
       Some("workspace::CloseCenterTab")
     );
+  }
+
+  #[test]
+  fn terminal_keystrokes_override_global_and_workspace_actions() {
+    let mut keystrokes = vec![
+      "enter",
+      "escape",
+      "tab",
+      "backspace",
+      "delete",
+      "up",
+      "down",
+      "left",
+      "right",
+      "shift-enter",
+      "home",
+      "end",
+      "pageup",
+      "pagedown",
+    ];
+    if cfg!(target_os = "macos") {
+      keystrokes.extend(["cmd-c", "cmd-v"]);
+    } else {
+      keystrokes.extend(["ctrl-shift-c", "ctrl-shift-v"]);
+    }
+
+    for keystroke in keystrokes {
+      assert_eq!(
+        first_binding_action_name(
+          "workspace",
+          &[terminal::TERMINAL_CONTEXT],
+          keystroke,
+          app_and_workspace_key_bindings(),
+        ),
+        Some(<terminal::SendKeystroke as Action>::name_for_type()),
+        "{keystroke} should reach the terminal",
+      );
+    }
   }
 
   #[test]
