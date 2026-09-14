@@ -238,7 +238,7 @@ impl SessionPage {
           .find(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
           .cloned()
       }) {
-        self.set_active_center_tab(tab);
+        self.set_active_center_tab_and_reveal(tab, cx);
       }
       self.focus_editor_on_next_frame(window, cx);
     } else {

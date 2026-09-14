@@ -1088,6 +1088,7 @@ pub struct DockPanel {
   files_file_count: usize,
   files_include_gitignored: bool,
   files_include_hidden: bool,
+  files_reveal_path_when_loaded: Option<PathBuf>,
   /// The tab was opened before its tree existed: focus it as soon as it does.
   focus_files_tree_when_loaded: bool,
   files_loading: bool,
@@ -1357,6 +1358,7 @@ impl DockPanel {
       files_file_count: 0,
       files_include_gitignored: true,
       files_include_hidden: true,
+      files_reveal_path_when_loaded: None,
       focus_files_tree_when_loaded: false,
       files_loading: false,
       files_load_generation: 0,
@@ -1427,6 +1429,11 @@ impl DockPanel {
             state.set_items(items, cx);
           });
           this.files_loaded = true;
+          if this.active_tab == DockPanelTab::Files
+            && let Some(path) = this.files_reveal_path_when_loaded.take()
+          {
+            this.reveal_loaded_file_path(&path, cx);
+          }
         }
         cx.notify();
       });
@@ -1654,6 +1661,27 @@ impl DockPanel {
             });
           }))
       })
+  }
+
+  pub(crate) fn reveal_file_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+    if self.active_tab != DockPanelTab::Files {
+      return;
+    }
+    if !self.files_loaded {
+      self.files_reveal_path_when_loaded = Some(path.to_path_buf());
+      return;
+    }
+    self.reveal_loaded_file_path(path, cx);
+  }
+
+  fn reveal_loaded_file_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+    let id: SharedString = file_tree_path_id(path).into();
+    self.files_tree_state.update(cx, |tree, cx| {
+      tree.reveal_item(&id, gpui::ScrollStrategy::Center, cx);
+      if let Some(index) = tree.index_of(&id) {
+        tree.set_selected_index(Some(index), cx);
+      }
+    });
   }
 
   fn current_files_expanded_paths(&self, cx: &App) -> HashSet<String> {
@@ -3538,6 +3566,7 @@ impl DockPanel {
     if project_changed {
       self.files_loaded = false;
       self.files_file_count = 0;
+      self.files_reveal_path_when_loaded = None;
       self.files_loading = false;
       self.files_load_generation = self.files_load_generation.wrapping_add(1);
       self._files_task = None;
@@ -6666,6 +6695,79 @@ mod tests {
         .expect("ignored folder is visible");
       assert!(ignored.is_folder());
       assert_eq!(ignored.item().children[0].id.as_ref(), "ignored/secret.txt");
+    });
+  }
+
+  #[gpui::test]
+  async fn files_panel_reveals_a_path_without_taking_focus(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-reveal-path");
+    commit_text_file(
+      &repo.path,
+      Path::new("src/nested/main.rs"),
+      "main\n",
+      "main",
+    );
+    commit_text_file(&repo.path, Path::new("README.md"), "readme\n", "readme");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let src = tree
+        .index_of(&"src".into())
+        .and_then(|index| tree.entry(index))
+        .expect("src folder is visible");
+      assert!(!src.is_expanded());
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.reveal_file_path(Path::new("src/nested/main.rs"), cx);
+    });
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let src = tree
+        .index_of(&"src".into())
+        .and_then(|index| tree.entry(index))
+        .expect("src folder is visible");
+      let nested = tree
+        .index_of(&"src/nested".into())
+        .and_then(|index| tree.entry(index))
+        .expect("nested folder is visible");
+      let selected = tree.selected_entry().expect("selected entry");
+      assert!(src.is_expanded());
+      assert!(nested.is_expanded());
+      assert_eq!(selected.item().id.as_ref(), "src/nested/main.rs");
+    });
+  }
+
+  #[gpui::test]
+  async fn files_panel_reveals_a_path_after_loading(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-pending-reveal-path");
+    commit_text_file(
+      &repo.path,
+      Path::new("src/nested/main.rs"),
+      "main\n",
+      "main",
+    );
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Files, window, cx);
+      panel.reveal_file_path(Path::new("src/nested/main.rs"), cx);
+      panel.load_project_files(cx);
+    });
+    await_files_loaded(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let selected = tree.selected_entry().expect("selected entry");
+      assert_eq!(selected.item().id.as_ref(), "src/nested/main.rs");
     });
   }
 

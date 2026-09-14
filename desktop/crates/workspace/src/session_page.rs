@@ -1594,6 +1594,23 @@ impl SessionPage {
     self.active_center_tab = Some(tab);
   }
 
+  fn set_active_center_tab_and_reveal(&mut self, tab: CenterTab, cx: &mut Context<Self>) {
+    self.set_active_center_tab(tab.clone());
+    self.reveal_center_tab_in_files_panel(&tab, cx);
+  }
+
+  fn reveal_center_tab_in_files_panel(&mut self, tab: &CenterTab, cx: &mut Context<Self>) {
+    if !self.dock_open || !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
+      return;
+    }
+    let Some(path) = tab.path().map(Path::to_path_buf) else {
+      return;
+    };
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.reveal_file_path(&path, cx);
+    });
+  }
+
   fn remember_center_tab_visit(&mut self, tab: CenterTab) {
     self.center_tab_history.retain(|existing| existing != &tab);
     self.center_tab_history.push(tab);
@@ -1753,6 +1770,7 @@ impl SessionPage {
         }
       }
       self.active_center_tab = Some(tab.clone());
+      self.reveal_center_tab_in_files_panel(&focused_tab, cx);
       self.center = match focused_tab.kind {
         CenterTabKind::Chat => CenterView::Conversation,
         CenterTabKind::File | CenterTabKind::Diff => CenterView::Diff,
@@ -1775,7 +1793,7 @@ impl SessionPage {
       CenterTabKind::Chat => {
         if !self.agent_activated && self.agent_chat_view.is_none() {
           self.center = CenterView::Conversation;
-          self.set_active_center_tab(tab);
+          self.set_active_center_tab_and_reveal(tab, cx);
           cx.notify();
         } else if let Some(id) = tab.conversation_id {
           self.select_session(&id, window, cx);
@@ -1806,13 +1824,13 @@ impl SessionPage {
       }
       CenterTabKind::InteractiveRebase => {
         self.center = CenterView::InteractiveRebase;
-        self.set_active_center_tab(CenterTab::interactive_rebase());
+        self.set_active_center_tab_and_reveal(CenterTab::interactive_rebase(), cx);
         self.center_tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
         cx.notify();
       }
       CenterTabKind::Terminal => {
         self.center = CenterView::Terminal;
-        self.set_active_center_tab(tab.clone());
+        self.set_active_center_tab_and_reveal(tab.clone(), cx);
         self.focus_terminal_tab(&tab, window, cx);
         cx.notify();
       }
@@ -1835,6 +1853,11 @@ impl SessionPage {
     self
       .dock_panel
       .update(cx, |panel, cx| panel.open_tab(tab, window, cx));
+    if tab == DockPanelTab::Files
+      && let Some(active_tab) = self.active_center_tab.clone()
+    {
+      self.reveal_center_tab_in_files_panel(&active_tab, cx);
+    }
     cx.notify();
   }
 
@@ -2253,7 +2276,7 @@ impl SessionPage {
     }
 
     self.center = CenterView::Diff;
-    self.set_active_center_tab(active_tab);
+    self.set_active_center_tab_and_reveal(active_tab, cx);
     self.show_dock_tab(DockPanelTab::Changes, window, cx);
     self.resize_dock(dock_width.unwrap_or(260.0), cx);
     self.sync_agent_chat_close_control(cx);
@@ -2489,6 +2512,11 @@ impl SessionPage {
     self
       .dock_panel
       .update(cx, |panel, cx| panel.open_tab(tab, window, cx));
+    if tab == DockPanelTab::Files
+      && let Some(active_tab) = self.active_center_tab.clone()
+    {
+      self.reveal_center_tab_in_files_panel(&active_tab, cx);
+    }
     cx.notify();
   }
 

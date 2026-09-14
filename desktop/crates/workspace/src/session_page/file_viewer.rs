@@ -289,7 +289,7 @@ impl SessionPage {
         });
       }
       if self.center_layout.contains_tab(&tab) {
-        self.set_active_center_tab(tab.clone());
+        self.set_active_center_tab_and_reveal(tab.clone(), cx);
       } else {
         self.remember_center_tab(tab.clone(), cx);
       }
@@ -308,6 +308,7 @@ impl SessionPage {
     let generation = self.open_file_generation;
     self.record_recent_file(&repo_root, &rel_path);
     self.remember_center_tab(tab.clone(), cx);
+    self.reveal_center_tab_in_files_panel(&tab, cx);
     self.set_editor_tab_loading(tab.clone(), rel_path.clone(), None);
     let diff_view = self.effective_diff_view(&rel_path, cx);
     // Wherever the open came from (chat recap, palette, review row), the
@@ -760,6 +761,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     self.open_file_task = None;
     self.remember_center_tab(tab.clone(), cx);
+    self.reveal_center_tab_in_files_panel(tab, cx);
     self.editor_tab = Some(tab.clone());
     self.set_editor_tab_state(tab.clone(), state);
     self.svg_preview.update(cx, |preview, _| preview.clear());
@@ -871,6 +873,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.remember_center_tab(tab.clone(), cx);
+    self.reveal_center_tab_in_files_panel(&tab, cx);
     let agent_whole_file_change = old_text.is_none() || new_text.is_empty();
     let opened_snapshot = OpenedSnapshot::AgentTool {
       old_text: old_text.clone(),
@@ -999,6 +1002,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.remember_center_tab(tab.clone(), cx);
+    self.reveal_center_tab_in_files_panel(&tab, cx);
     let opened_snapshot = OpenedSnapshot::Commit(commit_oid.clone());
     self.set_editor_tab_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
     let hide_whitespace = self.hide_whitespace;
@@ -1140,6 +1144,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.remember_center_tab(tab.clone(), cx);
+    self.reveal_center_tab_in_files_panel(&tab, cx);
     let opened_snapshot = OpenedSnapshot::PullRequestRange {
       base: base_oid.clone(),
       head: head_oid.clone(),
@@ -1781,7 +1786,7 @@ impl SessionPage {
     if self.center_layout.surface_count() > 1 {
       self.remember_center_layout_tab(representative);
     } else {
-      self.active_center_tab = Some(remaining_tab.clone());
+      self.set_active_center_tab_and_reveal(remaining_tab.clone(), cx);
       self.center_layouts_by_tab.remove(&remaining_tab);
       if !self.center_tabs.contains(&remaining_tab) {
         self.center_tabs.push(remaining_tab.clone());
@@ -1868,7 +1873,7 @@ impl SessionPage {
 
     self.center_layout = CenterLayout::single(surface);
     self.center = Self::center_view_for_tab(&tab);
-    self.active_center_tab = Some(tab.clone());
+    self.set_active_center_tab_and_reveal(tab.clone(), cx);
     self.center_tabs.push(tab.clone());
     self.remember_center_tab_visit(tab.clone());
     if let Some(conversation_id) = tab.conversation_id() {
