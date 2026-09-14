@@ -17,12 +17,13 @@ use std::collections::HashSet;
 use crate::config::ConfigStore;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CloseCenterTab, CommentHunk,
-  CommitChanges, ForcePushChanges, JumpToLatestMessage, NewAgentSession, NewAgentWorktreeSession,
-  NextAnnotation, NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar,
-  OpenProject, OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, PreviousAnnotation,
-  PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk, ReturnFocusToEditor,
-  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
+  CommitChanges, DeleteSelectedFileItem, ForcePushChanges, JumpToLatestMessage, NewAgentSession,
+  NewAgentWorktreeSession, NextAnnotation, NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar,
+  OpenGitHistorySidebar, OpenProject, OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage,
+  PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RenameSelectedFileItem,
+  RestoreFile, RestoreHunk, ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher,
+  ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
+  ToggleHunkStage,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -32,6 +33,7 @@ pub const WORKSPACE_SHORTCUT_RECORDING_CONTEXT: &str = "WorkspaceShortcutRecordi
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
 /// The right dock, so escape can mean "give the keyboard back" only in there.
 pub const DOCK_PANEL_CONTEXT: &str = "DockPanel";
+pub const FILES_TREE_CONTEXT: &str = "Tree && !Input";
 pub const WORKSPACE_SESSION_CONTEXT: &str = "Workspace WorkspaceSession";
 
 const FILE_SEARCH_CONTEXT: &str = "WorkspaceSession";
@@ -1235,6 +1237,8 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("cmd-f", Find, None),
     KeyBinding::new("escape", CloseFind, Some("Editor")),
     KeyBinding::new("escape", ReturnFocusToEditor, Some(DOCK_PANEL_CONTEXT)),
+    KeyBinding::new("f2", RenameSelectedFileItem, Some(FILES_TREE_CONTEXT)),
+    KeyBinding::new("delete", DeleteSelectedFileItem, Some(FILES_TREE_CONTEXT)),
     KeyBinding::new("home", Home, None),
     KeyBinding::new("end", End, None),
     KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),

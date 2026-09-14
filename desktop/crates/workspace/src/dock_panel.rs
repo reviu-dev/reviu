@@ -1710,6 +1710,22 @@ impl DockPanel {
     directory.filter(|path| !path.as_os_str().is_empty())
   }
 
+  fn selected_files_context_target(&self, cx: &App) -> Option<FilesContextTarget> {
+    if self.active_tab != DockPanelTab::Files {
+      return None;
+    }
+    let tree = self.files_tree_state.read(cx);
+    let entry = tree.selected_entry()?;
+    let id = entry.item().id.as_ref();
+    if is_empty_folder_placeholder_id(id) {
+      return None;
+    }
+    Some(FilesContextTarget::entry(
+      PathBuf::from(id),
+      entry.is_folder(),
+    ))
+  }
+
   fn reveal_files_context_target(&self, target: &FilesContextTarget, cx: &mut Context<Self>) {
     let Some(path) = self.absolute_files_context_path(target) else {
       return;
@@ -2091,6 +2107,32 @@ impl DockPanel {
       self.cancel_inline_rename(cx);
       cx.stop_propagation();
     }
+  }
+
+  fn rename_selected_file_item_action(
+    &mut self,
+    _: &crate::RenameSelectedFileItem,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(target) = self.selected_files_context_target(cx) else {
+      cx.propagate();
+      return;
+    };
+    self.start_inline_rename_from_context(target, window, cx);
+  }
+
+  fn delete_selected_file_item_action(
+    &mut self,
+    _: &crate::DeleteSelectedFileItem,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(target) = self.selected_files_context_target(cx) else {
+      cx.propagate();
+      return;
+    };
+    self.confirm_delete_file_context_target(target, window, cx);
   }
 
   fn rename_file_entry(
@@ -5632,6 +5674,8 @@ impl Render for DockPanel {
       .key_context(crate::shortcuts::DOCK_PANEL_CONTEXT)
       .on_key_down(cx.listener(Self::on_dock_key_down))
       .on_action(cx.listener(|this, _: &crate::CommitChanges, _, cx| this.commit(cx)))
+      .on_action(cx.listener(Self::rename_selected_file_item_action))
+      .on_action(cx.listener(Self::delete_selected_file_item_action))
       .child(header)
       .child(body);
     if self.active_tab == DockPanelTab::Changes {
@@ -6417,6 +6461,73 @@ mod tests {
       panel.open_tab(DockPanelTab::Files, window, cx)
     });
     await_files_loaded(panel, cx).await;
+  }
+
+  #[gpui::test]
+  async fn files_panel_f2_starts_inline_rename_for_selected_item(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-keyboard-rename");
+    commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "a");
+    commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "b");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("f2");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+
+    assert!(
+      cx.debug_bounds("dock-panel-file-rename-input-b.txt")
+        .is_some(),
+      "F2 starts inline rename for the selected file"
+    );
+  }
+
+  #[gpui::test]
+  async fn files_panel_delete_asks_before_deleting_selected_item(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-keyboard-delete");
+    commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "a");
+    commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "b");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    cx.simulate_keystrokes("down delete");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(repo.path.join("b.txt").is_file());
+  }
+
+  #[gpui::test]
+  async fn files_panel_delete_edits_inline_input_instead_of_deleting_item(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-keyboard-delete-inline");
+    commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "a");
+    commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "b");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    cx.simulate_keystrokes("down f2 delete");
+    cx.run_until_parked();
+
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(repo.path.join("b.txt").is_file());
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.files_inline_rename.is_some());
+    });
   }
 
   #[gpui::test]
@@ -7398,6 +7509,7 @@ mod tests {
       if !cx.has_global::<WorkspaceApi>() {
         cx.set_global(WorkspaceApi::new());
       }
+      crate::install_app_key_bindings(cx);
     });
     let mut mounted: Option<Entity<DockPanel>> = None;
     let (_root, cx) = cx.add_window_view(|window, cx| {

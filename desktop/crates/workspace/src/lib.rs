@@ -31,6 +31,8 @@ actions!(
     RestoreHunk,
     ToggleFileStage,
     RestoreFile,
+    RenameSelectedFileItem,
+    DeleteSelectedFileItem,
     AcceptBothConflict,
     OpenBillingPage,
     OpenGitConfigPage,
