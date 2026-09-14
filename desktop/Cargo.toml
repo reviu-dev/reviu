@@ -93,7 +93,7 @@ git2 = { version = "0.21.0", features = [
   "vendored-openssl",
 ] }
 parking_lot = "0.12.5"
-regex = "1.12.3"
+regex = "1.13.1"
 smol = "2.0.2"
 sysinfo = "0.31.4"
 time = { version = "0.3.55", features = ["formatting", "macros", "parsing"] }
