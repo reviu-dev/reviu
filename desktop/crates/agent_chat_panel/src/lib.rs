@@ -1433,6 +1433,22 @@ impl AgentChatPanel {
     self.queued_prompts.clone()
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn set_composer_draft_for_test(
+    &mut self,
+    text: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.set_composer_value(text, window, cx);
+    self.schedule_draft_save(cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn composer_text_for_test(&self, cx: &App) -> String {
+    self.input.read(cx).value().to_string()
+  }
+
   /// Queue a message as the composer would mid-turn.
   #[cfg(any(test, feature = "test-support"))]
   pub fn queue_prompt_for_test(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
@@ -3205,6 +3221,10 @@ impl AgentChatPanel {
   /// Whether the shown panel is this one; only it writes the active pointer.
   pub fn set_active_conversation(&mut self, is_active: bool) {
     self.is_active = is_active;
+  }
+
+  pub fn has_unsent_prompt(&self, cx: &App) -> bool {
+    !self.input.read(cx).value().trim().is_empty() || !self.staged_images.is_empty()
   }
 
   /// A panel is parked when nothing live would be lost by dropping it.

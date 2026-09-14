@@ -506,10 +506,11 @@ impl SessionPage {
       return;
     };
     // A blank idle conversation has no row to come back through; drop it,
-    // along with the worktree it never used.
+    // along with the worktree it never used. Keep draft-only panels alive so
+    // switching repositories does not lose the selected agent or composer.
     let keep = {
       let panel = panel.read(cx);
-      panel.has_persistable_content() || !panel.is_parked()
+      panel.has_persistable_content() || panel.has_unsent_prompt(cx) || !panel.is_parked()
     };
     if !keep {
       let id = panel.read(cx).current_conversation().id.clone();
@@ -1695,7 +1696,7 @@ impl SessionPage {
     cx.notify();
   }
 
-  fn reveal_active_session_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  pub(super) fn reveal_active_session_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let chat_tab = self.active_chat_tab(cx);
     if let Some(representative) = self.center_split_representative_for_tab(&chat_tab) {
       self.save_active_center_layout();
@@ -1783,9 +1784,36 @@ impl SessionPage {
       .take_background_chat_panel(id, cx)
       .or_else(|| self.build_chat_panel_for_id(id, window, cx))
       .unwrap_or_else(|| self.build_fallback_chat_panel(None, window, cx));
+    self.activate_chat_panel(panel, true, window, cx);
+  }
+
+  pub(super) fn activate_parked_session_for_project(
+    &mut self,
+    project_root: &Path,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(panel) = self.take_background_chat_panel_for_project(project_root, cx) else {
+      return false;
+    };
+    self.park_active_chat_panel(cx);
+    let write_active = panel.read(cx).has_persistable_content();
+    self.activate_chat_panel(panel, write_active, window, cx);
+    self.reveal_active_session_chat(window, cx);
+    true
+  }
+
+  fn activate_chat_panel(
+    &mut self,
+    panel: Entity<AgentChatPanel>,
+    write_active: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     panel.update(cx, |panel, _| panel.set_active_conversation(true));
-    if let Some(store) = panel.read(cx).store() {
-      store.update(cx, |store, cx| store.set_active(Some(id.to_string()), cx));
+    let id = panel.read(cx).current_conversation().id.clone();
+    if write_active && let Some(store) = panel.read(cx).store() {
+      store.update(cx, |store, cx| store.set_active(Some(id), cx));
     }
     self.agent_chat_view = Some(panel);
     self.evict_parked_chat_panels(cx);
@@ -1804,11 +1832,31 @@ impl SessionPage {
       .background_chat_panels
       .iter()
       .position(|(panel_id, _)| panel_id == id)?;
+    Some(self.take_background_chat_panel_at(position, cx))
+  }
+
+  fn take_background_chat_panel_for_project(
+    &mut self,
+    project_root: &Path,
+    cx: &mut Context<Self>,
+  ) -> Option<Entity<AgentChatPanel>> {
+    let position = self
+      .background_chat_panels
+      .iter()
+      .position(|(_, panel)| panel.read(cx).project_root() == project_root)?;
+    Some(self.take_background_chat_panel_at(position, cx))
+  }
+
+  fn take_background_chat_panel_at(
+    &mut self,
+    position: usize,
+    cx: &mut Context<Self>,
+  ) -> Entity<AgentChatPanel> {
     let panel = self.background_chat_panels.remove(position).1;
     if panel.read(cx).needs_reconnect() {
       panel.update(cx, |panel, cx| panel.reconnect(cx));
     }
-    Some(panel)
+    panel
   }
 
   fn build_chat_panel_for_id(
@@ -5123,21 +5171,18 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      // The shown session died with its repo: a fresh fallback session took over
-      // and the git surfaces left the dead checkout.
+      // The shown session died with its repo: the previous fallback session took
+      // over and the git surfaces left the dead checkout.
       let panel = page.agent_chat_view.as_ref().expect("a panel is shown");
       assert_eq!(panel.read(cx).project_root(), repo.path.as_path());
+      assert_eq!(panel.read(cx).current_conversation().id, survivor_id);
       assert_eq!(
         page.dock_panel.read(cx).repo_root(),
         Some(repo.path.as_path())
       );
-      // The first repo's session survived untouched.
       assert!(
-        page
-          .background_chat_panels
-          .iter()
-          .any(|(id, _)| id == &survivor_id),
-        "the other repo's sessions were never touched"
+        page.background_chat_panels.is_empty(),
+        "only the forgotten repo's session was removed"
       );
       let ids = page.session_list.read(cx).conversation_ids();
       assert!(!ids.contains(&"doomed-b".to_string()));

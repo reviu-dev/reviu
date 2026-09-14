@@ -114,7 +114,17 @@ impl SessionPage {
           self.select_session(&id, window, cx);
         }
       }
-      None => self.new_session_in_without_unsaved_prompt(repo_root, window, cx),
+      None => {
+        let already_shown = self
+          .agent_chat_view
+          .as_ref()
+          .is_some_and(|panel| panel.read(cx).project_root() == repo_root.as_path());
+        if already_shown {
+          self.reveal_active_session_chat(window, cx);
+        } else if !self.activate_parked_session_for_project(&repo_root, window, cx) {
+          self.new_session_in_without_unsaved_prompt(repo_root, window, cx);
+        }
+      }
     }
     Ok(())
   }
@@ -268,14 +278,21 @@ impl SessionPage {
     let forgetting_fallback = self.fallback_repo.as_deref() == Some(repo_root.as_path());
     if !forgetting_fallback {
       let _ = self.backfill_session_sidebar_git_project(cx);
-      // The shown session may have gone with the repo: a fresh fallback-repo
-      // session takes over so the centre and the git surfaces never point at
-      // a dead checkout.
+      // The shown session may have gone with the repo: return to a parked
+      // fallback session when there is one, otherwise create a fresh panel so
+      // the centre and the git surfaces never point at a dead checkout.
       if active_was_doomed {
-        let view = self.build_fallback_chat_panel(None, window, cx);
-        view.update(cx, |panel, _| panel.set_active_conversation(true));
-        self.agent_chat_view = Some(view);
-        self.sync_active_checkout(window, cx);
+        let restored = self
+          .fallback_repo
+          .clone()
+          .is_some_and(|repo| self.activate_parked_session_for_project(&repo, window, cx));
+        if !restored {
+          let view = self.build_fallback_chat_panel(None, window, cx);
+          view.update(cx, |panel, _| panel.set_active_conversation(true));
+          self.agent_chat_view = Some(view);
+          self.remember_active_chat_tab(cx);
+          self.sync_active_checkout(window, cx);
+        }
       }
       self.refresh_session_list(cx);
       cx.notify();
@@ -648,6 +665,72 @@ mod tests {
         page.dock_panel.read(cx).repo_root(),
         Some(other.path.as_path())
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn switching_repository_preserves_blank_draft_agent_session(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-switch-draft-from");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let other = TempRepo::init("session-page-switch-draft-to");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+    if let Some(dir) = agent_chat_state_dir() {
+      let _ = std::fs::remove_dir_all(AgentChatPanel::state_dir_for_project(&dir, &repo.path));
+      let _ = std::fs::remove_dir_all(AgentChatPanel::state_dir_for_project(&dir, &other.path));
+    }
+
+    let selected_agent =
+      if agent_chat_panel::default_agent_id() == agent_registry::AgentId::new("pi-acp") {
+        agent_registry::AgentId::new("codex-acp")
+      } else {
+        agent_registry::AgentId::new("pi-acp")
+      };
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+    let first = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    first.update_in(cx, |panel, window, cx| {
+      panel.switch_backend(selected_agent.clone(), cx);
+      panel.set_composer_draft_for_test("unsent first prompt", window, cx);
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_fallback_repo(other.path.clone(), window, cx)
+        .expect("switch repository");
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .agent_chat_view
+          .as_ref()
+          .expect("active panel")
+          .read(cx)
+          .project_root(),
+        other.path.as_path()
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("switch back");
+    });
+    cx.run_until_parked();
+
+    let restored = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    assert_eq!(restored.entity_id(), first.entity_id());
+    restored.read_with(cx, |panel, cx| {
+      assert_eq!(panel.project_root(), repo.path.as_path());
+      assert_eq!(panel.backend_kind(), &selected_agent);
+      assert_eq!(panel.composer_text_for_test(cx), "unsent first prompt");
+      assert!(!panel.has_persistable_content());
     });
   }
 
