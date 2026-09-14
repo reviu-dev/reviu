@@ -8,9 +8,9 @@ use std::time::Instant;
 use editor::ReviewCommentCreateRequest;
 
 use git::{
-  HeadCommitStatus, RepoStage, RepoStatusEntry, commit_changes, current_branch_status,
-  current_github_remote_repo, current_head_sha, head_commit_message, head_commit_status,
-  is_merge_in_progress, is_rebase_in_progress, list_repo_status, stage_all,
+  HeadCommitStatus, RepoStage, RepoStatusEntry, RepoStatusKind, commit_changes,
+  current_branch_status, current_github_remote_repo, current_head_sha, head_commit_message,
+  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_repo_status, stage_all,
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render,
@@ -27,7 +27,9 @@ use gpui_component::{
   v_flex,
 };
 
-use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
+use crate::changes_list::{
+  ChangesList, ChangesListEvent, status_color, status_tooltip, status_uses_warning_icon,
+};
 use crate::config::AppSettings;
 use crate::file_tree::build_project_tree_items_with_expansion;
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
@@ -4188,11 +4190,7 @@ impl DockPanel {
       return Self::render_files_loading_state();
     }
 
-    let modified: std::collections::HashSet<PathBuf> = self
-      .status_entries
-      .iter()
-      .map(|entry| entry.path.clone())
-      .collect();
+    let (file_statuses, folder_statuses) = file_tree_status_maps(&self.status_entries);
 
     let panel = cx.entity().downgrade();
     let inline_rename = self
@@ -4262,7 +4260,11 @@ impl DockPanel {
             .as_ref()
             .filter(|(path, _)| path == &relative_path)
             .map(|(_, input)| input.clone());
-          let is_modified = !is_folder && modified.contains(&relative_path);
+          let status = if is_folder {
+            folder_statuses.get(&relative_path).copied()
+          } else {
+            file_statuses.get(&relative_path).copied()
+          };
           let context_target = FilesContextTarget::entry(relative_path, is_folder);
           let context_target_panel = panel.clone();
 
@@ -4334,14 +4336,12 @@ impl DockPanel {
                 .gap_2()
                 .child(icon)
                 .child(label)
-                .when(is_modified, |this| {
-                  this.child(
-                    div()
-                      .text_xs()
-                      .font_weight(gpui::FontWeight::BOLD)
-                      .text_color(theme.status_amber())
-                      .child("M"),
-                  )
+                .when_some(status, |this, status| {
+                  this.child(render_file_tree_status_badge(
+                    status,
+                    &theme,
+                    item.id.clone(),
+                  ))
                 }),
             )
         },
@@ -5584,6 +5584,91 @@ fn file_tree_path_id(path: &Path) -> String {
     .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
+fn render_file_tree_status_badge(
+  status: RepoStatusKind,
+  theme: &gpui_component::Theme,
+  id: SharedString,
+) -> AnyElement {
+  let color = status_color(status, theme);
+  let content = if status_uses_warning_icon(status) {
+    Icon::new(IconName::TriangleAlert)
+      .size_3()
+      .text_color(color)
+      .into_any_element()
+  } else {
+    div()
+      .text_xs()
+      .font_weight(gpui::FontWeight::BOLD)
+      .text_color(color)
+      .child(status.short_code())
+      .into_any_element()
+  };
+  let tooltip = status_tooltip(status);
+  let element_id = format!("dock-panel-file-status-{id}");
+
+  div()
+    .id(element_id.clone())
+    .debug_selector(move || element_id.clone())
+    .w(px(15.))
+    .min_w(px(15.))
+    .flex()
+    .items_center()
+    .justify_end()
+    .tooltip(move |window, cx| {
+      gpui_component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+    })
+    .child(content)
+    .into_any_element()
+}
+
+fn file_tree_status_maps(
+  entries: &[RepoStatusEntry],
+) -> (
+  HashMap<PathBuf, RepoStatusKind>,
+  HashMap<PathBuf, RepoStatusKind>,
+) {
+  let mut file_statuses = HashMap::new();
+  let mut folder_statuses = HashMap::new();
+  for entry in entries {
+    set_preferred_file_tree_status(&mut file_statuses, entry.path.clone(), entry.status);
+
+    let mut parent = entry.path.parent();
+    while let Some(path) = parent {
+      if path.as_os_str().is_empty() {
+        break;
+      }
+      set_preferred_file_tree_status(&mut folder_statuses, path.to_path_buf(), entry.status);
+      parent = path.parent();
+    }
+  }
+  (file_statuses, folder_statuses)
+}
+
+fn set_preferred_file_tree_status(
+  statuses: &mut HashMap<PathBuf, RepoStatusKind>,
+  path: PathBuf,
+  status: RepoStatusKind,
+) {
+  statuses
+    .entry(path)
+    .and_modify(|existing| {
+      if file_tree_status_priority(status) > file_tree_status_priority(*existing) {
+        *existing = status;
+      }
+    })
+    .or_insert(status);
+}
+
+fn file_tree_status_priority(status: RepoStatusKind) -> u8 {
+  match status {
+    RepoStatusKind::Modified => 1,
+    RepoStatusKind::Renamed | RepoStatusKind::TypeChange => 2,
+    RepoStatusKind::Added | RepoStatusKind::Untracked => 3,
+    RepoStatusKind::Deleted => 4,
+    RepoStatusKind::Conflicted => 5,
+  }
+}
+
 fn renamed_file_tree_path_id(path: &str, old_id: &str, new_id: &str) -> String {
   if path == old_id {
     return new_id.to_string();
@@ -5601,13 +5686,75 @@ fn renamed_file_tree_path_id(path: &str, old_id: &str, new_id: &str) -> String {
 mod tests {
   use super::*;
   use crate::test_support::{TempRepo, commit_text_file};
-  use git::RepoStatusKind;
+  use git::{RepoStage, RepoStatusKind};
   use git2::Repository;
   use gpui::TestAppContext;
   use std::path::Path;
   use std::sync::Arc;
   use std::sync::atomic::{AtomicBool, Ordering};
   use ui::CommandPaletteCommandId;
+
+  #[test]
+  fn file_tree_status_maps_keep_file_statuses_and_aggregate_folders() {
+    let entries = vec![
+      RepoStatusEntry {
+        path: PathBuf::from("src/main.rs"),
+        old_path: None,
+        status: RepoStatusKind::Modified,
+        stage: RepoStage::Unstaged,
+      },
+      RepoStatusEntry {
+        path: PathBuf::from("src/nested/lib.rs"),
+        old_path: None,
+        status: RepoStatusKind::Conflicted,
+        stage: RepoStage::Unstaged,
+      },
+      RepoStatusEntry {
+        path: PathBuf::from("assets/icon.svg"),
+        old_path: None,
+        status: RepoStatusKind::Untracked,
+        stage: RepoStage::Unstaged,
+      },
+      RepoStatusEntry {
+        path: PathBuf::from("docs/gone.md"),
+        old_path: None,
+        status: RepoStatusKind::Deleted,
+        stage: RepoStage::Unstaged,
+      },
+    ];
+
+    let (file_statuses, folder_statuses) = file_tree_status_maps(&entries);
+
+    assert_eq!(
+      file_statuses[Path::new("src/main.rs")],
+      RepoStatusKind::Modified
+    );
+    assert_eq!(
+      file_statuses[Path::new("src/nested/lib.rs")],
+      RepoStatusKind::Conflicted
+    );
+    assert_eq!(
+      file_statuses[Path::new("assets/icon.svg")],
+      RepoStatusKind::Untracked
+    );
+    assert_eq!(
+      file_statuses[Path::new("docs/gone.md")],
+      RepoStatusKind::Deleted
+    );
+    assert_eq!(
+      folder_statuses[Path::new("src")],
+      RepoStatusKind::Conflicted
+    );
+    assert_eq!(
+      folder_statuses[Path::new("src/nested")],
+      RepoStatusKind::Conflicted
+    );
+    assert_eq!(
+      folder_statuses[Path::new("assets")],
+      RepoStatusKind::Untracked
+    );
+    assert_eq!(folder_statuses[Path::new("docs")], RepoStatusKind::Deleted);
+  }
 
   #[gpui::test]
   async fn a_poll_re_reads_the_working_tree_without_calling_github(cx: &mut TestAppContext) {
@@ -6724,6 +6871,39 @@ mod tests {
       assert!(ignored.is_folder());
       assert_eq!(ignored.item().children[0].id.as_ref(), "ignored/secret.txt");
     });
+  }
+
+  #[gpui::test]
+  async fn files_panel_renders_status_badges_for_changed_files_and_folders(
+    cx: &mut TestAppContext,
+  ) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-status-badges");
+    commit_text_file(
+      &repo.path,
+      Path::new("modified.txt"),
+      "before\n",
+      "modified",
+    );
+    commit_text_file(&repo.path, Path::new("src/main.rs"), "before\n", "nested");
+    std::fs::write(repo.path.join("modified.txt"), "after\n").expect("modify file");
+    std::fs::write(repo.path.join("untracked.txt"), "new\n").expect("write untracked");
+    std::fs::write(repo.path.join("src/main.rs"), "after\n").expect("modify nested file");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("dock-panel-file-status-modified.txt")
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds("dock-panel-file-status-untracked.txt")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("dock-panel-file-status-src").is_some());
   }
 
   #[gpui::test]

@@ -122,7 +122,7 @@ pub(crate) fn status_tooltip(kind: RepoStatusKind) -> SharedString {
   }
 }
 
-fn status_uses_warning_icon(kind: RepoStatusKind) -> bool {
+pub(crate) fn status_uses_warning_icon(kind: RepoStatusKind) -> bool {
   kind == RepoStatusKind::Conflicted
 }
 
