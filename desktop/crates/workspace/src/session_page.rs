@@ -487,6 +487,12 @@ impl SessionPage {
             cx,
           );
         }
+        DockPanelEvent::FileRenamed { old_path, new_path } => {
+          this.handle_file_renamed(old_path, new_path, cx);
+        }
+        DockPanelEvent::FileDeleted { path } => {
+          this.handle_file_deleted(path, window, cx);
+        }
         DockPanelEvent::OpenCommitFile {
           commit_oid,
           path,

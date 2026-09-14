@@ -120,6 +120,13 @@ pub enum DockPanelEvent {
     intent: OpenIntent,
     mode: DockPanelOpenFileMode,
   },
+  FileRenamed {
+    old_path: PathBuf,
+    new_path: PathBuf,
+  },
+  FileDeleted {
+    path: PathBuf,
+  },
   /// A file as it was in a commit, read-only.
   OpenCommitFile {
     commit_oid: String,
@@ -2128,7 +2135,12 @@ impl DockPanel {
         Ok(())
       },
       move |this, cx| {
+        this.files_reveal_path_when_loaded = Some(renamed_relative_path.clone());
         this.apply_files_rename_to_tree(&previous_relative_path, &renamed_relative_path, cx);
+        cx.emit(DockPanelEvent::FileRenamed {
+          old_path: previous_relative_path,
+          new_path: renamed_relative_path,
+        });
       },
       cx,
     );
@@ -2191,10 +2203,13 @@ impl DockPanel {
   }
 
   fn delete_file_entry(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-    let select_after_delete = self
+    let deleted_path = self
       .project_root
       .as_ref()
       .and_then(|root| path.strip_prefix(root).ok())
+      .map(Path::to_path_buf);
+    let select_after_delete = deleted_path
+      .as_deref()
       .and_then(|relative_path| self.files_selection_after_delete(relative_path, cx));
     self.run_file_operation_after_success(
       "Deleting failed",
@@ -2207,8 +2222,11 @@ impl DockPanel {
         }
         Ok(())
       },
-      move |this, _| {
+      move |this, cx| {
         this.files_reveal_path_when_loaded = select_after_delete;
+        if let Some(path) = deleted_path {
+          cx.emit(DockPanelEvent::FileDeleted { path });
+        }
       },
       cx,
     );

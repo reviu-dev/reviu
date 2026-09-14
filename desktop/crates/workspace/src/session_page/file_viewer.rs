@@ -96,6 +96,100 @@ fn worktree_file_modified(path: &Path) -> Option<SystemTime> {
     .ok()
 }
 
+fn renamed_relative_path(path: &Path, old_path: &Path, new_path: &Path) -> Option<PathBuf> {
+  if path == old_path {
+    return Some(new_path.to_path_buf());
+  }
+  path
+    .strip_prefix(old_path)
+    .ok()
+    .map(|suffix| new_path.join(suffix))
+}
+
+fn renamed_center_tab(tab: &CenterTab, old_path: &Path, new_path: &Path) -> Option<CenterTab> {
+  if !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) || tab.snapshot.is_some() {
+    return None;
+  }
+  let path = renamed_relative_path(tab.path()?, old_path, new_path)?;
+  let mut tab = tab.clone();
+  tab.path = Some(path);
+  Some(tab)
+}
+
+fn center_tab_path_is_self_or_descendant(tab: &CenterTab, path: &Path) -> bool {
+  matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
+    && tab.snapshot.is_none()
+    && tab.path().is_some_and(|tab_path| {
+      tab_path == path
+        || tab_path
+          .strip_prefix(path)
+          .is_ok_and(|suffix| !suffix.as_os_str().is_empty())
+    })
+}
+
+fn deduplicate_center_tabs(tabs: &mut Vec<CenterTab>) {
+  let mut seen = HashSet::new();
+  tabs.retain(|tab| seen.insert(tab.clone()));
+}
+
+fn replace_center_tabs(tabs: &mut Vec<CenterTab>, old_tab: &CenterTab, new_tab: &CenterTab) {
+  for tab in tabs.iter_mut() {
+    if tab == old_tab {
+      *tab = new_tab.clone();
+    }
+  }
+  deduplicate_center_tabs(tabs);
+}
+
+fn replace_center_tab_option(
+  tab: &mut Option<CenterTab>,
+  old_tab: &CenterTab,
+  new_tab: &CenterTab,
+) {
+  if tab.as_ref() == Some(old_tab) {
+    *tab = Some(new_tab.clone());
+  }
+}
+
+fn replace_center_layouts(
+  layouts: &mut HashMap<CenterTab, CenterLayout>,
+  old_tab: &CenterTab,
+  new_tab: &CenterTab,
+) {
+  let old_layouts = std::mem::take(layouts);
+  for (tab, mut layout) in old_layouts {
+    layout.replace_tab(old_tab, new_tab);
+    let tab = if tab == *old_tab {
+      new_tab.clone()
+    } else {
+      tab
+    };
+    layouts.insert(tab, layout);
+  }
+}
+
+fn update_editor_state_path(
+  state: &mut CenterEditorState,
+  checkout_root: Option<&Path>,
+  cx: &mut Context<SessionPage>,
+) {
+  let Some(checkout_root) = checkout_root else {
+    return;
+  };
+  let file_path = checkout_root.join(&state.selected_file);
+  state.file_modified = worktree_file_modified(&file_path);
+  if let Some(editor) = state.editor.clone() {
+    let repo_file = git::RepoFile::new(checkout_root, &file_path).ok();
+    editor.update(cx, |editor, _| {
+      editor.workdir_path = file_path;
+      editor.git_store = repo_file
+        .as_ref()
+        .map(|repo_file| git::GitStore::new(repo_file.repo_root.clone()));
+      editor.repo_file = repo_file;
+    });
+  }
+}
+
 #[derive(Clone, Copy)]
 enum RestoredEditorReview {
   None,
@@ -400,6 +494,123 @@ impl SessionPage {
     self.open_file_task = Some(task);
     self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
+  }
+
+  pub(super) fn handle_file_renamed(
+    &mut self,
+    old_path: &Path,
+    new_path: &Path,
+    cx: &mut Context<Self>,
+  ) {
+    let replacements = self.renamed_center_tab_replacements(old_path, new_path);
+    if replacements.is_empty() {
+      return;
+    }
+
+    let checkout_root = self.checkout_root(cx);
+    for (old_tab, new_tab) in &replacements {
+      replace_center_tabs(&mut self.center_tabs, old_tab, new_tab);
+      replace_center_tabs(&mut self.center_tab_history, old_tab, new_tab);
+      replace_center_tab_option(&mut self.active_center_tab, old_tab, new_tab);
+      replace_center_tab_option(&mut self.editor_tab, old_tab, new_tab);
+      self.center_layout.replace_tab(old_tab, new_tab);
+      replace_center_layouts(&mut self.center_layouts_by_tab, old_tab, new_tab);
+      if let Some(checkout_root) = &self.synced_checkout
+        && let Some(tabs) = self.center_tabs_by_checkout.get_mut(checkout_root)
+      {
+        replace_center_tabs(tabs, old_tab, new_tab);
+      }
+      if let Some(checkout_root) = &self.synced_checkout
+        && let Some(tab) = self.center_active_tab_by_checkout.get_mut(checkout_root)
+        && tab == old_tab
+      {
+        *tab = new_tab.clone();
+      }
+    }
+
+    self.rename_editor_states(old_path, new_path, checkout_root.as_deref(), cx);
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    self.persist_current_center_workspace(cx);
+    cx.notify();
+  }
+
+  pub(super) fn handle_file_deleted(
+    &mut self,
+    path: &Path,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tabs = self
+      .center_tabs_for_navigation()
+      .into_iter()
+      .filter(|tab| center_tab_path_is_self_or_descendant(tab, path))
+      .collect::<Vec<_>>();
+    for tab in tabs {
+      self.close_center_tab_without_unsaved_prompt(tab, window, cx);
+    }
+  }
+
+  fn renamed_center_tab_replacements(
+    &self,
+    old_path: &Path,
+    new_path: &Path,
+  ) -> Vec<(CenterTab, CenterTab)> {
+    let mut tabs = self.center_tabs_for_navigation();
+    tabs.extend(self.center_tab_history.clone());
+    tabs.extend(self.editor_states.keys().cloned());
+    tabs.extend(self.center_layouts_by_tab.keys().cloned());
+    for layout in self.center_layouts_by_tab.values() {
+      tabs.extend(layout.tabs());
+    }
+    if let Some(tab) = &self.active_center_tab {
+      tabs.push(tab.clone());
+    }
+    if let Some(tab) = &self.editor_tab {
+      tabs.push(tab.clone());
+    }
+    if let Some(checkout_root) = &self.synced_checkout {
+      if let Some(checkout_tabs) = self.center_tabs_by_checkout.get(checkout_root) {
+        tabs.extend(checkout_tabs.clone());
+      }
+      if let Some(tab) = self.center_active_tab_by_checkout.get(checkout_root) {
+        tabs.push(tab.clone());
+      }
+    }
+
+    let mut replacements = Vec::new();
+    for tab in tabs {
+      let Some(new_tab) = renamed_center_tab(&tab, old_path, new_path) else {
+        continue;
+      };
+      if tab != new_tab && !replacements.iter().any(|(old, _)| old == &tab) {
+        replacements.push((tab, new_tab));
+      }
+    }
+    replacements
+  }
+
+  fn rename_editor_states(
+    &mut self,
+    old_path: &Path,
+    new_path: &Path,
+    checkout_root: Option<&Path>,
+    cx: &mut Context<Self>,
+  ) {
+    let states = std::mem::take(&mut self.editor_states);
+    self.editor_states = states
+      .into_iter()
+      .map(|(tab, mut state)| {
+        let new_tab = renamed_center_tab(&tab, old_path, new_path).unwrap_or(tab);
+        if let Some(selected_file) = renamed_relative_path(&state.selected_file, old_path, new_path)
+        {
+          state.selected_file = selected_file;
+          if state.opened_snapshot.is_none() {
+            update_editor_state_path(&mut state, checkout_root, cx);
+          }
+        }
+        (new_tab, state)
+      })
+      .collect();
   }
 
   pub(super) fn restore_visible_center_editors(&mut self, cx: &mut Context<Self>) {
@@ -2770,6 +2981,93 @@ mod tests {
           CenterTab::diff(PathBuf::from("README.md")),
           CenterTab::diff(PathBuf::from("other.md"))
         ]
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn renaming_an_open_file_updates_the_center_tab(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-open-file-rename");
+    commit_text_file(&repo.path, Path::new("test.htm"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("test.htm"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    std::fs::rename(repo.path.join("test.htm"), repo.path.join("test.html"))
+      .expect("rename fixture");
+
+    page.update(cx, |page, cx| {
+      page.handle_file_renamed(Path::new("test.htm"), Path::new("test.html"), cx);
+    });
+
+    page.read_with(cx, |page, cx| {
+      let new_tab = CenterTab::file(PathBuf::from("test.html"));
+      assert_eq!(page.active_center_tab.as_ref(), Some(&new_tab));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("test.html")));
+      assert!(page.center_tabs.contains(&new_tab));
+      assert!(
+        !page
+          .center_tabs
+          .contains(&CenterTab::file(PathBuf::from("test.htm")))
+      );
+      let editor = page.warm_editor().expect("open editor");
+      assert_eq!(editor.read(cx).workdir_path, repo.path.join("test.html"));
+    });
+  }
+
+  #[gpui::test]
+  async fn deleting_an_open_file_closes_the_center_tab(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-open-file-delete");
+    commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "a");
+    commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "b");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("a.txt"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("b.txt"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    std::fs::remove_file(repo.path.join("b.txt")).expect("delete fixture");
+
+    page.update_in(cx, |page, window, cx| {
+      page.handle_file_deleted(Path::new("b.txt"), window, cx);
+    });
+
+    page.read_with(cx, |page, _| {
+      assert!(
+        !page
+          .center_tabs
+          .contains(&CenterTab::file(PathBuf::from("b.txt")))
+      );
+      assert_eq!(
+        page.active_center_tab,
+        Some(CenterTab::file(PathBuf::from("a.txt")))
       );
     });
   }

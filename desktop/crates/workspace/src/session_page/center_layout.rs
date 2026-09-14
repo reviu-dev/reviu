@@ -139,6 +139,17 @@ impl CenterPane {
     self.active_surface = surface;
   }
 
+  fn replace_tab(&mut self, old_tab: &CenterTab, new_tab: &CenterTab) {
+    for surface in &mut self.surfaces {
+      if surface.tab() == old_tab {
+        *surface = CenterSurface::from_tab(new_tab.clone());
+      }
+    }
+    if self.active_surface.tab() == old_tab {
+      self.active_surface = CenterSurface::from_tab(new_tab.clone());
+    }
+  }
+
   fn set_active_surface(&mut self, surface: CenterSurface) {
     self.add_surface(surface);
   }
@@ -265,6 +276,16 @@ impl CenterNode {
     match self {
       Self::Pane(pane) => pane.contains_tab(tab),
       Self::Split(split) => split.first.contains_tab(tab) || split.second.contains_tab(tab),
+    }
+  }
+
+  fn replace_tab(&mut self, old_tab: &CenterTab, new_tab: &CenterTab) {
+    match self {
+      Self::Pane(pane) => pane.replace_tab(old_tab, new_tab),
+      Self::Split(split) => {
+        split.first.replace_tab(old_tab, new_tab);
+        split.second.replace_tab(old_tab, new_tab);
+      }
     }
   }
 
@@ -728,6 +749,13 @@ impl CenterLayout {
 
   pub(super) fn contains_tab(&self, tab: &CenterTab) -> bool {
     self.root.contains_tab(tab)
+  }
+
+  pub(super) fn replace_tab(&mut self, old_tab: &CenterTab, new_tab: &CenterTab) {
+    self.root.replace_tab(old_tab, new_tab);
+    if &self.active_tab == old_tab {
+      self.active_tab = new_tab.clone();
+    }
   }
 
   pub(super) fn tabs(&self) -> Vec<CenterTab> {
