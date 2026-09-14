@@ -381,7 +381,10 @@ pub(crate) fn checkpoint_ref_before(items: &[ChatItem], idx: usize) -> Option<St
 pub(crate) fn hiding_turn_summary(items: &[ChatItem], idx: usize) -> Option<usize> {
   match items.get(idx)? {
     ChatItem::Message(m) if !matches!(m.role, ChatRole::Agent) => return None,
-    ChatItem::Checkpoint(_) | ChatItem::Compaction(_) | ChatItem::TurnSummary(_) => return None,
+    ChatItem::BlockedTurn(_)
+    | ChatItem::Checkpoint(_)
+    | ChatItem::Compaction(_)
+    | ChatItem::TurnSummary(_) => return None,
     _ => {}
   }
   let mut trailing_prose = matches!(
@@ -396,7 +399,11 @@ pub(crate) fn hiding_turn_summary(items: &[ChatItem], idx: usize) -> Option<usiz
       Some(ChatItem::TurnSummary(_)) => break,
       Some(ChatItem::Message(m)) if m.role == ChatRole::Agent => {}
       // A turn boundary before any card: this turn has no summary to fold into.
-      Some(ChatItem::Checkpoint(_)) | Some(ChatItem::Message(_)) => return None,
+      Some(ChatItem::BlockedTurn(_))
+      | Some(ChatItem::Checkpoint(_))
+      | Some(ChatItem::Message(_)) => {
+        return None;
+      }
       // Work after this item disqualifies it from the trailing answer.
       Some(_) => trailing_prose = false,
     }
@@ -410,7 +417,8 @@ pub(crate) fn folded_work_indices(items: &[ChatItem], summary_idx: usize) -> Vec
     .take_while(|&i| {
       !matches!(
         items.get(i),
-        Some(ChatItem::Checkpoint(_))
+        Some(ChatItem::BlockedTurn(_))
+          | Some(ChatItem::Checkpoint(_))
           | Some(ChatItem::TurnSummary(_))
           | Some(ChatItem::Message(ChatMessage {
             role: ChatRole::User | ChatRole::ReviewExport | ChatRole::System,

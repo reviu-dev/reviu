@@ -25,7 +25,7 @@ fn turn_produced_reply(items: &[ChatItem]) -> bool {
       | ChatItem::Compaction(_) => {
         return true;
       }
-      ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => {}
+      ChatItem::BlockedTurn(_) | ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => {}
     }
   }
   true
@@ -335,12 +335,21 @@ impl AgentChatPanel {
       return false;
     }
     if !self.turn_gate.can_start(&self.cwd, &self.current_conv.id) {
-      self.items.push(ChatItem::Message(ChatMessage {
-        role: ChatRole::System,
-        text: "Another session is running. Wait for it to finish.".into(),
-        images: 0,
-        image_data: Vec::new(),
-      }));
+      let conversation_id = self
+        .turn_gate
+        .holder(&self.cwd)
+        .unwrap_or_else(|| "unknown".to_string());
+      let blocked = BlockedTurnView {
+        conversation_id,
+        draft: text,
+      };
+      if matches!(self.items.last(), Some(ChatItem::BlockedTurn(_))) {
+        if let Some(ChatItem::BlockedTurn(previous)) = self.items.last_mut() {
+          *previous = blocked;
+        }
+      } else {
+        self.items.push(ChatItem::BlockedTurn(blocked));
+      }
       self.sync_list_count();
       cx.notify();
       return false;
@@ -348,6 +357,9 @@ impl AgentChatPanel {
     let Some(session) = self.session.clone() else {
       return false;
     };
+    if matches!(self.items.last(), Some(ChatItem::BlockedTurn(_))) {
+      self.items.pop();
+    }
 
     // Chunks that trailed in after the previous turn keep their place
     // ahead of the new prompt instead of being wiped.

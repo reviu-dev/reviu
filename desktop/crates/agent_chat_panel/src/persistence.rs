@@ -92,7 +92,7 @@ fn chat_item_has_persistable_content(item: &ChatItem) -> bool {
     ChatItem::Compaction(compaction) => {
       !compaction.summary.trim().is_empty() || compaction.error.is_some()
     }
-    ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => false,
+    ChatItem::BlockedTurn(_) | ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => false,
   }
 }
 

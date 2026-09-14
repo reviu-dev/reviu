@@ -34,6 +34,7 @@ pub(super) enum UnsavedEditorAction {
   NewWorktreeSessionIn {
     repo_root: PathBuf,
     base: Option<String>,
+    draft: Option<String>,
   },
   SetFallbackRepo {
     repo_root: PathBuf,
@@ -2354,9 +2355,11 @@ impl SessionPage {
         window,
         cx,
       ),
-      UnsavedEditorAction::NewWorktreeSessionIn { repo_root, base } => {
-        self.new_worktree_session_in_without_unsaved_prompt(repo_root, base, window, cx)
-      }
+      UnsavedEditorAction::NewWorktreeSessionIn {
+        repo_root,
+        base,
+        draft,
+      } => self.new_worktree_session_in_without_unsaved_prompt(repo_root, base, draft, window, cx),
       UnsavedEditorAction::SetFallbackRepo { repo_root } => {
         if let Err(error) = self.set_fallback_repo_without_unsaved_prompt(repo_root, window, cx) {
           window.push_notification(Notification::warning(error), cx);

@@ -408,6 +408,13 @@ impl SessionPage {
           this.notify_agent_attention("Reviu agent failed", Some(panel), window, cx);
           this.refresh_session_list(cx);
         }
+        AgentChatPanelEvent::OpenConversationRequested { conversation_id } => {
+          this.select_session(conversation_id, window, cx);
+        }
+        AgentChatPanelEvent::NewWorktreeSessionRequested { draft } => {
+          let repo_root = panel.read(cx).project_root().to_path_buf();
+          this.new_worktree_session_in_with_draft(repo_root, None, Some(draft.clone()), window, cx);
+        }
         AgentChatPanelEvent::CloseRequested => {
           let tab = Self::chat_tab_for_panel(panel, cx);
           this.close_center_surface(tab, window, cx);
@@ -1395,19 +1402,47 @@ impl SessionPage {
   ) {
     if self.editor_is_dirty(cx) {
       self.open_unsaved_editor_dialog(
-        UnsavedEditorAction::NewWorktreeSessionIn { repo_root, base },
+        UnsavedEditorAction::NewWorktreeSessionIn {
+          repo_root,
+          base,
+          draft: None,
+        },
         window,
         cx,
       );
       return;
     }
-    self.new_worktree_session_in_without_unsaved_prompt(repo_root, base, window, cx);
+    self.new_worktree_session_in_with_draft(repo_root, base, None, window, cx);
+  }
+
+  pub(super) fn new_worktree_session_in_with_draft(
+    &mut self,
+    repo_root: PathBuf,
+    base: Option<String>,
+    draft: Option<String>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.editor_is_dirty(cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::NewWorktreeSessionIn {
+          repo_root,
+          base,
+          draft,
+        },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.new_worktree_session_in_without_unsaved_prompt(repo_root, base, draft, window, cx);
   }
 
   pub(super) fn new_worktree_session_in_without_unsaved_prompt(
     &mut self,
     repo_root: PathBuf,
     base: Option<String>,
+    draft: Option<String>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -1440,7 +1475,12 @@ impl SessionPage {
               window,
               cx,
             );
-            view.update(cx, |panel, _| panel.set_active_conversation(true));
+            view.update(cx, |panel, cx| {
+              panel.set_active_conversation(true);
+              if let Some(draft) = draft.clone().filter(|draft| !draft.trim().is_empty()) {
+                panel.set_composer_text(draft, window, cx);
+              }
+            });
             let conversation_id = view.read(cx).current_conversation().id.clone();
             this.agent_chat_view = Some(view);
             this.remember_active_chat_tab(cx);
@@ -3066,6 +3106,7 @@ mod tests {
         UnsavedEditorAction::NewWorktreeSessionIn {
           repo_root: repo.path.clone(),
           base: None,
+          draft: None,
         },
         window,
         cx,
@@ -3305,6 +3346,40 @@ mod tests {
     if let Ok(root) = git::worktrees_root_for(repo_root) {
       let _ = std::fs::remove_dir_all(root);
     }
+  }
+
+  #[gpui::test]
+  async fn a_worktree_session_starts_with_a_blocked_draft(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-worktree-draft", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in_with_draft(
+        repo.path.clone(),
+        None,
+        Some("keep this prompt".to_string()),
+        window,
+        cx,
+      )
+    });
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    let conversation_id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    let draft = page.read_with(cx, |page, cx| {
+      page
+        .chat_store
+        .as_ref()
+        .expect("store")
+        .read(cx)
+        .draft(&conversation_id)
+        .expect("draft")
+    });
+    assert_eq!(draft, "keep this prompt");
+    panel.read_with(cx, |panel, cx| {
+      assert!(panel.has_unsent_prompt(cx));
+      assert_ne!(panel.cwd(), repo.path.as_path());
+    });
+    cleanup_worktrees_root(&repo.path);
   }
 
   #[gpui::test]

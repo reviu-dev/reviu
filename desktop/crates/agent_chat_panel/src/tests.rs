@@ -1312,11 +1312,11 @@ async fn the_turn_gate_refuses_a_second_concurrent_turn(cx: &mut gpui::TestAppCo
   panel.update(cx, |panel, cx| {
     let dispatched = panel.dispatch_prompt("hello".to_string(), cx);
     assert!(!dispatched, "the gate blocks a turn while another runs");
-    let ChatItem::Message(m) = panel.items.last().expect("a system message") else {
-      panic!("message expected");
+    let ChatItem::BlockedTurn(blocked) = panel.items.last().expect("a blocked turn card") else {
+      panic!("blocked turn expected");
     };
-    assert!(matches!(m.role, ChatRole::System));
-    assert!(m.text.contains("Another session is running"));
+    assert_eq!(blocked.conversation_id, "some-other-conversation");
+    assert_eq!(blocked.draft, "hello");
   });
 
   gate.release(Path::new("."), "some-other-conversation");
@@ -1743,10 +1743,11 @@ async fn a_submit_blocked_by_the_gate_keeps_the_composer_text(cx: &mut gpui::Tes
       "my prompt",
       "a blocked submit must not swallow what was typed"
     );
-    let ChatItem::Message(m) = panel.items.last().expect("a system message") else {
-      panic!("message expected");
+    let ChatItem::BlockedTurn(blocked) = panel.items.last().expect("a blocked turn card") else {
+      panic!("blocked turn expected");
     };
-    assert!(m.text.contains("Another session is running"));
+    assert_eq!(blocked.conversation_id, "the-busy-conversation");
+    assert_eq!(blocked.draft, "my prompt");
   });
 }
 
@@ -4167,6 +4168,7 @@ fn item_kinds(items: &[ChatItem]) -> Vec<&'static str> {
       ChatItem::Plan(_) => "plan",
       ChatItem::Permission(_) => "permission",
       ChatItem::Compaction(_) => "compaction",
+      ChatItem::BlockedTurn(_) => "blocked-turn",
       ChatItem::Checkpoint(_) => "checkpoint",
       ChatItem::TurnSummary(_) => "turn-summary",
     })

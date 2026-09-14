@@ -64,6 +64,87 @@ fn usage_context_color(usage: &UsageSnapshot, theme: &gpui_component::Theme) -> 
   }
 }
 
+fn render_blocked_turn(
+  idx: usize,
+  blocked: &BlockedTurnView,
+  theme: &gpui_component::Theme,
+  cx: &mut Context<AgentChatPanel>,
+) -> gpui::AnyElement {
+  let conversation_id = blocked.conversation_id.clone();
+  let draft = blocked.draft.clone();
+  h_flex()
+    .debug_selector(|| "agent-chat-blocked-turn".to_string())
+    .items_start()
+    .gap_2()
+    .px_3()
+    .py_2()
+    .rounded(theme.radius)
+    .border_1()
+    .border_color(theme.warning.opacity(0.4))
+    .bg(theme.warning.opacity(0.08))
+    .child(
+      gpui_component::Icon::new(UiIconName::GitBranch)
+        .size_4()
+        .text_color(theme.warning),
+    )
+    .child(
+      v_flex()
+        .flex_1()
+        .min_w(px(0.0))
+        .gap_2()
+        .child(
+          v_flex()
+            .gap_0p5()
+            .child(
+              div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.foreground)
+                .child("Another session is running"),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Open the running chat or continue this prompt in a new worktree."),
+            ),
+        )
+        .child(
+          h_flex()
+            .gap_1()
+            .flex_wrap()
+            .child(
+              Button::new(("agent-chat-open-running-session", idx))
+                .label("Open running session")
+                .xsmall()
+                .primary()
+                .on_click(cx.listener(move |_, _, _, cx| {
+                  cx.emit(AgentChatPanelEvent::OpenConversationRequested {
+                    conversation_id: conversation_id.clone(),
+                  });
+                })),
+            )
+            .child(
+              Button::new(("agent-chat-new-worktree-session", idx))
+                .label("Continue in new worktree")
+                .xsmall()
+                .outline()
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                  let current = panel.input.read(cx).value().trim().to_string();
+                  cx.emit(AgentChatPanelEvent::NewWorktreeSessionRequested {
+                    draft: if current.is_empty() {
+                      draft.clone()
+                    } else {
+                      current
+                    },
+                  });
+                })),
+            ),
+        ),
+    )
+    .into_any_element()
+}
+
 fn render_usage_tooltip(usage: UsageSnapshot, cx: &mut App) -> gpui::AnyElement {
   let theme = cx.theme().clone();
   let context_value = usage
@@ -3632,7 +3713,8 @@ impl AgentChatPanel {
           ChatItem::Message(ChatMessage {
             role: ChatRole::User | ChatRole::ReviewExport,
             ..
-          }) | ChatItem::Checkpoint(_)
+          }) | ChatItem::BlockedTurn(_)
+            | ChatItem::Checkpoint(_)
             | ChatItem::Compaction(_)
         )
       })
@@ -4064,6 +4146,12 @@ impl AgentChatPanel {
         } else {
           theme.muted_foreground
         },
+        is_last_row,
+      ),
+      ChatItem::BlockedTurn(blocked) => timeline_row_with_color(
+        render_blocked_turn(idx, blocked, theme, cx),
+        theme,
+        theme.warning,
         is_last_row,
       ),
       ChatItem::Thought(t) => {

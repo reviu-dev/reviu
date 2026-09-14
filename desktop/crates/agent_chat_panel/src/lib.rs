@@ -508,8 +508,15 @@ enum ChatItem {
   Plan(PlanView),
   Thought(ThoughtView),
   Compaction(CompactionView),
+  BlockedTurn(BlockedTurnView),
   Checkpoint(CheckpointMarker),
   TurnSummary(TurnSummaryView),
+}
+
+#[derive(Clone, Debug)]
+struct BlockedTurnView {
+  conversation_id: String,
+  draft: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -824,6 +831,10 @@ impl TurnGate {
     }
   }
 
+  fn holder(&self, checkout: &Path) -> Option<String> {
+    self.0.borrow().get(&Self::key(checkout)).cloned()
+  }
+
   fn acquire(&self, checkout: &Path, conversation_id: &str) {
     self
       .0
@@ -879,6 +890,10 @@ pub enum AgentChatPanelEvent {
   TitleSettled { title: String },
   /// The turn died on an error; `message` is the short human line.
   TurnFailed { message: String },
+  /// User asked the host to show the session holding this checkout.
+  OpenConversationRequested { conversation_id: String },
+  /// User asked to move the blocked draft to an isolated worktree session.
+  NewWorktreeSessionRequested { draft: String },
   /// User asked the host to hide the chat pane.
   CloseRequested,
   /// User asked the host to rearrange the split pane holding this chat.
@@ -3272,6 +3287,13 @@ impl AgentChatPanel {
     !self.input.read(cx).value().trim().is_empty() || !self.staged_images.is_empty()
   }
 
+  pub fn set_composer_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+    self.reset_composer_history();
+    self.set_composer_value(&text, window, cx);
+    self.schedule_draft_save(cx);
+    cx.notify();
+  }
+
   /// A panel is parked when nothing live would be lost by dropping it.
   pub fn is_parked(&self) -> bool {
     !self.in_flight && self.queued_prompts.is_empty() && self.loading_conversation.is_none()
@@ -3495,15 +3517,16 @@ impl AgentChatPanel {
     let persisted: Vec<PersistedChatItem> = self
       .items
       .iter()
-      .map(|item| match item {
-        ChatItem::Message(m) => PersistedChatItem::Message(m.clone()),
-        ChatItem::Tool(t) => PersistedChatItem::Tool(t.clone()),
-        ChatItem::Plan(p) => PersistedChatItem::Plan(p.clone()),
-        ChatItem::Thought(t) => PersistedChatItem::Thought(t.clone()),
-        ChatItem::Compaction(c) => PersistedChatItem::Compaction(c.clone()),
-        ChatItem::Checkpoint(c) => PersistedChatItem::Checkpoint(c.clone()),
-        ChatItem::Permission(p) => PersistedChatItem::Permission(p.clone()),
-        ChatItem::TurnSummary(s) => PersistedChatItem::TurnSummary(s.clone()),
+      .filter_map(|item| match item {
+        ChatItem::Message(m) => Some(PersistedChatItem::Message(m.clone())),
+        ChatItem::Tool(t) => Some(PersistedChatItem::Tool(t.clone())),
+        ChatItem::Plan(p) => Some(PersistedChatItem::Plan(p.clone())),
+        ChatItem::Thought(t) => Some(PersistedChatItem::Thought(t.clone())),
+        ChatItem::Compaction(c) => Some(PersistedChatItem::Compaction(c.clone())),
+        ChatItem::Checkpoint(c) => Some(PersistedChatItem::Checkpoint(c.clone())),
+        ChatItem::Permission(p) => Some(PersistedChatItem::Permission(p.clone())),
+        ChatItem::TurnSummary(s) => Some(PersistedChatItem::TurnSummary(s.clone())),
+        ChatItem::BlockedTurn(_) => None,
       })
       .collect();
     Some(SaveRequest {
