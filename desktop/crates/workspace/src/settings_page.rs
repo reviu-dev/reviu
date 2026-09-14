@@ -156,6 +156,9 @@ impl SettingsPage {
         cx.refresh_windows();
       },
     );
+    let persisted_settings_subscription = cx.observe_global::<PersistedSettings>(|this, cx| {
+      this.sync_persisted_settings(PersistedSettings::get(cx), cx);
+    });
 
     Self {
       focus_handle: cx.focus_handle(),
@@ -177,8 +180,35 @@ impl SettingsPage {
       _subscriptions: vec![
         shortcut_capture_subscription,
         default_agent_select_subscription,
+        persisted_settings_subscription,
       ],
     }
+  }
+
+  fn sync_persisted_settings(&mut self, settings: PersistedSettings, cx: &mut Context<Self>) {
+    let changed = self.auto_switch_theme != settings.auto_switch_theme
+      || self.indent_rainbow != settings.indent_rainbow
+      || self.git_unified_file_view != settings.git_unified_file_view
+      || self.split_diff_view != settings.split_diff_view
+      || self.hide_whitespace != settings.hide_whitespace
+      || self.files_show_gitignored != settings.files_show_gitignored
+      || self.files_show_hidden != settings.files_show_hidden
+      || self.menu_bar_icon != settings.menu_bar_icon
+      || self.analytics_enabled != settings.analytics_enabled;
+    if !changed {
+      return;
+    }
+
+    self.auto_switch_theme = settings.auto_switch_theme;
+    self.indent_rainbow = settings.indent_rainbow;
+    self.git_unified_file_view = settings.git_unified_file_view;
+    self.split_diff_view = settings.split_diff_view;
+    self.hide_whitespace = settings.hide_whitespace;
+    self.files_show_gitignored = settings.files_show_gitignored;
+    self.files_show_hidden = settings.files_show_hidden;
+    self.menu_bar_icon = settings.menu_bar_icon;
+    self.analytics_enabled = settings.analytics_enabled;
+    cx.notify();
   }
 
   fn default_agent_options(enabled_agents: &[agent_registry::AgentId]) -> Vec<AgentSelectOption> {
@@ -1073,6 +1103,33 @@ mod tests {
       gpui_component::Root::new(host, window, cx)
     });
     cx
+  }
+
+  #[gpui::test]
+  async fn settings_dialog_tracks_persisted_settings_updates(cx: &mut TestAppContext) {
+    let cx = dialog_host(cx);
+    cx.update(open_settings_dialog);
+    cx.run_until_parked();
+    let view = cx.update(|_, cx| {
+      cx.global::<SettingsDialogState>()
+        .view
+        .as_ref()
+        .expect("settings view")
+        .clone()
+    });
+
+    cx.update(|_, cx| {
+      let mut settings = PersistedSettings::get(cx);
+      settings.files_show_gitignored = false;
+      settings.files_show_hidden = false;
+      cx.set_global(settings);
+    });
+    cx.run_until_parked();
+
+    view.read_with(cx, |view, _| {
+      assert!(!view.files_show_gitignored);
+      assert!(!view.files_show_hidden);
+    });
   }
 
   #[gpui::test]
