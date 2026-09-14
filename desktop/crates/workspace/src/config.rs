@@ -1751,7 +1751,7 @@ mod tests {
     "command_usages",
     "analytics_meta",
     "merge_methods",
-    "terminal_workspaces",
+    "center_workspaces",
   ];
 
   const LEGACY_PROJECT_TABLES: &[&str] = &[
