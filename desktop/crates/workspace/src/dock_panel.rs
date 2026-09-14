@@ -32,7 +32,7 @@ use crate::file_tree::build_project_tree_items_with_expansion;
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
-use crate::project_files::{ProjectEntry, list_project_entries};
+use crate::project_files::{ProjectEntry, ProjectScanOptions, list_project_entries_with_options};
 use crate::pull_request_refresh::{
   PullRequestRefresh, branch_switched_since_lookup, should_read_pull_request,
 };
@@ -61,6 +61,7 @@ const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
 const DOCK_PANEL_CHANGES_SUMMARY_DEBUG_SELECTOR: &str = "dock-panel-changes-summary";
 const DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR: &str = "dock-panel-changes-action";
 const DOCK_PANEL_CHANGES_ACTION_MENU_DEBUG_SELECTOR: &str = "dock-panel-changes-action-menu";
+const DOCK_PANEL_FILES_ACTION_MENU_DEBUG_SELECTOR: &str = "dock-panel-files-action-menu";
 const DOCK_PANEL_HEADER_HEIGHT_PX: f32 = 36.0;
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
 const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
@@ -1084,6 +1085,9 @@ pub struct DockPanel {
   files_context_menu_target: Option<FilesContextTarget>,
   files_inline_rename: Option<FilesInlineRename>,
   files_loaded: bool,
+  files_file_count: usize,
+  files_include_gitignored: bool,
+  files_include_hidden: bool,
   /// The tab was opened before its tree existed: focus it as soon as it does.
   focus_files_tree_when_loaded: bool,
   files_loading: bool,
@@ -1350,6 +1354,9 @@ impl DockPanel {
       files_context_menu_target: None,
       files_inline_rename: None,
       files_loaded: false,
+      files_file_count: 0,
+      files_include_gitignored: true,
+      files_include_hidden: true,
       focus_files_tree_when_loaded: false,
       files_loading: false,
       files_load_generation: 0,
@@ -1385,10 +1392,17 @@ impl DockPanel {
     let load_generation = self.files_load_generation;
     let repo_root = self.repo_root.clone();
     let load_project_root = project_root.clone();
+    let scan_options = ProjectScanOptions {
+      include_gitignored: self.files_include_gitignored,
+      include_hidden: self.files_include_hidden,
+      ..ProjectScanOptions::default()
+    };
 
     let task = cx.spawn(async move |this, cx| {
       let files = cx
-        .background_spawn(async move { list_project_entries(&load_project_root) })
+        .background_spawn(async move {
+          list_project_entries_with_options(&load_project_root, &scan_options)
+        })
         .await;
       let _ = this.update(cx, |this, cx| {
         if this.project_root.as_deref() != Some(project_root.as_path())
@@ -1399,6 +1413,7 @@ impl DockPanel {
         }
         this.files_loading = false;
         if let Ok(files) = files {
+          this.files_file_count = files.iter().filter(|entry| entry.is_file()).count();
           let entries = files.into_iter().map(Rc::new).collect::<Vec<_>>();
           let expanded = expanded_folder_paths.unwrap_or_else(|| {
             if this.files_loaded {
@@ -3522,6 +3537,7 @@ impl DockPanel {
     let commit_message_draft = repo_changed.then(|| self.current_commit_message_draft());
     if project_changed {
       self.files_loaded = false;
+      self.files_file_count = 0;
       self.files_loading = false;
       self.files_load_generation = self.files_load_generation.wrapping_add(1);
       self._files_task = None;
@@ -3909,6 +3925,82 @@ impl DockPanel {
       .into_any_element()
   }
 
+  fn toggle_files_include_gitignored(&mut self, cx: &mut Context<Self>) {
+    self.files_include_gitignored = !self.files_include_gitignored;
+    self.reload_project_files_for_scan_options(cx);
+  }
+
+  fn toggle_files_include_hidden(&mut self, cx: &mut Context<Self>) {
+    self.files_include_hidden = !self.files_include_hidden;
+    self.reload_project_files_for_scan_options(cx);
+  }
+
+  fn reload_project_files_for_scan_options(&mut self, cx: &mut Context<Self>) {
+    let expanded = self
+      .files_loaded
+      .then(|| self.current_files_expanded_paths(cx));
+    self.files_loaded = false;
+    self.files_file_count = 0;
+    self.files_loading = false;
+    self._files_task = None;
+    self.load_project_files_with_expansion(expanded, cx);
+    cx.notify();
+  }
+
+  fn render_files_action_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    let include_gitignored = self.files_include_gitignored;
+    let include_hidden = self.files_include_hidden;
+    let view = cx.entity();
+
+    Button::new("dock-panel-files-action-menu")
+      .icon(IconName::EllipsisVertical)
+      .debug_selector(|| DOCK_PANEL_FILES_ACTION_MENU_DEBUG_SELECTOR.to_string())
+      .ghost()
+      .compact()
+      .xsmall()
+      .tooltip("Files actions")
+      .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+        let gitignored_view = view.clone();
+        let hidden_view = view.clone();
+        menu
+          .item(
+            PopupMenuItem::new(if include_gitignored {
+              "Hide Gitignored Files"
+            } else {
+              "Show Gitignored Files"
+            })
+            .icon(if include_gitignored {
+              IconName::EyeOff
+            } else {
+              IconName::Eye
+            })
+            .on_click(move |_, _, cx| {
+              gitignored_view.update(cx, |panel, cx| {
+                panel.toggle_files_include_gitignored(cx);
+              });
+            }),
+          )
+          .item(
+            PopupMenuItem::new(if include_hidden {
+              "Hide Hidden Files"
+            } else {
+              "Show Hidden Files"
+            })
+            .icon(if include_hidden {
+              IconName::EyeOff
+            } else {
+              IconName::Eye
+            })
+            .on_click(move |_, _, cx| {
+              hidden_view.update(cx, |panel, cx| {
+                panel.toggle_files_include_hidden(cx);
+              });
+            }),
+          )
+      })
+      .into_any_element()
+  }
+
   /// Opens a tab and gives it focus, loading what that tab needs the first time.
   pub(crate) fn open_tab(
     &mut self,
@@ -4028,10 +4120,11 @@ impl DockPanel {
         .update(cx, |tree, cx| tree.focus(window, cx));
     }
 
+    if self.project_root.is_none() {
+      return self.render_empty_state(cx);
+    }
+
     if !self.files_loaded {
-      if self.project_root.is_none() {
-        return self.render_empty_state(cx);
-      }
       if !self.files_loading {
         self.load_project_files(cx);
       }
@@ -5312,18 +5405,25 @@ impl Render for DockPanel {
           }),
       )
       .child(
-        h_flex().min_w(px(0.0)).items_center().gap_1().child(
-          Button::new("dock-panel-refresh")
-            .debug_selector(|| DOCK_PANEL_REFRESH_DEBUG_SELECTOR.to_string())
-            .icon(UiIconName::RefreshCw)
-            .ghost()
-            .compact()
-            .xsmall()
-            .tooltip("Refresh")
-            .loading(self.pr_refresh_pending > 0)
-            .loading_icon(gpui_component::Icon::new(UiIconName::RefreshCw))
-            .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
-        ),
+        h_flex()
+          .min_w(px(0.0))
+          .items_center()
+          .gap_1()
+          .child(
+            Button::new("dock-panel-refresh")
+              .debug_selector(|| DOCK_PANEL_REFRESH_DEBUG_SELECTOR.to_string())
+              .icon(UiIconName::RefreshCw)
+              .ghost()
+              .compact()
+              .xsmall()
+              .tooltip("Refresh")
+              .loading(self.pr_refresh_pending > 0)
+              .loading_icon(gpui_component::Icon::new(UiIconName::RefreshCw))
+              .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
+          )
+          .when(self.active_tab == DockPanelTab::Files, |this| {
+            this.child(self.render_files_action_menu(cx))
+          }),
       );
 
     let body = match self.active_tab {
@@ -6567,6 +6667,76 @@ mod tests {
       assert!(ignored.is_folder());
       assert_eq!(ignored.item().children[0].id.as_ref(), "ignored/secret.txt");
     });
+  }
+
+  #[gpui::test]
+  async fn files_actions_can_hide_gitignored_entries(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-toggle-gitignored");
+    commit_text_file(
+      &repo.path,
+      Path::new(".gitignore"),
+      "ignored/\n",
+      "ignore rules",
+    );
+    std::fs::write(repo.path.join("visible.txt"), "visible\n").expect("write visible");
+    std::fs::create_dir_all(repo.path.join("ignored")).expect("create ignored dir");
+    std::fs::write(repo.path.join("ignored/secret.txt"), "ignored\n").expect("write ignored");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      assert_eq!(panel.files_file_count, 3);
+      assert!(tree.index_of(&"ignored".into()).is_some());
+      assert!(tree.index_of(&"visible.txt".into()).is_some());
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.toggle_files_include_gitignored(cx);
+    });
+    await_files_loaded(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      assert_eq!(panel.files_file_count, 2);
+      assert!(tree.index_of(&"ignored".into()).is_none());
+      assert!(tree.index_of(&"ignored/secret.txt".into()).is_none());
+      assert!(tree.index_of(&"visible.txt".into()).is_some());
+    });
+  }
+
+  #[gpui::test]
+  async fn files_actions_can_hide_hidden_entries(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let project = crate::test_support::temp_path("dock-files-toggle-hidden");
+    std::fs::create_dir_all(project.join(".hidden")).expect("create hidden dir");
+    std::fs::write(project.join(".hidden/secret.txt"), "hidden\n").expect("write hidden");
+    std::fs::write(project.join("visible.txt"), "visible\n").expect("write visible");
+
+    let (panel, cx) = add_dock_panel_window(None, cx);
+    panel.update_in(cx, |panel, window, cx| {
+      panel.set_project_and_repo_roots(Some(project.clone()), None, window, cx)
+    });
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update(cx, |panel, cx| {
+      panel.toggle_files_include_hidden(cx);
+    });
+    await_files_loaded(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      assert_eq!(panel.files_file_count, 1);
+      assert!(tree.index_of(&".hidden".into()).is_none());
+      assert!(tree.index_of(&".hidden/secret.txt".into()).is_none());
+      assert!(tree.index_of(&"visible.txt".into()).is_some());
+    });
+
+    let _ = std::fs::remove_dir_all(&project);
   }
 
   #[gpui::test]
