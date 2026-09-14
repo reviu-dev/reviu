@@ -2690,19 +2690,12 @@ impl SessionPage {
     }
 
     let load_repo_root = repo_root.clone();
-    let load_git_files = self.fallback_repo.is_some();
     let palette = palette.downgrade();
     self._file_search_task = Some(cx.spawn_in(window, async move |this, cx| {
       let result = cx
         .background_spawn({
           let repo_root = load_repo_root.clone();
-          async move {
-            if load_git_files {
-              git::list_repo_worktree_files(&repo_root)
-            } else {
-              list_project_files(&repo_root)
-            }
-          }
+          async move { list_project_files(&repo_root) }
         })
         .await;
 

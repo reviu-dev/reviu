@@ -28,11 +28,11 @@ use gpui_component::{
 };
 
 use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
-use crate::file_tree::build_path_tree_items_with_expansion;
+use crate::file_tree::build_project_tree_items_with_expansion;
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
-use crate::project_files::list_project_files;
+use crate::project_files::{ProjectEntry, list_project_entries};
 use crate::pull_request_refresh::{
   PullRequestRefresh, branch_switched_since_lookup, should_read_pull_request,
 };
@@ -1388,7 +1388,7 @@ impl DockPanel {
 
     let task = cx.spawn(async move |this, cx| {
       let files = cx
-        .background_spawn(async move { list_project_files(&load_project_root) })
+        .background_spawn(async move { list_project_entries(&load_project_root) })
         .await;
       let _ = this.update(cx, |this, cx| {
         if this.project_root.as_deref() != Some(project_root.as_path())
@@ -1399,10 +1399,7 @@ impl DockPanel {
         }
         this.files_loading = false;
         if let Ok(files) = files {
-          let paths = files
-            .iter()
-            .map(|path| Rc::new(path.to_string_lossy().into_owned()))
-            .collect::<Vec<_>>();
+          let entries = files.into_iter().map(Rc::new).collect::<Vec<_>>();
           let expanded = expanded_folder_paths.unwrap_or_else(|| {
             if this.files_loaded {
               this.current_files_expanded_paths(cx)
@@ -1410,8 +1407,7 @@ impl DockPanel {
               HashSet::new()
             }
           });
-          let (items, _, _, _) =
-            build_path_tree_items_with_expansion(&paths, |path| path.as_str(), Some(&expanded));
+          let (items, _, _, _) = build_project_tree_items_with_expansion(&entries, Some(&expanded));
           this.files_tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
           });
@@ -1698,9 +1694,11 @@ impl DockPanel {
       .into_iter()
       .map(|path| renamed_file_tree_path_id(&path, &old_id, &new_id))
       .collect::<HashSet<_>>();
-    let paths = paths.into_iter().map(Rc::new).collect::<Vec<_>>();
-    let (items, _, _, _) =
-      build_path_tree_items_with_expansion(&paths, |path| path.as_str(), Some(&expanded));
+    let entries = paths
+      .into_iter()
+      .map(|path| Rc::new(ProjectEntry::file(PathBuf::from(path))))
+      .collect::<Vec<_>>();
+    let (items, _, _, _) = build_project_tree_items_with_expansion(&entries, Some(&expanded));
     self.files_tree_state.update(cx, |tree, cx| {
       tree.set_items(items, cx);
     });
