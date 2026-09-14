@@ -8,6 +8,13 @@ use gpui_component::tree::TreeItem;
 
 use crate::project_files::{ProjectEntry, ProjectEntryKind};
 
+const EMPTY_FOLDER_PLACEHOLDER_NAME: &str = "No files";
+const EMPTY_FOLDER_PLACEHOLDER_SUFFIX: &str = "/.reviu-empty-folder";
+
+pub(crate) fn is_empty_folder_placeholder_id(id: &str) -> bool {
+  id.ends_with(EMPTY_FOLDER_PLACEHOLDER_SUFFIX)
+}
+
 /// The items to render, the files by path, and the row to select with its id.
 pub(crate) type FileTreeBuildResult<T> = (
   Vec<TreeItem>,
@@ -122,7 +129,7 @@ fn build_tree_item(
     .filter_map(|child| build_tree_item(child, order, first_file_id, expanded_folder_paths))
     .collect::<Vec<_>>();
 
-  if node.file.is_none() && children.is_empty() {
+  if node.file.is_none() && children.is_empty() && node.directory.is_none() {
     return None;
   }
 
@@ -132,6 +139,19 @@ fn build_tree_item(
       .map(|paths| paths.contains(&node.path))
       .unwrap_or(true);
     item = item.children(children).expanded(is_expanded);
+  } else if node.directory.is_some() && node.file.is_none() {
+    let is_expanded = expanded_folder_paths
+      .map(|paths| paths.contains(&node.path))
+      .unwrap_or(false);
+    item = item
+      .child(
+        TreeItem::new(
+          format!("{}{}", node.path, EMPTY_FOLDER_PLACEHOLDER_SUFFIX),
+          EMPTY_FOLDER_PLACEHOLDER_NAME,
+        )
+        .disabled(true),
+      )
+      .expanded(is_expanded);
   }
 
   order.push(node.path.clone());
@@ -234,13 +254,21 @@ mod tests {
   }
 
   #[test]
-  fn empty_directory_entries_are_skipped_until_the_tree_can_render_them_as_folders() {
+  fn empty_directory_entries_render_as_collapsed_folders() {
     let (items, lookup, selected_index, selected_id) = build_project_tree_items_with_expansion(
       &entries(&[("empty", ProjectEntryKind::Directory)]),
       None,
     );
 
-    assert!(items.is_empty());
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id.as_ref(), "empty");
+    assert!(items[0].is_folder());
+    assert!(!items[0].is_expanded());
+    assert_eq!(items[0].children.len(), 1);
+    assert!(items[0].children[0].is_disabled());
+    assert!(is_empty_folder_placeholder_id(
+      items[0].children[0].id.as_ref()
+    ));
     assert!(lookup.is_empty());
     assert_eq!(selected_index, None);
     assert_eq!(selected_id, None);

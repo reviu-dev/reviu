@@ -17,9 +17,7 @@ use gpui::{
   SharedString, Task, WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _,
-  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
-  h_flex,
+  ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex,
   input::{self, Input, InputState},
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
@@ -31,11 +29,13 @@ use crate::changes_list::{
   ChangesList, ChangesListEvent, status_color, status_tooltip, status_uses_warning_icon,
 };
 use crate::config::AppSettings;
-use crate::file_tree::build_project_tree_items_with_expansion;
+use crate::file_tree::{build_project_tree_items_with_expansion, is_empty_folder_placeholder_id};
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
-use crate::project_files::{ProjectEntry, ProjectScanOptions, list_project_entries_with_options};
+use crate::project_files::{
+  ProjectEntry, ProjectEntryKind, ProjectScanOptions, list_project_entries_with_options,
+};
 use crate::pull_request_refresh::{
   PullRequestRefresh, branch_switched_since_lookup, should_read_pull_request,
 };
@@ -212,144 +212,18 @@ impl FilesContextTarget {
   }
 }
 
+enum FilesInlineOperation {
+  Rename,
+  Create {
+    directory: Option<PathBuf>,
+    is_folder: bool,
+  },
+}
+
 struct FilesInlineRename {
   relative_path: PathBuf,
   input: Entity<InputState>,
-}
-
-type FilesNameConfirmedHandler = Rc<dyn Fn(String, &mut Window, &mut App) -> bool>;
-
-struct FilesNameDialog {
-  title: SharedString,
-  description: SharedString,
-  input: Entity<InputState>,
-  confirm_label: SharedString,
-  on_confirmed: FilesNameConfirmedHandler,
-}
-
-impl FilesNameDialog {
-  fn new(
-    title: impl Into<SharedString>,
-    description: impl Into<SharedString>,
-    initial_value: impl Into<SharedString>,
-    confirm_label: impl Into<SharedString>,
-    on_confirmed: FilesNameConfirmedHandler,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Self {
-    let input = cx.new(|cx| InputState::new(window, cx));
-    let initial_value = initial_value.into();
-    if !initial_value.is_empty() {
-      input.update(cx, |input, cx| {
-        input.set_value(initial_value.as_ref(), window, cx)
-      });
-    }
-    cx.subscribe_in(
-      &input,
-      window,
-      |this, _input, event: &gpui_component::input::InputEvent, window, cx| {
-        if matches!(event, gpui_component::input::InputEvent::PressEnter { .. }) {
-          this.confirm(window, cx);
-        }
-      },
-    )
-    .detach();
-    Self {
-      title: title.into(),
-      description: description.into(),
-      input,
-      confirm_label: confirm_label.into(),
-      on_confirmed,
-    }
-  }
-
-  fn input_focus_handle(&self, cx: &App) -> FocusHandle {
-    self.input.read(cx).focus_handle(cx)
-  }
-
-  fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let value = self.input.read(cx).value().to_string();
-    if (self.on_confirmed)(value, window, cx) {
-      window.close_dialog(cx);
-    }
-  }
-}
-
-impl Render for FilesNameDialog {
-  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    div()
-      .id("files-name-dialog")
-      .flex()
-      .flex_col()
-      .child(
-        DialogHeader::new()
-          .p_4()
-          .child(DialogTitle::new().child(self.title.clone()))
-          .child(DialogDescription::new().child(self.description.clone())),
-      )
-      .child(
-        v_flex()
-          .px_4()
-          .pb_4()
-          .child(Input::new(&self.input).w_full()),
-      )
-      .child(
-        DialogFooter::new()
-          .px_4()
-          .pb_4()
-          .pt_1()
-          .justify_end()
-          .child(
-            Button::new("files-name-dialog-cancel")
-              .label("Cancel")
-              .outline()
-              .small()
-              .on_click(|_, window, cx| window.close_dialog(cx)),
-          )
-          .child(
-            Button::new("files-name-dialog-confirm")
-              .debug_selector(|| FILES_NAME_DIALOG_CONFIRM_DEBUG_SELECTOR.to_string())
-              .label(self.confirm_label.clone())
-              .primary()
-              .small()
-              .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),
-          ),
-      )
-  }
-}
-
-const FILES_NAME_DIALOG_CONFIRM_DEBUG_SELECTOR: &str = "files-name-dialog-confirm";
-
-fn open_files_name_dialog(
-  title: impl Into<SharedString>,
-  description: impl Into<SharedString>,
-  initial_value: impl Into<SharedString>,
-  confirm_label: impl Into<SharedString>,
-  on_confirmed: FilesNameConfirmedHandler,
-  window: &mut Window,
-  cx: &mut App,
-) {
-  let dialog = cx.new(|cx| {
-    FilesNameDialog::new(
-      title,
-      description,
-      initial_value,
-      confirm_label,
-      on_confirmed,
-      window,
-      cx,
-    )
-  });
-  let dialog_for_overlay = dialog.clone();
-  let dialog_for_focus = dialog.clone();
-
-  window.open_dialog(cx, move |overlay, _, _| {
-    overlay.p_0().w(px(360.0)).child(dialog_for_overlay.clone())
-  });
-
-  window.on_next_frame(move |window, cx| {
-    window.focus(&dialog_for_focus.read(cx).input_focus_handle(cx), cx);
-  });
+  operation: FilesInlineOperation,
 }
 
 fn child_relative_path(base: Option<&Path>, input: &str) -> anyhow::Result<PathBuf> {
@@ -1211,6 +1085,9 @@ impl DockPanel {
         TreeEvent::Confirmed(id) => (id.clone(), OpenIntent::Open),
         TreeEvent::Expanded(_) | TreeEvent::Collapsed(_) => return,
       };
+      if is_empty_folder_placeholder_id(id.as_ref()) {
+        return;
+      }
       // Walking onto a folder moves the selection and nothing else: a folder
       // has no contents to show.
       let state = tree.read(cx);
@@ -1710,26 +1587,17 @@ impl DockPanel {
   ) {
     let old_id = file_tree_path_id(old_relative_path);
     let new_id = file_tree_path_id(new_relative_path);
-    let mut paths = Vec::new();
-    {
-      let tree = self.files_tree_state.read(cx);
-      let mut index = 0;
-      while let Some(entry) = tree.entry(index) {
-        if entry.is_root() {
-          collect_file_tree_paths(entry.item(), &mut paths);
-        }
-        index += 1;
-      }
-    }
-    if paths.is_empty() {
+    let mut entries = self.current_project_tree_entries(cx);
+    if entries.is_empty() {
       return;
     }
 
     let mut renamed_any = false;
-    for path in &mut paths {
-      let renamed = renamed_file_tree_path_id(path, &old_id, &new_id);
-      if renamed != *path {
-        *path = renamed;
+    for entry in &mut entries {
+      let old_path = entry.path_id();
+      let renamed = renamed_file_tree_path_id(&old_path, &old_id, &new_id);
+      if renamed != old_path {
+        Rc::make_mut(entry).path = PathBuf::from(renamed);
         renamed_any = true;
       }
     }
@@ -1742,10 +1610,6 @@ impl DockPanel {
       .into_iter()
       .map(|path| renamed_file_tree_path_id(&path, &old_id, &new_id))
       .collect::<HashSet<_>>();
-    let entries = paths
-      .into_iter()
-      .map(|path| Rc::new(ProjectEntry::file(PathBuf::from(path))))
-      .collect::<Vec<_>>();
     let (items, _, _, _) = build_project_tree_items_with_expansion(&entries, Some(&expanded));
     self.files_tree_state.update(cx, |tree, cx| {
       tree.set_items(items, cx);
@@ -1852,47 +1716,131 @@ impl DockPanel {
   }
 
   fn open_new_file_dialog(
-    &self,
+    &mut self,
     target: FilesContextTarget,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.open_create_file_entry_dialog(target, false, window, cx);
+    self.start_inline_create(target, false, window, cx);
   }
 
   fn open_new_folder_dialog(
-    &self,
+    &mut self,
     target: FilesContextTarget,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.open_create_file_entry_dialog(target, true, window, cx);
+    self.start_inline_create(target, true, window, cx);
   }
 
-  fn open_create_file_entry_dialog(
-    &self,
+  fn start_inline_create(
+    &mut self,
     target: FilesContextTarget,
     is_folder: bool,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.cancel_inline_rename(cx);
     let directory = self.files_context_directory(&target);
-    let description_directory = directory.clone();
-    let panel = cx.entity().downgrade();
-    let on_confirmed: FilesNameConfirmedHandler = Rc::new(move |name, window, cx| {
-      let directory = directory.clone();
-      panel
-        .update(cx, |panel, cx| {
-          panel.create_file_entry(directory, name, is_folder, window, cx)
-        })
-        .unwrap_or(false)
+    let placeholder = self.next_inline_create_placeholder(directory.as_deref(), is_folder, cx);
+    let initial_value = if is_folder {
+      "untitled folder"
+    } else {
+      "untitled"
+    };
+    let input = self.create_files_inline_input(initial_value, window, cx);
+    let mut expanded = self.current_files_expanded_paths(cx);
+    if let Some(directory) = &directory {
+      add_path_and_ancestors_to_expanded(directory, &mut expanded);
+    }
+    let mut entries = self.current_project_tree_entries(cx);
+    entries.push(Rc::new(ProjectEntry {
+      path: placeholder.clone(),
+      kind: if is_folder {
+        ProjectEntryKind::Directory
+      } else {
+        ProjectEntryKind::File
+      },
+      is_gitignored: false,
+      is_hidden: false,
+    }));
+    let (items, _, _, _) = build_project_tree_items_with_expansion(&entries, Some(&expanded));
+    self.files_tree_state.update(cx, |tree, cx| {
+      tree.set_items(items, cx);
+      if let Some(index) = tree.index_of(&file_tree_path_id(&placeholder).into()) {
+        tree.set_selected_index(Some(index), cx);
+      }
     });
-    let title = if is_folder { "New Folder" } else { "New File" };
-    let description = description_directory
-      .as_ref()
-      .map(|path| format!("Create inside {}", path.to_string_lossy()))
-      .unwrap_or_else(|| "Create at the project root".to_string());
-    open_files_name_dialog(title, description, "", "Create", on_confirmed, window, cx);
+    self.files_inline_rename = Some(FilesInlineRename {
+      relative_path: placeholder,
+      input: input.clone(),
+      operation: FilesInlineOperation::Create {
+        directory,
+        is_folder,
+      },
+    });
+    window.on_next_frame(move |window, cx| {
+      input.update(cx, |input, cx| {
+        input.focus(window, cx);
+        input.select_all(window, cx);
+      });
+    });
+    cx.notify();
+  }
+
+  fn next_inline_create_placeholder(
+    &self,
+    directory: Option<&Path>,
+    is_folder: bool,
+    cx: &App,
+  ) -> PathBuf {
+    let base_name = if is_folder {
+      ".reviu-new-folder"
+    } else {
+      ".reviu-new-file"
+    };
+    for index in 0.. {
+      let name = if index == 0 {
+        base_name.to_string()
+      } else {
+        format!("{base_name}-{index}")
+      };
+      let path = directory
+        .map(|dir| dir.join(&name))
+        .unwrap_or_else(|| name.into());
+      let id: SharedString = file_tree_path_id(&path).into();
+      if self.files_tree_state.read(cx).index_of(&id).is_none() {
+        return path;
+      }
+    }
+    PathBuf::from(base_name)
+  }
+
+  fn current_project_tree_entries(&self, cx: &App) -> Vec<Rc<ProjectEntry>> {
+    let tree = self.files_tree_state.read(cx);
+    let mut entries = Vec::new();
+    let mut index = 0;
+    while let Some(entry) = tree.entry(index) {
+      if entry.is_root() {
+        collect_project_tree_entries(entry.item(), &mut entries);
+      }
+      index += 1;
+    }
+    entries
+  }
+
+  fn remove_inline_create_placeholder(&mut self, placeholder: &Path, cx: &mut Context<Self>) {
+    let placeholder_id = file_tree_path_id(placeholder);
+    let entries = self
+      .current_project_tree_entries(cx)
+      .into_iter()
+      .filter(|entry| entry.path_id() != placeholder_id)
+      .collect::<Vec<_>>();
+    let expanded = self.current_files_expanded_paths(cx);
+    let (items, _, _, _) = build_project_tree_items_with_expansion(&entries, Some(&expanded));
+    self.files_tree_state.update(cx, |tree, cx| {
+      tree.set_items(items, cx);
+    });
   }
 
   fn create_file_entry(
@@ -1914,8 +1862,16 @@ impl DockPanel {
         return false;
       }
     };
+    let created_relative_path = relative_path.clone();
     let path = root.join(relative_path);
-    self.run_file_operation(
+    if path.exists() {
+      window.push_notification(
+        Notification::error(format!("{} already exists", path.display())),
+        cx,
+      );
+      return false;
+    }
+    self.run_file_operation_after_success(
       if is_folder {
         "Creating folder failed"
       } else {
@@ -1923,9 +1879,6 @@ impl DockPanel {
       },
       move || {
         if is_folder {
-          if path.exists() {
-            return Err(anyhow::anyhow!("{} already exists", path.display()));
-          }
           std::fs::create_dir_all(&path)?;
         } else {
           if let Some(parent) = path.parent() {
@@ -1937,6 +1890,9 @@ impl DockPanel {
             .open(&path)?;
         }
         Ok(())
+      },
+      move |this, _| {
+        this.files_reveal_path_when_loaded = Some(created_relative_path);
       },
       cx,
     );
@@ -1961,12 +1917,38 @@ impl DockPanel {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.cancel_inline_rename(cx);
     let Some(initial_value) = relative_path
       .file_name()
       .map(|name| name.to_string_lossy().into_owned())
     else {
       return;
     };
+    let input = self.create_files_inline_input(&initial_value, window, cx);
+
+    self.files_tree_state.update(cx, |tree, cx| {
+      tree.set_selected_index(None, cx);
+    });
+    self.files_inline_rename = Some(FilesInlineRename {
+      relative_path,
+      input: input.clone(),
+      operation: FilesInlineOperation::Rename,
+    });
+    window.on_next_frame(move |window, cx| {
+      input.update(cx, |input, cx| {
+        input.focus(window, cx);
+        input.select_all(window, cx);
+      });
+    });
+    cx.notify();
+  }
+
+  fn create_files_inline_input(
+    &self,
+    initial_value: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
     let input = cx.new(|cx| InputState::new(window, cx));
     input.update(cx, |input, cx| {
       input.set_value(initial_value, window, cx);
@@ -1985,27 +1967,17 @@ impl DockPanel {
       },
     )
     .detach();
-
-    self.files_tree_state.update(cx, |tree, cx| {
-      tree.set_selected_index(None, cx);
-    });
-    self.files_inline_rename = Some(FilesInlineRename {
-      relative_path,
-      input: input.clone(),
-    });
-    window.on_next_frame(move |window, cx| {
-      input.update(cx, |input, cx| {
-        input.focus(window, cx);
-        input.select_all(window, cx);
-      });
-    });
-    cx.notify();
+    input
   }
 
   fn cancel_inline_rename(&mut self, cx: &mut Context<Self>) {
-    if self.files_inline_rename.take().is_some() {
-      cx.notify();
+    let Some(rename) = self.files_inline_rename.take() else {
+      return;
+    };
+    if matches!(rename.operation, FilesInlineOperation::Create { .. }) {
+      self.remove_inline_create_placeholder(&rename.relative_path, cx);
     }
+    cx.notify();
   }
 
   fn confirm_inline_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2014,15 +1986,28 @@ impl DockPanel {
     };
     let relative_path = rename.relative_path.clone();
     let name = rename.input.read(cx).value().to_string();
-    if relative_path
-      .file_name()
-      .is_some_and(|current| current.to_string_lossy() == name)
-    {
-      self.cancel_inline_rename(cx);
-      return;
-    }
-    if self.rename_file_entry(relative_path, name, window, cx) {
+    let remove_placeholder = matches!(&rename.operation, FilesInlineOperation::Create { .. });
+    let confirmed = match &rename.operation {
+      FilesInlineOperation::Rename => {
+        if relative_path
+          .file_name()
+          .is_some_and(|current| current.to_string_lossy() == name)
+        {
+          self.cancel_inline_rename(cx);
+          return;
+        }
+        self.rename_file_entry(relative_path.clone(), name, window, cx)
+      }
+      FilesInlineOperation::Create {
+        directory,
+        is_folder,
+      } => self.create_file_entry(directory.clone(), name, *is_folder, window, cx),
+    };
+    if confirmed {
       self.files_inline_rename = None;
+      if remove_placeholder {
+        self.remove_inline_create_placeholder(&relative_path, cx);
+      }
       cx.notify();
     }
   }
@@ -4255,6 +4240,7 @@ impl DockPanel {
                   .into_any_element()
               })
           };
+          let is_empty_placeholder = is_empty_folder_placeholder_id(item.id.as_ref());
           let relative_path = PathBuf::from(item.id.as_ref());
           let rename_input = inline_rename
             .as_ref()
@@ -4309,17 +4295,22 @@ impl DockPanel {
               .overflow_hidden()
               .text_ellipsis()
               .text_xs()
+              .when(is_empty_placeholder, |this| {
+                this.text_color(theme.muted_foreground).italic()
+              })
               .child(item.label.clone())
               .into_any_element()
           };
 
           let indent = px(8.) + px(14.) * entry.depth();
           ui::selectable_list_item(ix, selected, ui::SelectableRowStyle::Inset, &theme)
-            .on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
-              let target = context_target.clone();
-              let _ = context_target_panel.update(cx, |panel, _| {
-                panel.files_context_menu_target = Some(target);
-              });
+            .when(!is_empty_placeholder, |this| {
+              this.on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
+                let target = context_target.clone();
+                let _ = context_target_panel.update(cx, |panel, _| {
+                  panel.files_context_menu_target = Some(target);
+                });
+              })
             })
             .w_full()
             .px_2()
@@ -5568,13 +5559,35 @@ impl Focusable for DockPanel {
   }
 }
 
-fn collect_file_tree_paths(item: &TreeItem, paths: &mut Vec<String>) {
-  if item.children.is_empty() {
-    paths.push(item.id.to_string());
+fn collect_project_tree_entries(item: &TreeItem, entries: &mut Vec<Rc<ProjectEntry>>) {
+  if is_empty_folder_placeholder_id(item.id.as_ref()) {
     return;
   }
+  let path = PathBuf::from(item.id.as_ref());
+  let entry = if item.is_folder() {
+    ProjectEntry {
+      path,
+      kind: ProjectEntryKind::Directory,
+      is_gitignored: false,
+      is_hidden: false,
+    }
+  } else {
+    ProjectEntry::file(path)
+  };
+  entries.push(Rc::new(entry));
   for child in &item.children {
-    collect_file_tree_paths(child, paths);
+    collect_project_tree_entries(child, entries);
+  }
+}
+
+fn add_path_and_ancestors_to_expanded(path: &Path, expanded: &mut HashSet<String>) {
+  let mut current = Some(path);
+  while let Some(path) = current {
+    if path.as_os_str().is_empty() {
+      break;
+    }
+    expanded.insert(file_tree_path_id(path));
+    current = path.parent();
   }
 }
 
@@ -6704,6 +6717,105 @@ mod tests {
       .update(|_, cx| cx.read_from_clipboard())
       .and_then(|item| item.text());
     assert_eq!(copied.as_deref(), Some("."));
+  }
+
+  #[gpui::test]
+  async fn file_context_new_file_uses_inline_input(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-new-file");
+    commit_text_file(&repo.path, Path::new("src/existing.rs"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.start_inline_create(
+        FilesContextTarget::entry(PathBuf::from("src"), true),
+        false,
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("dock-panel-file-rename-input-src/.reviu-new-file")
+        .is_some(),
+      "the new file row is an inline input"
+    );
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel
+        .files_inline_rename
+        .as_ref()
+        .expect("inline create")
+        .input
+        .clone();
+      input.update(cx, |input, cx| input.set_value("main.rs", window, cx));
+    });
+    cx.simulate_keystrokes("enter");
+    await_file_operation(&panel, cx).await;
+
+    assert!(repo.path.join("src/main.rs").is_file());
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      assert!(tree.index_of(&"src/main.rs".into()).is_some());
+      assert!(tree.index_of(&"src/.reviu-new-file".into()).is_none());
+    });
+  }
+
+  #[gpui::test]
+  async fn file_context_new_folder_uses_inline_input_and_keeps_empty_folder_visible(
+    cx: &mut TestAppContext,
+  ) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-new-folder");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.start_inline_create(FilesContextTarget::root(), true, window, cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("dock-panel-file-rename-input-.reviu-new-folder")
+        .is_some(),
+      "the new folder row is an inline input"
+    );
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel
+        .files_inline_rename
+        .as_ref()
+        .expect("inline create")
+        .input
+        .clone();
+      input.update(cx, |input, cx| input.set_value("assets", window, cx));
+    });
+    cx.simulate_keystrokes("enter");
+    await_file_operation(&panel, cx).await;
+
+    assert!(repo.path.join("assets").is_dir());
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let assets = tree
+        .index_of(&"assets".into())
+        .and_then(|index| tree.entry(index))
+        .expect("empty folder stays visible");
+      assert!(assets.is_folder());
+      assert!(tree.index_of(&".reviu-new-folder".into()).is_none());
+    });
   }
 
   #[gpui::test]
