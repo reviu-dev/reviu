@@ -109,29 +109,6 @@ where
   (items, file_lookup, selected_index, first_file_id)
 }
 
-/// Every folder on the way to one of these paths, so a tree can open just the
-/// branches that lead somewhere.
-pub(crate) fn expanded_folder_paths_for_changed_files<'a, I>(paths: I) -> HashSet<String>
-where
-  I: IntoIterator<Item = &'a str>,
-{
-  let mut expanded = HashSet::new();
-  for path in paths {
-    let mut prefix = String::new();
-    let parts = path.split('/').collect::<Vec<_>>();
-    for folder in parts.iter().take(parts.len().saturating_sub(1)) {
-      if prefix.is_empty() {
-        prefix.push_str(folder);
-      } else {
-        prefix.push('/');
-        prefix.push_str(folder);
-      }
-      expanded.insert(prefix.clone());
-    }
-  }
-  expanded
-}
-
 fn build_tree_item(
   node: FileTreeNode,
   order: &mut Vec<String>,
@@ -237,8 +214,7 @@ mod tests {
 
   #[test]
   fn an_expansion_set_opens_only_the_branches_it_names() {
-    let expanded =
-      expanded_folder_paths_for_changed_files(["src/changed.rs", "src/nested/also_changed.rs"]);
+    let expanded = HashSet::from(["src".to_string(), "src/nested".to_string()]);
     let all = files(&[
       "src/changed.rs",
       "src/nested/also_changed.rs",
@@ -259,10 +235,5 @@ mod tests {
     assert_eq!(items[2].label.as_ref(), "README.md");
     assert_eq!(selected_id.as_deref(), Some("src/nested/also_changed.rs"));
     assert_eq!(selected_index, Some(0));
-  }
-
-  #[test]
-  fn a_path_without_a_folder_expands_nothing() {
-    assert!(expanded_folder_paths_for_changed_files(["README.md"]).is_empty());
   }
 }

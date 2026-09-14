@@ -10,8 +10,7 @@ use editor::ReviewCommentCreateRequest;
 use git::{
   HeadCommitStatus, RepoStage, RepoStatusEntry, commit_changes, current_branch_status,
   current_github_remote_repo, current_head_sha, head_commit_message, head_commit_status,
-  is_merge_in_progress, is_rebase_in_progress, list_repo_status, list_repo_worktree_files,
-  stage_all,
+  is_merge_in_progress, is_rebase_in_progress, list_repo_status, stage_all,
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render,
@@ -29,9 +28,7 @@ use gpui_component::{
 };
 
 use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
-use crate::file_tree::{
-  build_path_tree_items_with_expansion, expanded_folder_paths_for_changed_files,
-};
+use crate::file_tree::build_path_tree_items_with_expansion;
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
@@ -1388,17 +1385,10 @@ impl DockPanel {
     let load_generation = self.files_load_generation;
     let repo_root = self.repo_root.clone();
     let load_project_root = project_root.clone();
-    let load_repo_root = repo_root.clone();
 
     let task = cx.spawn(async move |this, cx| {
       let files = cx
-        .background_spawn(async move {
-          if let Some(repo_root) = load_repo_root {
-            list_repo_worktree_files(&repo_root)
-          } else {
-            list_project_files(&load_project_root)
-          }
-        })
+        .background_spawn(async move { list_project_files(&load_project_root) })
         .await;
       let _ = this.update(cx, |this, cx| {
         if this.project_root.as_deref() != Some(project_root.as_path())
@@ -1413,18 +1403,11 @@ impl DockPanel {
             .iter()
             .map(|path| Rc::new(path.to_string_lossy().into_owned()))
             .collect::<Vec<_>>();
-          // Only the branches holding uncommitted work open by themselves: a
-          // whole repository expanded is a wall of folders.
           let expanded = expanded_folder_paths.unwrap_or_else(|| {
             if this.files_loaded {
               this.current_files_expanded_paths(cx)
             } else {
-              expanded_folder_paths_for_changed_files(
-                this
-                  .status_entries
-                  .iter()
-                  .filter_map(|entry| entry.path.to_str()),
-              )
+              HashSet::new()
             }
           });
           let (items, _, _, _) =
@@ -6535,6 +6518,57 @@ mod tests {
     );
 
     let _ = std::fs::remove_dir_all(&project);
+  }
+
+  #[gpui::test]
+  async fn files_tab_starts_with_changed_folders_collapsed(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-changed-collapsed");
+    commit_text_file(&repo.path, Path::new("src/changed.ts"), "v1\n", "src");
+    std::fs::write(repo.path.join("src/changed.ts"), "v2\n").expect("dirty src");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let src = tree
+        .index_of(&"src".into())
+        .and_then(|index| tree.entry(index))
+        .expect("src folder is visible");
+      assert!(src.is_folder());
+      assert!(!src.is_expanded());
+      assert!(tree.index_of(&"src/changed.ts".into()).is_none());
+    });
+  }
+
+  #[gpui::test]
+  async fn files_tab_shows_gitignored_entries(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-gitignored");
+    commit_text_file(
+      &repo.path,
+      Path::new(".gitignore"),
+      "ignored/\n",
+      "ignore rules",
+    );
+    std::fs::create_dir_all(repo.path.join("ignored")).expect("create ignored dir");
+    std::fs::write(repo.path.join("ignored/secret.txt"), "ignored\n").expect("write ignored file");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let ignored = tree
+        .index_of(&"ignored".into())
+        .and_then(|index| tree.entry(index))
+        .expect("ignored folder is visible");
+      assert!(ignored.is_folder());
+      assert_eq!(ignored.item().children[0].id.as_ref(), "ignored/secret.txt");
+    });
   }
 
   #[gpui::test]
