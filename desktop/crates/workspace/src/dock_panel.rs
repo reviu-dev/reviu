@@ -28,6 +28,7 @@ use gpui_component::{
 };
 
 use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
+use crate::config::AppSettings;
 use crate::file_tree::build_project_tree_items_with_expansion;
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
@@ -1129,7 +1130,8 @@ impl DockPanel {
     )
     .detach();
 
-    let split_sections = !crate::config::AppSettings::get(cx).git_unified_file_view;
+    let settings = AppSettings::get(cx);
+    let split_sections = !settings.git_unified_file_view;
     let changes_list = cx.new(|cx| ChangesList::new(repo_root.clone(), split_sections, window, cx));
     cx.subscribe_in(
       &changes_list,
@@ -1147,12 +1149,13 @@ impl DockPanel {
     )
     .detach();
 
-    // The unified/split file list is a setting: follow it without a restart.
-    cx.observe_global::<crate::config::AppSettings>(|this, cx| {
-      let split_sections = !crate::config::AppSettings::get(cx).git_unified_file_view;
+    cx.observe_global::<AppSettings>(|this, cx| {
+      let settings = AppSettings::get(cx);
+      let split_sections = !settings.git_unified_file_view;
       this
         .changes_list
         .update(cx, |list, cx| list.set_split_sections(split_sections, cx));
+      this.sync_files_scan_options_with_settings(cx);
     })
     .detach();
 
@@ -1356,8 +1359,8 @@ impl DockPanel {
       files_inline_rename: None,
       files_loaded: false,
       files_file_count: 0,
-      files_include_gitignored: true,
-      files_include_hidden: true,
+      files_include_gitignored: settings.files_show_gitignored,
+      files_include_hidden: settings.files_show_hidden,
       files_reveal_path_when_loaded: None,
       focus_files_tree_when_loaded: false,
       files_loading: false,
@@ -3954,14 +3957,35 @@ impl DockPanel {
       .into_any_element()
   }
 
-  fn toggle_files_include_gitignored(&mut self, cx: &mut Context<Self>) {
-    self.files_include_gitignored = !self.files_include_gitignored;
+  fn set_files_include_gitignored(&mut self, include: bool, cx: &mut Context<Self>) {
+    if self.files_include_gitignored == include {
+      return;
+    }
+    self.files_include_gitignored = include;
+    AppSettings::update(cx, |settings| settings.files_show_gitignored = include);
     self.reload_project_files_for_scan_options(cx);
   }
 
-  fn toggle_files_include_hidden(&mut self, cx: &mut Context<Self>) {
-    self.files_include_hidden = !self.files_include_hidden;
+  fn set_files_include_hidden(&mut self, include: bool, cx: &mut Context<Self>) {
+    if self.files_include_hidden == include {
+      return;
+    }
+    self.files_include_hidden = include;
+    AppSettings::update(cx, |settings| settings.files_show_hidden = include);
     self.reload_project_files_for_scan_options(cx);
+  }
+
+  fn sync_files_scan_options_with_settings(&mut self, cx: &mut Context<Self>) -> bool {
+    let settings = AppSettings::get(cx);
+    if self.files_include_gitignored == settings.files_show_gitignored
+      && self.files_include_hidden == settings.files_show_hidden
+    {
+      return false;
+    }
+    self.files_include_gitignored = settings.files_show_gitignored;
+    self.files_include_hidden = settings.files_show_hidden;
+    self.reload_project_files_for_scan_options(cx);
+    true
   }
 
   fn reload_project_files_for_scan_options(&mut self, cx: &mut Context<Self>) {
@@ -4005,7 +4029,7 @@ impl DockPanel {
             })
             .on_click(move |_, _, cx| {
               gitignored_view.update(cx, |panel, cx| {
-                panel.toggle_files_include_gitignored(cx);
+                panel.set_files_include_gitignored(!include_gitignored, cx);
               });
             }),
           )
@@ -4022,7 +4046,7 @@ impl DockPanel {
             })
             .on_click(move |_, _, cx| {
               hidden_view.update(cx, |panel, cx| {
-                panel.toggle_files_include_hidden(cx);
+                panel.set_files_include_hidden(!include_hidden, cx);
               });
             }),
           )
@@ -4151,6 +4175,10 @@ impl DockPanel {
 
     if self.project_root.is_none() {
       return self.render_empty_state(cx);
+    }
+
+    if self.sync_files_scan_options_with_settings(cx) {
+      return Self::render_files_loading_state();
     }
 
     if !self.files_loaded {
@@ -6773,6 +6801,10 @@ mod tests {
 
   #[gpui::test]
   async fn files_actions_can_hide_gitignored_entries(cx: &mut TestAppContext) {
+    crate::config::ConfigStore::set_test_db_path(Some(
+      crate::test_support::temp_path("dock-files-toggle-gitignored-settings")
+        .with_extension("sqlite"),
+    ));
     cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-files-toggle-gitignored");
     commit_text_file(
@@ -6797,7 +6829,7 @@ mod tests {
     });
 
     panel.update(cx, |panel, cx| {
-      panel.toggle_files_include_gitignored(cx);
+      panel.set_files_include_gitignored(false, cx);
     });
     await_files_loaded(&panel, cx).await;
 
@@ -6808,10 +6840,15 @@ mod tests {
       assert!(tree.index_of(&"ignored/secret.txt".into()).is_none());
       assert!(tree.index_of(&"visible.txt".into()).is_some());
     });
+    assert!(!cx.update(|_, cx| AppSettings::get(cx).files_show_gitignored));
+    crate::config::ConfigStore::set_test_db_path(None);
   }
 
   #[gpui::test]
   async fn files_actions_can_hide_hidden_entries(cx: &mut TestAppContext) {
+    crate::config::ConfigStore::set_test_db_path(Some(
+      crate::test_support::temp_path("dock-files-toggle-hidden-settings").with_extension("sqlite"),
+    ));
     cx.update(gpui_component::init);
     let project = crate::test_support::temp_path("dock-files-toggle-hidden");
     std::fs::create_dir_all(project.join(".hidden")).expect("create hidden dir");
@@ -6826,7 +6863,7 @@ mod tests {
     open_files_tab_and_wait(&panel, cx).await;
 
     panel.update(cx, |panel, cx| {
-      panel.toggle_files_include_hidden(cx);
+      panel.set_files_include_hidden(false, cx);
     });
     await_files_loaded(&panel, cx).await;
 
@@ -6837,8 +6874,10 @@ mod tests {
       assert!(tree.index_of(&".hidden/secret.txt".into()).is_none());
       assert!(tree.index_of(&"visible.txt".into()).is_some());
     });
+    assert!(!cx.update(|_, cx| AppSettings::get(cx).files_show_hidden));
 
     let _ = std::fs::remove_dir_all(&project);
+    crate::config::ConfigStore::set_test_db_path(None);
   }
 
   #[gpui::test]

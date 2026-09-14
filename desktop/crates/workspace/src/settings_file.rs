@@ -73,6 +73,10 @@ struct SettingsDoc {
   #[serde(deserialize_with = "lenient")]
   hide_whitespace: Option<bool>,
   #[serde(deserialize_with = "lenient")]
+  files_show_gitignored: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
+  files_show_hidden: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
   menu_bar_icon: Option<bool>,
   #[serde(deserialize_with = "lenient")]
   analytics_enabled: Option<bool>,
@@ -105,6 +109,10 @@ impl SettingsDoc {
         .unwrap_or(defaults.git_unified_file_view),
       split_diff_view: self.split_diff_view.unwrap_or(defaults.split_diff_view),
       hide_whitespace: self.hide_whitespace.unwrap_or(defaults.hide_whitespace),
+      files_show_gitignored: self
+        .files_show_gitignored
+        .unwrap_or(defaults.files_show_gitignored),
+      files_show_hidden: self.files_show_hidden.unwrap_or(defaults.files_show_hidden),
       menu_bar_icon: self.menu_bar_icon.unwrap_or(defaults.menu_bar_icon),
       analytics_enabled: self.analytics_enabled.unwrap_or(defaults.analytics_enabled),
       onboarding_done: self.onboarding_done.unwrap_or(defaults.onboarding_done),
@@ -125,6 +133,8 @@ impl From<AppSettings> for SettingsDoc {
       git_unified_file_view: Some(settings.git_unified_file_view),
       split_diff_view: Some(settings.split_diff_view),
       hide_whitespace: Some(settings.hide_whitespace),
+      files_show_gitignored: Some(settings.files_show_gitignored),
+      files_show_hidden: Some(settings.files_show_hidden),
       menu_bar_icon: Some(settings.menu_bar_icon),
       analytics_enabled: Some(settings.analytics_enabled),
       onboarding_done: Some(settings.onboarding_done),
@@ -235,6 +245,8 @@ mod tests {
       git_unified_file_view: true,
       split_diff_view: true,
       hide_whitespace: true,
+      files_show_gitignored: false,
+      files_show_hidden: false,
       menu_bar_icon: false,
       analytics_enabled: false,
       onboarding_done: true,

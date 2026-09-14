@@ -383,6 +383,8 @@ pub struct AppSettings {
   pub git_unified_file_view: bool,
   pub split_diff_view: bool,
   pub hide_whitespace: bool,
+  pub files_show_gitignored: bool,
+  pub files_show_hidden: bool,
   pub menu_bar_icon: bool,
   pub analytics_enabled: bool,
   pub onboarding_done: bool,
@@ -415,6 +417,8 @@ impl Default for AppSettings {
       git_unified_file_view: false,
       split_diff_view: false,
       hide_whitespace: false,
+      files_show_gitignored: true,
+      files_show_hidden: true,
       menu_bar_icon: true,
       analytics_enabled: true,
       onboarding_done: false,
@@ -949,6 +953,8 @@ impl ConfigStore {
           git_unified_file_view: git_unified_file_view != 0,
           split_diff_view: split_diff_view != 0,
           hide_whitespace: hide_whitespace != 0,
+          files_show_gitignored: true,
+          files_show_hidden: true,
           menu_bar_icon: menu_bar_icon != 0,
           analytics_enabled: analytics_enabled != 0,
           onboarding_done: false,
@@ -1573,6 +1579,8 @@ mod tests {
       git_unified_file_view: true,
       split_diff_view: true,
       hide_whitespace: true,
+      files_show_gitignored: false,
+      files_show_hidden: false,
       menu_bar_icon: false,
       analytics_enabled: false,
       onboarding_done: true,
@@ -1588,6 +1596,8 @@ mod tests {
     assert!(loaded.git_unified_file_view);
     assert!(loaded.split_diff_view);
     assert!(loaded.hide_whitespace);
+    assert!(!loaded.files_show_gitignored);
+    assert!(!loaded.files_show_hidden);
     assert!(!loaded.menu_bar_icon);
 
     ConfigStore::set_test_db_path(None);

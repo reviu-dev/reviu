@@ -113,6 +113,8 @@ pub struct SettingsPage {
   git_unified_file_view: bool,
   split_diff_view: bool,
   hide_whitespace: bool,
+  files_show_gitignored: bool,
+  files_show_hidden: bool,
   default_agent: agent_registry::AgentId,
   enabled_agents: Vec<agent_registry::AgentId>,
   default_agent_select: Entity<SelectState<Vec<AgentSelectOption>>>,
@@ -162,6 +164,8 @@ impl SettingsPage {
       git_unified_file_view: settings.git_unified_file_view,
       split_diff_view: settings.split_diff_view,
       hide_whitespace: settings.hide_whitespace,
+      files_show_gitignored: settings.files_show_gitignored,
+      files_show_hidden: settings.files_show_hidden,
       default_agent: agent_settings.default_agent,
       enabled_agents: agent_settings.enabled_agents,
       default_agent_select,
@@ -221,6 +225,8 @@ impl SettingsPage {
     let default_indent_rainbow = self.indent_rainbow;
     let default_git_unified_file_view = self.git_unified_file_view;
     let default_split_diff_view = self.split_diff_view;
+    let default_files_show_gitignored = self.files_show_gitignored;
+    let default_files_show_hidden = self.files_show_hidden;
     let default_menu_bar_icon = self.menu_bar_icon;
     let default_analytics_enabled = self.analytics_enabled;
 
@@ -359,6 +365,52 @@ impl SettingsPage {
             .default_value(default_indent_rainbow),
           )
           .description("Color indentation guides by level in the editor."),
+        ]),
+        SettingGroup::new().title("Files").items(vec![
+          SettingItem::new(
+            "Show Gitignored Files",
+            SettingField::checkbox(
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).files_show_gitignored
+              },
+              {
+                let view = view.clone();
+                move |val: bool, cx: &mut App| {
+                  view.update(cx, |view, _| {
+                    view.files_show_gitignored = val;
+                  });
+
+                  PersistedSettings::update(cx, |s| s.files_show_gitignored = val);
+                  cx.refresh_windows();
+                }
+              },
+            )
+            .default_value(default_files_show_gitignored),
+          )
+          .description("Show files ignored by .gitignore in the Files panel."),
+          SettingItem::new(
+            "Show Hidden Files",
+            SettingField::checkbox(
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).files_show_hidden
+              },
+              {
+                let view = view.clone();
+                move |val: bool, cx: &mut App| {
+                  view.update(cx, |view, _| {
+                    view.files_show_hidden = val;
+                  });
+
+                  PersistedSettings::update(cx, |s| s.files_show_hidden = val);
+                  cx.refresh_windows();
+                }
+              },
+            )
+            .default_value(default_files_show_hidden),
+          )
+          .description("Show dotfiles and hidden folders in the Files panel."),
         ]),
         SettingGroup::new().title("Git").items(vec![
           SettingItem::new(
