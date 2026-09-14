@@ -232,6 +232,18 @@ fn run_terminal_scenario(args: &TerminalSmokeArgs, run_dir: &Path) -> Result<()>
       .is_some_and(|path| Path::new(path) == expected_root)
   })
   .context("waiting for a terminal after opening the file link")?;
+  driver.command(json!({ "cmd": "split_center_with_previous" }))?;
+  wait_for_terminal_state(&mut driver, |state| {
+    state
+      .get("center_surface_kinds")
+      .and_then(Value::as_array)
+      .is_some_and(|kinds| {
+        kinds.iter().any(|kind| kind.as_str() == Some("file"))
+          && kinds.iter().any(|kind| kind.as_str() == Some("terminal"))
+      })
+      && state.get("loaded_editor_count").and_then(Value::as_u64) == Some(1)
+  })
+  .context("waiting for the mixed terminal and file split")?;
   driver.command(json!({
     "cmd": "type",
     "text": if cfg!(windows) { "Set-Location src" } else { "cd src" }
@@ -253,12 +265,20 @@ fn run_terminal_scenario(args: &TerminalSmokeArgs, run_dir: &Path) -> Result<()>
     DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, run_dir, true)?;
   wait_for_terminal_state(&mut restored, |state| {
     state.get("terminal_count").and_then(Value::as_u64) == Some(2)
+      && state.get("loaded_editor_count").and_then(Value::as_u64) == Some(1)
+      && state
+        .get("center_surface_kinds")
+        .and_then(Value::as_array)
+        .is_some_and(|kinds| {
+          kinds.iter().any(|kind| kind.as_str() == Some("file"))
+            && kinds.iter().any(|kind| kind.as_str() == Some("terminal"))
+        })
       && state
         .get("working_directory")
         .and_then(Value::as_str)
         .is_some_and(|path| Path::new(path) == expected_cwd)
   })
-  .context("waiting for terminal tabs to restore in a fresh driver")?;
+  .context("waiting for the mixed center split to restore in a fresh driver")?;
 
   if args.backend == "visual" {
     let screenshot = args

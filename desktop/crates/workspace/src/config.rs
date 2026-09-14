@@ -71,9 +71,9 @@ const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS merge_methods (repo TEXT PRIMARY KEY, method TEXT NOT NULL)",
 };
 
-const TERMINAL_WORKSPACES_TABLE: ConfigTable = ConfigTable {
-  name: "terminal_workspaces",
-  create_sql: "CREATE TABLE IF NOT EXISTS terminal_workspaces (checkout_path TEXT PRIMARY KEY, project_path TEXT NOT NULL, state TEXT NOT NULL)",
+const CENTER_WORKSPACES_TABLE: ConfigTable = ConfigTable {
+  name: "center_workspaces",
+  create_sql: "CREATE TABLE IF NOT EXISTS center_workspaces (checkout_path TEXT PRIMARY KEY, project_path TEXT NOT NULL, state TEXT NOT NULL)",
 };
 
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
@@ -83,7 +83,7 @@ const CONFIG_TABLES: [ConfigTable; 5] = [
   COMMAND_USAGES_TABLE,
   ANALYTICS_META_TABLE,
   MERGE_METHODS_TABLE,
-  TERMINAL_WORKSPACES_TABLE,
+  CENTER_WORKSPACES_TABLE,
 ];
 
 type Migration = fn(&Connection) -> rusqlite::Result<()>;
@@ -100,7 +100,7 @@ const MIGRATIONS: &[Migration] = [
   migrate_v6_drop_legacy_project_tables,
   migrate_v7_drop_retired_github_home_tables,
   migrate_v8_ensure_final_config_tables,
-  migrate_v9_terminal_workspaces,
+  migrate_v9_center_workspaces,
 ]
 .as_slice();
 
@@ -238,8 +238,8 @@ fn migrate_v8_ensure_final_config_tables(conn: &Connection) -> rusqlite::Result<
   create_baseline_tables(conn)
 }
 
-fn migrate_v9_terminal_workspaces(conn: &Connection) -> rusqlite::Result<()> {
-  conn.execute(TERMINAL_WORKSPACES_TABLE.create_sql, [])?;
+fn migrate_v9_center_workspaces(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(CENTER_WORKSPACES_TABLE.create_sql, [])?;
   Ok(())
 }
 
@@ -824,14 +824,14 @@ impl ConfigStore {
     }
   }
 
-  pub fn load_terminal_workspace(checkout_path: &Path) -> Option<String> {
+  pub fn load_center_workspace(checkout_path: &Path) -> Option<String> {
     let store = Self::open_with_tables()?;
     store
       .conn
       .query_row(
         &format!(
           "SELECT state FROM {} WHERE checkout_path = ?1",
-          TERMINAL_WORKSPACES_TABLE.name
+          CENTER_WORKSPACES_TABLE.name
         ),
         params![checkout_path.to_string_lossy().as_ref()],
         |row| row.get(0),
@@ -839,7 +839,7 @@ impl ConfigStore {
       .ok()
   }
 
-  pub fn persist_terminal_workspace(checkout_path: &Path, project_path: &Path, state: &str) {
+  pub fn persist_center_workspace(checkout_path: &Path, project_path: &Path, state: &str) {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
@@ -847,7 +847,7 @@ impl ConfigStore {
       &format!(
         "INSERT INTO {} (checkout_path, project_path, state) VALUES (?1, ?2, ?3)
          ON CONFLICT(checkout_path) DO UPDATE SET project_path = excluded.project_path, state = excluded.state",
-        TERMINAL_WORKSPACES_TABLE.name
+        CENTER_WORKSPACES_TABLE.name
       ),
       params![
         checkout_path.to_string_lossy().as_ref(),
@@ -855,37 +855,37 @@ impl ConfigStore {
         state
       ],
     ) {
-      log::warn!("Failed to persist terminal workspace: {}", err);
+      log::warn!("Failed to persist center workspace: {}", err);
     }
   }
 
-  pub fn forget_terminal_workspace(checkout_path: &Path) {
+  pub fn forget_center_workspace(checkout_path: &Path) {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
     if let Err(err) = store.conn.execute(
       &format!(
         "DELETE FROM {} WHERE checkout_path = ?1",
-        TERMINAL_WORKSPACES_TABLE.name
+        CENTER_WORKSPACES_TABLE.name
       ),
       params![checkout_path.to_string_lossy().as_ref()],
     ) {
-      log::warn!("Failed to forget terminal workspace: {}", err);
+      log::warn!("Failed to forget center workspace: {}", err);
     }
   }
 
-  pub fn forget_terminal_workspaces_for_project(project_path: &Path) {
+  pub fn forget_center_workspaces_for_project(project_path: &Path) {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
     if let Err(err) = store.conn.execute(
       &format!(
         "DELETE FROM {} WHERE project_path = ?1",
-        TERMINAL_WORKSPACES_TABLE.name
+        CENTER_WORKSPACES_TABLE.name
       ),
       params![project_path.to_string_lossy().as_ref()],
     ) {
-      log::warn!("Failed to forget project terminal workspaces: {}", err);
+      log::warn!("Failed to forget project center workspaces: {}", err);
     }
   }
 
@@ -1405,33 +1405,33 @@ mod tests {
   }
 
   #[test]
-  fn terminal_workspace_round_trips_per_checkout() {
-    let db_path = unique_test_db_path("terminal-workspace");
+  fn center_workspace_round_trips_per_checkout() {
+    let db_path = unique_test_db_path("center-workspace");
     let _ = fs::remove_file(&db_path);
     ConfigStore::set_test_db_path(Some(db_path));
 
-    let first = PathBuf::from("/tmp/reviu-terminal-first");
-    let second = PathBuf::from("/tmp/reviu-terminal-second");
-    let project = PathBuf::from("/tmp/reviu-terminal-project");
-    ConfigStore::persist_terminal_workspace(&first, &project, "{\"terminals\":[1]}");
-    ConfigStore::persist_terminal_workspace(&second, &project, "{\"terminals\":[2]}");
+    let first = PathBuf::from("/tmp/reviu-center-first");
+    let second = PathBuf::from("/tmp/reviu-center-second");
+    let project = PathBuf::from("/tmp/reviu-center-project");
+    ConfigStore::persist_center_workspace(&first, &project, "{\"tabs\":[1]}");
+    ConfigStore::persist_center_workspace(&second, &project, "{\"tabs\":[2]}");
     assert_eq!(
-      ConfigStore::load_terminal_workspace(&first).as_deref(),
-      Some("{\"terminals\":[1]}")
+      ConfigStore::load_center_workspace(&first).as_deref(),
+      Some("{\"tabs\":[1]}")
     );
     assert_eq!(
-      ConfigStore::load_terminal_workspace(&second).as_deref(),
-      Some("{\"terminals\":[2]}")
+      ConfigStore::load_center_workspace(&second).as_deref(),
+      Some("{\"tabs\":[2]}")
     );
 
-    ConfigStore::forget_terminal_workspace(&first);
-    assert_eq!(ConfigStore::load_terminal_workspace(&first), None);
-    assert!(ConfigStore::load_terminal_workspace(&second).is_some());
+    ConfigStore::forget_center_workspace(&first);
+    assert_eq!(ConfigStore::load_center_workspace(&first), None);
+    assert!(ConfigStore::load_center_workspace(&second).is_some());
 
-    ConfigStore::persist_terminal_workspace(&first, &project, "{\"terminals\":[1]}");
-    ConfigStore::forget_terminal_workspaces_for_project(&project);
-    assert_eq!(ConfigStore::load_terminal_workspace(&first), None);
-    assert_eq!(ConfigStore::load_terminal_workspace(&second), None);
+    ConfigStore::persist_center_workspace(&first, &project, "{\"tabs\":[1]}");
+    ConfigStore::forget_center_workspaces_for_project(&project);
+    assert_eq!(ConfigStore::load_center_workspace(&first), None);
+    assert_eq!(ConfigStore::load_center_workspace(&second), None);
 
     ConfigStore::set_test_db_path(None);
   }

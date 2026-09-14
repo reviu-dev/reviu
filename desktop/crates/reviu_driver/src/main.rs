@@ -196,6 +196,8 @@ enum Command {
   },
   /// Direct driver hook: open a terminal center tab.
   OpenTerminal,
+  /// Split the active center tab with the previous tab.
+  SplitCenterWithPrevious,
   /// Inspect the active terminal's visible output and navigation state.
   TerminalState,
   /// Open the first visible terminal file link.
@@ -565,6 +567,18 @@ fn handle_test_command(
       });
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
+    }
+    Command::SplitCenterWithPrevious => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.split_center_with_previous_for_driver(window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
     }
     Command::TerminalState => {
       let state = view.read_with(cx, |view, cx| view.terminal_state_for_driver(cx));
@@ -1076,6 +1090,12 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::SplitCenterWithPrevious => {
+      match split_center_with_previous_directly(cx, window, view) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::TerminalState => match terminal_state_directly(cx, view) {
       Ok(state) => respond(ok(state)),
       Err(error) => respond(err(error)),
@@ -1741,6 +1761,23 @@ fn open_terminal_file_link_directly(
     .update_window(window, |_, window, cx| {
       view.update(cx, |view, cx| {
         view.open_first_terminal_file_link_for_driver(window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn split_center_with_previous_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.split_center_with_previous_for_driver(window, cx)
       })
     })
     .map_err(|error| error.to_string())?;

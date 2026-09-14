@@ -96,6 +96,23 @@ fn worktree_file_modified(path: &Path) -> Option<SystemTime> {
     .ok()
 }
 
+#[derive(Clone, Copy)]
+enum RestoredEditorReview {
+  None,
+  Agent,
+  Github,
+}
+
+enum RestoredEditorData {
+  Worktree(editor::EditorFileLoad),
+  ReadOnly {
+    content: String,
+    binary_bytes: Option<Vec<u8>>,
+    diff_set: Option<git::DiffSet>,
+    opened_snapshot: OpenedSnapshot,
+  },
+}
+
 fn agent_snapshot_diff_set(
   old_text: Option<&str>,
   new_text: &str,
@@ -274,7 +291,7 @@ impl SessionPage {
       if self.center_layout.contains_tab(&tab) {
         self.set_active_center_tab(tab.clone());
       } else {
-        self.remember_center_tab(tab.clone());
+        self.remember_center_tab(tab.clone(), cx);
       }
       self.editor_tab = Some(tab.clone());
       self.record_recent_file(&repo_root, &rel_path);
@@ -290,7 +307,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.record_recent_file(&repo_root, &rel_path);
-    self.remember_center_tab(tab.clone());
+    self.remember_center_tab(tab.clone(), cx);
     self.set_editor_tab_loading(tab.clone(), rel_path.clone(), None);
     let diff_view = self.effective_diff_view(&rel_path, cx);
     // Wherever the open came from (chat recap, palette, review row), the
@@ -382,6 +399,220 @@ impl SessionPage {
     self.open_file_task = Some(task);
     self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
+  }
+
+  pub(super) fn restore_visible_center_editors(&mut self, cx: &mut Context<Self>) {
+    let checkout_root = self.synced_checkout.clone();
+    let tabs = self.center_layout.tabs();
+    for tab in tabs {
+      if !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
+        || self.editor_states.contains_key(&tab)
+      {
+        continue;
+      }
+      let (Some(checkout_root), Some(rel_path)) = (checkout_root.clone(), tab.path.clone()) else {
+        continue;
+      };
+      self.restore_persisted_center_editor(tab, rel_path, checkout_root, cx);
+    }
+  }
+
+  fn restore_persisted_center_editor(
+    &mut self,
+    tab: CenterTab,
+    rel_path: PathBuf,
+    checkout_root: PathBuf,
+    cx: &mut Context<Self>,
+  ) {
+    let opened_snapshot = match tab.snapshot.clone() {
+      Some(CenterTabSnapshot::AgentTool { old_text, new_text }) => {
+        Some(OpenedSnapshot::AgentTool {
+          whole_file_change: old_text.is_none() || new_text.is_empty(),
+          old_text,
+          new_text,
+        })
+      }
+      Some(CenterTabSnapshot::Commit { oid }) => Some(OpenedSnapshot::Commit(oid)),
+      Some(CenterTabSnapshot::PullRequestRange { base, head }) => {
+        Some(OpenedSnapshot::PullRequestRange { base, head })
+      }
+      None => None,
+    };
+    self.set_editor_tab_loading(tab.clone(), rel_path.clone(), opened_snapshot.clone());
+    let hide_whitespace = self.hide_whitespace;
+    let diff_view = if matches!(
+      opened_snapshot,
+      Some(OpenedSnapshot::AgentTool {
+        whole_file_change: true,
+        ..
+      })
+    ) {
+      DiffViewMode::Inline
+    } else {
+      self.effective_diff_view(&rel_path, cx)
+    };
+    let file_path = checkout_root.join(&rel_path);
+    let load_tab = tab.clone();
+    let worktree_review = if tab.kind == CenterTabKind::Diff {
+      RestoredEditorReview::Agent
+    } else {
+      RestoredEditorReview::None
+    };
+    let task = cx.spawn(async move |this, cx| {
+      let load_checkout = checkout_root.clone();
+      let load_path = file_path.clone();
+      let load_rel_path = rel_path.clone();
+      let load_snapshot = opened_snapshot.clone();
+      let loaded = cx
+        .background_spawn(async move {
+          match load_snapshot {
+            Some(OpenedSnapshot::AgentTool {
+              old_text,
+              new_text,
+              whole_file_change,
+            }) => Some((
+              RestoredEditorData::ReadOnly {
+                diff_set: agent_snapshot_diff_set(
+                  old_text.as_deref(),
+                  &new_text,
+                  &load_rel_path,
+                  hide_whitespace,
+                ),
+                content: new_text.clone(),
+                binary_bytes: None,
+                opened_snapshot: OpenedSnapshot::AgentTool {
+                  old_text,
+                  new_text,
+                  whole_file_change,
+                },
+              },
+              RestoredEditorReview::None,
+            )),
+            Some(OpenedSnapshot::Commit(oid)) => {
+              let file = git::load_commit_file_diff(&load_checkout, &oid, &load_rel_path).ok()?;
+              let diff_set = (!file.patch.trim().is_empty())
+                .then(|| git::diff_set_from_patch(&file.patch).ok())
+                .flatten();
+              Some((
+                RestoredEditorData::ReadOnly {
+                  content: file.content,
+                  binary_bytes: file.binary_bytes,
+                  diff_set,
+                  opened_snapshot: OpenedSnapshot::Commit(oid),
+                },
+                RestoredEditorReview::None,
+              ))
+            }
+            Some(OpenedSnapshot::PullRequestRange { base, head }) => {
+              let file =
+                git::load_range_file_diff(&load_checkout, &base, &head, &load_rel_path).ok()?;
+              let diff_set = (!file.patch.trim().is_empty())
+                .then(|| git::diff_set_from_patch(&file.patch).ok())
+                .flatten();
+              Some((
+                RestoredEditorData::ReadOnly {
+                  content: file.content,
+                  binary_bytes: file.binary_bytes,
+                  diff_set,
+                  opened_snapshot: OpenedSnapshot::PullRequestRange { base, head },
+                },
+                RestoredEditorReview::Github,
+              ))
+            }
+            None => Some((
+              RestoredEditorData::Worktree(Editor::load_file_for_editor(
+                &load_checkout,
+                &load_path,
+              )),
+              worktree_review,
+            )),
+          }
+        })
+        .await;
+      let _ = this.update(cx, move |this, cx| {
+        if this.synced_checkout.as_deref() != Some(checkout_root.as_path())
+          || !this.center_layout.contains_tab(&tab)
+        {
+          return;
+        }
+        let Some((loaded, review)) = loaded else {
+          this.clear_editor_tab(&tab);
+          cx.notify();
+          return;
+        };
+        let (editor, binary_preview, file_modified, opened_snapshot, is_worktree) = match loaded {
+          RestoredEditorData::Worktree(loaded) => {
+            let binary_preview =
+              build_binary_preview(rel_path.as_path(), loaded.binary_bytes.clone());
+            let file_modified = worktree_file_modified(&file_path);
+            let editor = cx.new(|cx| {
+              Editor::new_with_loaded_file(checkout_root.clone(), file_path.clone(), loaded, cx)
+            });
+            (editor, binary_preview, file_modified, None, true)
+          }
+          RestoredEditorData::ReadOnly {
+            content,
+            binary_bytes,
+            diff_set,
+            opened_snapshot,
+          } => {
+            let binary_preview = build_binary_preview(rel_path.as_path(), binary_bytes);
+            let editor =
+              cx.new(|cx| Editor::new_with_paths(checkout_root.clone(), file_path.clone(), cx));
+            editor.update(cx, |editor, cx| {
+              editor.load_readonly_snapshot(content, diff_set, cx)
+            });
+            (editor, binary_preview, None, Some(opened_snapshot), false)
+          }
+        };
+        editor.update(cx, |editor, cx| {
+          editor.set_git_diff_enabled(load_tab.kind == CenterTabKind::Diff, cx);
+          editor.set_diff_view_mode(diff_view, cx);
+          editor.set_ignore_whitespace(hide_whitespace, cx);
+        });
+        this.set_editor_tab_state(
+          load_tab.clone(),
+          CenterEditorState {
+            selected_file: rel_path.clone(),
+            file_modified,
+            editor: Some(editor.clone()),
+            binary_preview,
+            opened_snapshot,
+          },
+        );
+        match review {
+          RestoredEditorReview::None => configure_review(&editor, ReviewDestination::None, cx),
+          RestoredEditorReview::Agent => {
+            this.install_agent_review_handlers_for_editor(&editor, cx);
+            this.sync_agent_review_comments_to_editor(cx);
+          }
+          RestoredEditorReview::Github => {
+            this.install_github_review_handlers_for_editor(&editor, cx);
+          }
+        }
+        if is_worktree {
+          let event_tab = load_tab.clone();
+          let event_path = file_path.clone();
+          cx.subscribe(
+            &editor,
+            move |this, _editor, event: &EditorEvent, cx| match event {
+              EditorEvent::Saved => {
+                if let Some(state) = this.editor_states.get_mut(&event_tab) {
+                  state.file_modified = worktree_file_modified(&event_path);
+                }
+                this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+              }
+              EditorEvent::HunkStagingChanged => {
+                this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+              }
+            },
+          )
+          .detach();
+        }
+        cx.notify();
+      });
+    });
+    task.detach();
   }
 
   pub(super) fn warm_editor_tab(&self) -> Option<&CenterTab> {
@@ -528,7 +759,7 @@ impl SessionPage {
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     self.open_file_task = None;
-    self.remember_center_tab(tab.clone());
+    self.remember_center_tab(tab.clone(), cx);
     self.editor_tab = Some(tab.clone());
     self.set_editor_tab_state(tab.clone(), state);
     self.svg_preview.update(cx, |preview, _| preview.clear());
@@ -639,7 +870,7 @@ impl SessionPage {
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    self.remember_center_tab(tab.clone());
+    self.remember_center_tab(tab.clone(), cx);
     let agent_whole_file_change = old_text.is_none() || new_text.is_empty();
     let opened_snapshot = OpenedSnapshot::AgentTool {
       old_text: old_text.clone(),
@@ -767,7 +998,7 @@ impl SessionPage {
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    self.remember_center_tab(tab.clone());
+    self.remember_center_tab(tab.clone(), cx);
     let opened_snapshot = OpenedSnapshot::Commit(commit_oid.clone());
     self.set_editor_tab_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
     let hide_whitespace = self.hide_whitespace;
@@ -908,7 +1139,7 @@ impl SessionPage {
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    self.remember_center_tab(tab.clone());
+    self.remember_center_tab(tab.clone(), cx);
     let opened_snapshot = OpenedSnapshot::PullRequestRange {
       base: base_oid.clone(),
       head: head_oid.clone(),
@@ -1564,7 +1795,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::Terminal => self.focus_terminal_tab(&remaining_tab, window, cx),
     }
-    self.persist_current_terminal_workspace(cx);
+    self.persist_current_center_workspace(cx);
     cx.notify();
   }
 
@@ -1593,7 +1824,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
     }
-    self.persist_current_terminal_workspace(cx);
+    self.persist_current_center_workspace(cx);
     cx.notify();
   }
 
@@ -1651,7 +1882,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
     }
-    self.persist_current_terminal_workspace(cx);
+    self.persist_current_center_workspace(cx);
     cx.notify();
   }
 
@@ -1718,6 +1949,7 @@ impl SessionPage {
     if active_chat_closed {
       self.park_active_chat_panel(cx);
     }
+    self.persist_current_center_workspace(cx);
     if !selected_closed {
       cx.notify();
       return;
@@ -1793,7 +2025,7 @@ impl SessionPage {
         self.clear_terminal_tab(&layout_tab);
       }
     }
-    self.persist_current_terminal_workspace(cx);
+    self.persist_current_center_workspace(cx);
 
     if !selected_closed {
       cx.notify();
@@ -1826,8 +2058,8 @@ impl SessionPage {
     self.clear_editor_tab(&tab);
     if tab.kind == CenterTabKind::Terminal {
       self.clear_terminal_tab(&tab);
-      self.persist_current_terminal_workspace(cx);
     }
+    self.persist_current_center_workspace(cx);
     if editor_closed {
       self.open_file_task = None;
       self.open_file_generation = self.open_file_generation.wrapping_add(1);

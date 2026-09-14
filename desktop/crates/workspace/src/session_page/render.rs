@@ -1545,7 +1545,7 @@ impl SessionPage {
               .center_layouts_by_tab
               .insert(active_tab, this.center_layout.clone());
           }
-          this.persist_current_terminal_workspace(cx);
+          this.persist_current_center_workspace(cx);
           cx.notify();
         }),
       )
@@ -1739,7 +1739,7 @@ impl SessionPage {
       self.remember_center_layout_tab(tab.clone());
       self.center = Self::center_view_for_tab(&tab);
       self.sync_agent_chat_close_control(cx);
-      self.persist_current_terminal_workspace(cx);
+      self.persist_current_center_workspace(cx);
       cx.notify();
       return;
     }
@@ -4924,7 +4924,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
     cx.run_until_parked();
-    assert!(ConfigStore::load_terminal_workspace(&repo.path).is_some());
+    assert!(ConfigStore::load_center_workspace(&repo.path).is_some());
     page.update_in(cx, |page, window, cx| {
       page.close_center_tab(CenterTab::terminal(1), window, cx)
     });
@@ -4934,7 +4934,7 @@ mod tests {
       assert!(page.terminal_views.is_empty());
       assert!(!page.center_tabs.contains(&CenterTab::terminal(1)));
     });
-    assert_eq!(ConfigStore::load_terminal_workspace(&repo.path), None);
+    assert_eq!(ConfigStore::load_center_workspace(&repo.path), None);
   }
 
   #[gpui::test]
@@ -4948,7 +4948,7 @@ mod tests {
     page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
     cx.run_until_parked();
     let unloaded_checkout = repo.path.join("unloaded-worktree");
-    ConfigStore::persist_terminal_workspace(&unloaded_checkout, &repo.path, "{}");
+    ConfigStore::persist_center_workspace(&unloaded_checkout, &repo.path, "{}");
 
     page.update_in(cx, |page, window, cx| {
       page
@@ -4961,10 +4961,7 @@ mod tests {
       assert!(page.terminal_views.is_empty());
       assert!(!page.center_tabs.contains(&CenterTab::terminal(1)));
     });
-    assert_eq!(
-      ConfigStore::load_terminal_workspace(&unloaded_checkout),
-      None
-    );
+    assert_eq!(ConfigStore::load_center_workspace(&unloaded_checkout), None);
   }
 
   #[gpui::test]

@@ -527,6 +527,18 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn split_center_with_previous_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.split_center_with_previous_for_driver(window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn terminal_state_for_driver(
     &self,
     cx: &App,

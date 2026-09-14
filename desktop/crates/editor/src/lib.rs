@@ -15,7 +15,7 @@ pub use cursor_blink::CursorBlink;
 pub use document::Document;
 pub use editor::{
   ConflictNavigationDirection, ConflictNavigationState, ConflictResolution, DiffViewMode, Editor,
-  EditorEvent, HunkAction, HunkNavigationDirection, HunkNavigationState,
+  EditorEvent, EditorFileLoad, HunkAction, HunkNavigationDirection, HunkNavigationState,
   REVIEW_COMMENT_BLOCK_DEBUG_SELECTOR, REVIEW_COMMENT_CARD_DEBUG_SELECTOR, ReviewCapabilities,
   ReviewCommentAssetUrlResolver, ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview,
   ReviewCommentCreateAction, ReviewCommentCreateHandler, ReviewCommentCreateRequest,

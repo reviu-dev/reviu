@@ -212,7 +212,7 @@ impl SessionPage {
     let todo_view = cx.new(|cx| InteractiveRebaseTodoView::new(window, cx, config));
     self.interactive_rebase_todo_view = Some(todo_view.clone());
     self.center = CenterView::InteractiveRebase;
-    self.remember_center_tab(CenterTab::interactive_rebase());
+    self.remember_center_tab(CenterTab::interactive_rebase(), cx);
     cx.on_next_frame(window, move |_, window, cx| {
       todo_view.update(cx, |view, cx| view.focus_rows_list(window, cx));
     });

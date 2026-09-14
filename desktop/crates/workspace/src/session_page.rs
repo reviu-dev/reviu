@@ -57,8 +57,8 @@ use crate::project_files::list_project_files;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus, session_row_title};
 use crate::session_page::center_layout::{
-  CenterDropTarget, CenterLayout, CenterSplitDirection, CenterSurface, PersistedTerminalLayout,
-  PersistedTerminalNode,
+  CenterDropTarget, CenterLayout, CenterSplitDirection, CenterSurface, PersistedCenterLayout,
+  PersistedCenterTab, collect_persisted_tabs, persisted_center_tab,
 };
 use crate::session_page::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
 use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
@@ -265,6 +265,7 @@ pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
+  agent_activated: bool,
   /// All per-project stores live here; everything cross-project reads through it.
   conversation_hub: ConversationHub,
   /// The selected project's store: where sessions land when nothing on screen
@@ -355,6 +356,7 @@ pub struct SessionPage {
 
 mod agent;
 mod center_layout;
+mod center_persistence;
 mod center_tab;
 mod commands;
 #[cfg(any(test, feature = "test-support"))]
@@ -621,6 +623,7 @@ impl SessionPage {
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
       agent_chat_view: None,
+      agent_activated: false,
       conversation_hub: ConversationHub::new(),
       chat_store: None,
       swept_repos: HashSet::new(),
@@ -902,6 +905,7 @@ impl SessionPage {
   /// Connects the agent outside `render`: spawning a process while painting
   /// respawned it in a loop.
   pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.agent_activated = true;
     if self.agent_chat_view.is_some() {
       return;
     }
@@ -1100,7 +1104,7 @@ impl SessionPage {
       return;
     }
     if let Some(previous_checkout) = self.synced_checkout.clone() {
-      self.persist_terminal_workspace(&previous_checkout, cx);
+      self.persist_center_workspace(&previous_checkout, cx);
       let tabs = self
         .center_tabs
         .iter()
@@ -1128,7 +1132,7 @@ impl SessionPage {
     }
 
     if let Some(checkout) = checkout.as_ref() {
-      self.restore_terminal_workspace(checkout, window, cx);
+      self.restore_center_workspace(checkout, window, cx);
     }
     let restored_tabs = CenterTab::with_chat_tab(
       checkout
@@ -1170,6 +1174,7 @@ impl SessionPage {
     }
     self.refresh_session_list(cx);
     self.activate_center_tab(restored_selected_tab, OpenIntent::Browse, window, cx);
+    self.restore_visible_center_editors(cx);
   }
 
   /// Selects a sidebar checkout and keeps the project context, footer and git
@@ -1430,10 +1435,10 @@ impl SessionPage {
   }
 
   fn remember_active_chat_tab(&mut self, cx: &App) {
-    self.remember_center_tab(self.active_chat_tab(cx));
+    self.remember_center_tab(self.active_chat_tab(cx), cx);
   }
 
-  fn forget_center_chat_tab(&mut self, conversation_id: &str) {
+  fn forget_center_chat_tab(&mut self, conversation_id: &str, cx: &App) {
     let is_removed_chat = |tab: &CenterTab| {
       tab.kind == CenterTabKind::Chat && tab.conversation_id.as_deref() == Some(conversation_id)
     };
@@ -1449,6 +1454,7 @@ impl SessionPage {
       self.set_active_center_tab(CenterTab::chat());
       self.remember_center_tab_visit(CenterTab::chat());
     }
+    self.persist_current_center_workspace(cx);
   }
 
   fn save_active_center_layout(&mut self) {
@@ -1633,7 +1639,7 @@ impl SessionPage {
       })
   }
 
-  fn remember_center_tab(&mut self, tab: CenterTab) {
+  fn remember_center_tab(&mut self, tab: CenterTab, cx: &App) {
     self.save_active_center_layout();
     if Self::is_real_chat_tab(&tab) {
       self.forget_placeholder_chat_tab();
@@ -1645,6 +1651,7 @@ impl SessionPage {
     self.center_layout = CenterLayout::single(CenterSurface::from_tab(tab.clone()));
     self.set_active_center_tab(tab.clone());
     self.remember_center_tab_visit(tab);
+    self.persist_current_center_workspace(cx);
   }
 
   fn activate_conversation_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1735,13 +1742,15 @@ impl SessionPage {
     self.active_center_tab = Some(tab.clone());
     if has_saved_split_layout {
       let focused_tab = self.center_layout.active_tab().clone();
-      self.ensure_center_layout_chat_panels(window, cx);
-      let active_chat_id = focused_tab
-        .conversation_id()
-        .map(ToOwned::to_owned)
-        .or_else(|| self.center_layout_chat_id());
-      if let Some(conversation_id) = active_chat_id {
-        self.activate_session_panel(&conversation_id, window, cx);
+      if self.agent_chat_view.is_some() {
+        self.ensure_center_layout_chat_panels(window, cx);
+        let active_chat_id = focused_tab
+          .conversation_id()
+          .map(ToOwned::to_owned)
+          .or_else(|| self.center_layout_chat_id());
+        if let Some(conversation_id) = active_chat_id {
+          self.activate_session_panel(&conversation_id, window, cx);
+        }
       }
       self.active_center_tab = Some(tab.clone());
       self.center = match focused_tab.kind {
@@ -1757,13 +1766,18 @@ impl SessionPage {
         CenterView::Diff | CenterView::InteractiveRebase => {}
         CenterView::Terminal => self.focus_terminal_tab(&focused_tab, window, cx),
       }
-      self.persist_current_terminal_workspace(cx);
+      self.restore_visible_center_editors(cx);
+      self.persist_current_center_workspace(cx);
       cx.notify();
       return;
     }
     match tab.kind {
       CenterTabKind::Chat => {
-        if let Some(id) = tab.conversation_id {
+        if !self.agent_activated && self.agent_chat_view.is_none() {
+          self.center = CenterView::Conversation;
+          self.set_active_center_tab(tab);
+          cx.notify();
+        } else if let Some(id) = tab.conversation_id {
           self.select_session(&id, window, cx);
         } else {
           self.activate_conversation_tab(window, cx);
@@ -1803,7 +1817,7 @@ impl SessionPage {
         cx.notify();
       }
     }
-    self.persist_current_terminal_workspace(cx);
+    self.persist_current_center_workspace(cx);
   }
 
   /// Opens the dock on a tab without the toggle: something outside asked for
@@ -1926,6 +1940,58 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn split_center_with_previous_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let active_tab = self
+      .active_center_tab
+      .clone()
+      .ok_or_else(|| SharedString::from("No center tab is active."))?;
+    let active_index = self
+      .center_tabs
+      .iter()
+      .position(|tab| tab == &active_tab)
+      .ok_or_else(|| SharedString::from("The active center tab is not open."))?;
+    let previous_tab = self.center_tabs[..active_index]
+      .iter()
+      .rev()
+      .find(|tab| !Self::is_placeholder_chat_tab(tab))
+      .cloned()
+      .ok_or_else(|| SharedString::from("No previous center tab is available."))?;
+    let pane_id = match self.center_layout.root() {
+      center_layout::CenterNode::Pane(pane) => pane.id(),
+      center_layout::CenterNode::Split(_) => {
+        return Err("The active center layout is already split.".into());
+      }
+    };
+    if !self.center_layout.split_pane(
+      pane_id,
+      CenterSurface::from_tab(previous_tab),
+      CenterSplitDirection::Left,
+    ) {
+      return Err("The center tabs could not be split.".into());
+    }
+    self
+      .center_layout
+      .set_active_surface(CenterSurface::from_tab(active_tab.clone()));
+    self.remember_center_layout_tab(active_tab.clone());
+    self.center = Self::center_view_for_tab(&active_tab);
+    self.restore_visible_center_editors(cx);
+    self.persist_current_center_workspace(cx);
+    match self.center {
+      CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
+      CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
+      CenterView::InteractiveRebase => {}
+      CenterView::Terminal => self.focus_terminal_tab(&active_tab, window, cx),
+    }
+    cx.notify();
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn terminal_state_for_driver(
     &self,
     cx: &App,
@@ -1953,8 +2019,36 @@ impl SessionPage {
       .filter(|terminal| Some(terminal.checkout_root.as_path()) == checkout_root.as_deref())
       .count();
 
+    let center_surface_kinds = self
+      .center_layout
+      .tabs()
+      .iter()
+      .map(|tab| match tab.kind {
+        CenterTabKind::Chat => "chat",
+        CenterTabKind::File => "file",
+        CenterTabKind::Diff => "diff",
+        CenterTabKind::InteractiveRebase => "interactive_rebase",
+        CenterTabKind::Terminal => "terminal",
+      })
+      .map(str::to_string)
+      .collect();
+    let loaded_editor_count = self
+      .center_layout
+      .tabs()
+      .iter()
+      .filter(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
+      .filter(|tab| {
+        self
+          .editor_states
+          .get(tab)
+          .is_some_and(|state| state.editor.is_some())
+      })
+      .count();
+
     Ok(crate::DriverTerminalState {
       terminal_count,
+      center_surface_kinds,
+      loaded_editor_count,
       working_directory: terminal
         .working_directory()
         .map(|path| path.to_string_lossy().into_owned()),
@@ -2105,7 +2199,7 @@ impl SessionPage {
     self.remember_center_layout_tab(active_tab.clone());
     self.activate_center_tab(active_tab, OpenIntent::Open, window, cx);
     self.sync_agent_chat_close_control(cx);
-    self.persist_current_terminal_workspace(cx);
+    self.persist_current_center_workspace(cx);
     cx.notify();
     Ok(())
   }
@@ -2126,7 +2220,7 @@ impl SessionPage {
     let chat_tab = self.active_chat_tab(cx);
     let active_path = active_path.unwrap_or_else(|| PathBuf::from("src/promo-codes.ts"));
     let active_tab = CenterTab::diff(active_path.clone());
-    self.remember_center_tab(chat_tab.clone());
+    self.remember_center_tab(chat_tab.clone(), cx);
     self.open_diff(
       PathBuf::from("src/discounts.ts"),
       Some(1),

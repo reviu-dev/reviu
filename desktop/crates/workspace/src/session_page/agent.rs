@@ -57,12 +57,23 @@ impl SessionPage {
         .as_ref()
         .and_then(|store| store.read(cx).active_meta()),
     };
-    let preserve_restored_terminal = self.center == CenterView::Terminal
-      && self.center_layout.active_tab().kind == CenterTabKind::Terminal;
+    let restored_active_tab = self.center_layout.active_tab().clone();
+    let preserve_restored_center = self.center_layout.surface_count() > 1
+      || !Self::is_placeholder_chat_tab(&restored_active_tab);
     let view = self.build_fallback_chat_panel(resume, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
-    if !preserve_restored_terminal {
+    if preserve_restored_center {
+      self.ensure_center_layout_chat_panels(window, cx);
+      if let Some(conversation_id) = restored_active_tab.conversation_id()
+        && self
+          .agent_chat_view
+          .as_ref()
+          .is_none_or(|panel| panel.read(cx).current_conversation().id != conversation_id)
+      {
+        self.activate_session_panel(conversation_id, window, cx);
+      }
+    } else {
       self.remember_active_chat_tab(cx);
     }
     self.refresh_session_list(cx);
@@ -508,7 +519,7 @@ impl SessionPage {
       if let Some(store) = store {
         self.cleanup_session_worktree(repo_root, store, &id, cx);
       }
-      self.forget_center_chat_tab(&id);
+      self.forget_center_chat_tab(&id, cx);
       return;
     }
     let id = panel.read(cx).current_conversation().id.clone();
@@ -1678,7 +1689,7 @@ impl SessionPage {
       self.agent_chat_view = Some(view);
       self.remember_active_chat_tab(cx);
     }
-    self.forget_center_chat_tab(id);
+    self.forget_center_chat_tab(id, cx);
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
     cx.notify();
@@ -1697,7 +1708,7 @@ impl SessionPage {
       self.active_center_tab = Some(representative.clone());
       self.remember_center_tab_visit(representative);
     } else {
-      self.remember_center_tab(chat_tab);
+      self.remember_center_tab(chat_tab, cx);
     }
     self.diff_chat_open = true;
     self.center = CenterView::Conversation;

@@ -9,7 +9,7 @@ pub(super) enum CenterTabKind {
   Terminal,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, Hash, serde::Serialize)]
 pub(super) enum CenterTabSnapshot {
   AgentTool {
     old_text: Option<String>,

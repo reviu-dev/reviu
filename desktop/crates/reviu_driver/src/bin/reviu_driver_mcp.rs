@@ -428,6 +428,7 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
       "path": required_string(&arguments, "path")?,
     }),
     "open_terminal" => json!({ "cmd": "open_terminal" }),
+    "split_center_with_previous" => json!({ "cmd": "split_center_with_previous" }),
     "terminal_state" => json!({ "cmd": "terminal_state" }),
     "open_terminal_file_link" => json!({ "cmd": "open_terminal_file_link" }),
     "open_pull_request_file" => json!({
@@ -646,6 +647,11 @@ fn tools() -> Vec<Value> {
     tool(
       "open_terminal",
       "Open a terminal center tab.",
+      empty_schema(),
+    ),
+    tool(
+      "split_center_with_previous",
+      "Split the active center tab with the previous open tab.",
       empty_schema(),
     ),
     tool(

@@ -2,11 +2,29 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::center_tab::{CenterTab, CenterTabKind};
+use super::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum PersistedCenterTab {
+  Chat {
+    conversation_id: Option<String>,
+  },
+  File {
+    path: std::path::PathBuf,
+  },
+  Diff {
+    path: std::path::PathBuf,
+    snapshot: Option<CenterTabSnapshot>,
+  },
+  Terminal {
+    key: u64,
+  },
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum PersistedTerminalSplitDirection {
+pub(super) enum PersistedCenterSplitDirection {
   Up,
   Down,
   Left,
@@ -15,22 +33,22 @@ pub(super) enum PersistedTerminalSplitDirection {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(super) enum PersistedTerminalNode {
+pub(super) enum PersistedCenterNode {
   Pane {
-    terminals: Vec<u64>,
-    active_terminal: u64,
+    tabs: Vec<PersistedCenterTab>,
+    active_tab: PersistedCenterTab,
   },
   Split {
-    direction: PersistedTerminalSplitDirection,
-    first: Box<PersistedTerminalNode>,
-    second: Box<PersistedTerminalNode>,
+    direction: PersistedCenterSplitDirection,
+    first: Box<PersistedCenterNode>,
+    second: Box<PersistedCenterNode>,
   },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub(super) struct PersistedTerminalLayout {
-  pub(super) root: PersistedTerminalNode,
-  pub(super) active_terminal: u64,
+pub(super) struct PersistedCenterLayout {
+  pub(super) root: PersistedCenterNode,
+  pub(super) active_tab: PersistedCenterTab,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -498,39 +516,54 @@ pub(super) struct CenterLayout {
   next_pane_id: u64,
 }
 
-fn persisted_terminal_node(
+pub(super) fn persisted_center_tab(
+  tab: &CenterTab,
+  terminal_keys: &HashMap<u64, u64>,
+) -> Option<PersistedCenterTab> {
+  match tab.kind {
+    CenterTabKind::Chat => Some(PersistedCenterTab::Chat {
+      conversation_id: tab.conversation_id.clone(),
+    }),
+    CenterTabKind::File => Some(PersistedCenterTab::File {
+      path: tab.path.clone()?,
+    }),
+    CenterTabKind::Diff => Some(PersistedCenterTab::Diff {
+      path: tab.path.clone()?,
+      snapshot: tab.snapshot.clone(),
+    }),
+    CenterTabKind::Terminal => Some(PersistedCenterTab::Terminal {
+      key: terminal_keys.get(&tab.terminal_id()?).copied()?,
+    }),
+    CenterTabKind::InteractiveRebase => None,
+  }
+}
+
+fn persisted_center_node(
   node: &CenterNode,
   terminal_keys: &HashMap<u64, u64>,
-) -> Option<PersistedTerminalNode> {
+) -> Option<PersistedCenterNode> {
   match node {
     CenterNode::Pane(pane) => {
-      let terminals = pane
+      let tabs = pane
         .surfaces
         .iter()
-        .filter_map(|surface| surface.tab().terminal_id())
-        .filter_map(|terminal_id| terminal_keys.get(&terminal_id).copied())
+        .filter_map(|surface| persisted_center_tab(surface.tab(), terminal_keys))
         .collect::<Vec<_>>();
-      let active_terminal = pane
-        .active_surface
-        .tab()
-        .terminal_id()
-        .and_then(|terminal_id| terminal_keys.get(&terminal_id).copied())
-        .or_else(|| terminals.first().copied())?;
-      Some(PersistedTerminalNode::Pane {
-        terminals,
-        active_terminal,
-      })
+      let active_tab = persisted_center_tab(pane.active_surface.tab(), terminal_keys)
+        .filter(|active| tabs.contains(active))
+        .or_else(|| tabs.first().cloned())?;
+      Some(PersistedCenterNode::Pane { tabs, active_tab })
     }
     CenterNode::Split(split) => {
-      let first = persisted_terminal_node(&split.first, terminal_keys);
-      let second = persisted_terminal_node(&split.second, terminal_keys);
+      let first = persisted_center_node(&split.first, terminal_keys);
+      let second = persisted_center_node(&split.second, terminal_keys);
       match (first, second) {
-        (Some(first), Some(second)) => Some(PersistedTerminalNode::Split {
+        (Some(first), Some(second)) => Some(PersistedCenterNode::Split {
           direction: match split.direction {
-            CenterSplitDirection::Up => PersistedTerminalSplitDirection::Up,
-            CenterSplitDirection::Down => PersistedTerminalSplitDirection::Down,
-            CenterSplitDirection::Left => PersistedTerminalSplitDirection::Left,
-            CenterSplitDirection::Right => PersistedTerminalSplitDirection::Right,
+            CenterSplitDirection::Up => PersistedCenterSplitDirection::Up,
+            CenterSplitDirection::Down => PersistedCenterSplitDirection::Down,
+            CenterSplitDirection::Left => PersistedCenterSplitDirection::Left,
+            CenterSplitDirection::Right => PersistedCenterSplitDirection::Right,
           },
           first: Box::new(first),
           second: Box::new(second),
@@ -542,30 +575,51 @@ fn persisted_terminal_node(
   }
 }
 
-fn first_persisted_terminal(node: &PersistedTerminalNode) -> u64 {
+fn first_persisted_tab(node: &PersistedCenterNode) -> Option<PersistedCenterTab> {
   match node {
-    PersistedTerminalNode::Pane { terminals, .. } => terminals.first().copied().unwrap_or_default(),
-    PersistedTerminalNode::Split { first, .. } => first_persisted_terminal(first),
+    PersistedCenterNode::Pane { tabs, .. } => tabs.first().cloned(),
+    PersistedCenterNode::Split { first, .. } => first_persisted_tab(first),
+  }
+}
+
+pub(super) fn collect_persisted_tabs(
+  node: &PersistedCenterNode,
+  tabs: &mut Vec<PersistedCenterTab>,
+) {
+  match node {
+    PersistedCenterNode::Pane {
+      tabs: pane_tabs, ..
+    } => {
+      for tab in pane_tabs {
+        if !tabs.contains(tab) {
+          tabs.push(tab.clone());
+        }
+      }
+    }
+    PersistedCenterNode::Split { first, second, .. } => {
+      collect_persisted_tabs(first, tabs);
+      collect_persisted_tabs(second, tabs);
+    }
   }
 }
 
 fn center_node_from_persisted(
-  node: &PersistedTerminalNode,
-  terminals: &HashMap<u64, CenterTab>,
+  node: &PersistedCenterNode,
+  tabs: &HashMap<PersistedCenterTab, CenterTab>,
   next_id: &mut u64,
 ) -> Option<CenterNode> {
   match node {
-    PersistedTerminalNode::Pane {
-      terminals: terminal_keys,
-      active_terminal,
+    PersistedCenterNode::Pane {
+      tabs: persisted_tabs,
+      active_tab,
     } => {
-      let surfaces = terminal_keys
+      let surfaces = persisted_tabs
         .iter()
-        .filter_map(|key| terminals.get(key).cloned())
+        .filter_map(|tab| tabs.get(tab).cloned())
         .map(CenterSurface::from_tab)
         .collect::<Vec<_>>();
-      let active_surface = terminals
-        .get(active_terminal)
+      let active_surface = tabs
+        .get(active_tab)
         .filter(|tab| surfaces.iter().any(|surface| surface.tab() == *tab))
         .cloned()
         .map(CenterSurface::from_tab)
@@ -578,13 +632,13 @@ fn center_node_from_persisted(
         active_surface,
       }))
     }
-    PersistedTerminalNode::Split {
+    PersistedCenterNode::Split {
       direction,
       first,
       second,
     } => {
-      let first = center_node_from_persisted(first, terminals, next_id);
-      let second = center_node_from_persisted(second, terminals, next_id);
+      let first = center_node_from_persisted(first, tabs, next_id);
+      let second = center_node_from_persisted(second, tabs, next_id);
       match (first, second) {
         (Some(first), Some(second)) => {
           let split_id = CenterSplitId(*next_id);
@@ -592,10 +646,10 @@ fn center_node_from_persisted(
           Some(CenterNode::Split(CenterSplit {
             id: split_id,
             direction: match direction {
-              PersistedTerminalSplitDirection::Up => CenterSplitDirection::Up,
-              PersistedTerminalSplitDirection::Down => CenterSplitDirection::Down,
-              PersistedTerminalSplitDirection::Left => CenterSplitDirection::Left,
-              PersistedTerminalSplitDirection::Right => CenterSplitDirection::Right,
+              PersistedCenterSplitDirection::Up => CenterSplitDirection::Up,
+              PersistedCenterSplitDirection::Down => CenterSplitDirection::Down,
+              PersistedCenterSplitDirection::Left => CenterSplitDirection::Left,
+              PersistedCenterSplitDirection::Right => CenterSplitDirection::Right,
             },
             first: Box::new(first),
             second: Box::new(second),
@@ -618,30 +672,29 @@ impl CenterLayout {
     }
   }
 
-  pub(super) fn persisted_terminal_layout(
+  pub(super) fn persisted_center_layout(
     &self,
     terminal_keys: &HashMap<u64, u64>,
-  ) -> Option<PersistedTerminalLayout> {
-    let root = persisted_terminal_node(&self.root, terminal_keys)?;
-    let active_terminal = self
-      .active_tab()
-      .terminal_id()
-      .and_then(|terminal_id| terminal_keys.get(&terminal_id).copied())
-      .unwrap_or_else(|| first_persisted_terminal(&root));
-    Some(PersistedTerminalLayout {
-      root,
-      active_terminal,
-    })
+  ) -> Option<PersistedCenterLayout> {
+    let root = persisted_center_node(&self.root, terminal_keys)?;
+    let active_tab = persisted_center_tab(self.active_tab(), terminal_keys)
+      .filter(|active| {
+        let mut tabs = Vec::new();
+        collect_persisted_tabs(&root, &mut tabs);
+        tabs.contains(active)
+      })
+      .or_else(|| first_persisted_tab(&root))?;
+    Some(PersistedCenterLayout { root, active_tab })
   }
 
-  pub(super) fn from_persisted_terminal_layout(
-    persisted: &PersistedTerminalLayout,
-    terminals: &HashMap<u64, CenterTab>,
+  pub(super) fn from_persisted_center_layout(
+    persisted: &PersistedCenterLayout,
+    tabs: &HashMap<PersistedCenterTab, CenterTab>,
   ) -> Option<Self> {
     let mut next_id = 0;
-    let root = center_node_from_persisted(&persisted.root, terminals, &mut next_id)?;
-    let active_tab = terminals
-      .get(&persisted.active_terminal)
+    let root = center_node_from_persisted(&persisted.root, tabs, &mut next_id)?;
+    let active_tab = tabs
+      .get(&persisted.active_tab)
       .filter(|tab| root.contains_tab(tab))
       .cloned()
       .unwrap_or_else(|| root.first_active_surface().tab().clone());
@@ -845,57 +898,67 @@ mod tests {
   }
 
   #[test]
-  fn terminal_layout_round_trips_with_fresh_runtime_ids() {
-    let first = CenterTab::terminal(1);
-    let second = CenterTab::terminal(2);
-    let mut layout = CenterLayout::single(CenterSurface::from_tab(first.clone()));
-    let pane_id = root_pane_id(&layout);
-    assert!(layout.split_pane(
-      pane_id,
-      CenterSurface::from_tab(second.clone()),
-      CenterSplitDirection::Right,
-    ));
-    let persisted = layout
-      .persisted_terminal_layout(&HashMap::from([(1, 10), (2, 20)]))
-      .expect("persisted terminal layout");
-
-    let restored_first = CenterTab::terminal(101);
-    let restored_second = CenterTab::terminal(102);
-    let restored = CenterLayout::from_persisted_terminal_layout(
-      &persisted,
-      &HashMap::from([(10, restored_first.clone()), (20, restored_second.clone())]),
-    )
-    .expect("restored terminal layout");
-
-    assert_split_tabs(
-      &restored,
-      CenterSplitDirection::Right,
-      &restored_first,
-      &restored_second,
-    );
-    assert_eq!(restored.active_tab(), &restored_second);
-  }
-
-  #[test]
-  fn terminal_layout_drops_non_terminal_split_panes() {
+  fn center_layout_round_trips_mixed_surfaces_with_fresh_terminal_ids() {
     let terminal = CenterTab::terminal(1);
     let file = CenterTab::file(PathBuf::from("README.md"));
     let mut layout = CenterLayout::single(CenterSurface::from_tab(terminal.clone()));
     let pane_id = root_pane_id(&layout);
     assert!(layout.split_pane(
       pane_id,
-      CenterSurface::from_tab(file),
+      CenterSurface::from_tab(file.clone()),
+      CenterSplitDirection::Right,
+    ));
+    let persisted = layout
+      .persisted_center_layout(&HashMap::from([(1, 10)]))
+      .expect("persisted center layout");
+
+    let restored_terminal = CenterTab::terminal(101);
+    let restored = CenterLayout::from_persisted_center_layout(
+      &persisted,
+      &HashMap::from([
+        (
+          PersistedCenterTab::Terminal { key: 10 },
+          restored_terminal.clone(),
+        ),
+        (
+          PersistedCenterTab::File {
+            path: PathBuf::from("README.md"),
+          },
+          file.clone(),
+        ),
+      ]),
+    )
+    .expect("restored center layout");
+
+    assert_split_tabs(
+      &restored,
+      CenterSplitDirection::Right,
+      &restored_terminal,
+      &file,
+    );
+    assert_eq!(restored.active_tab(), &file);
+  }
+
+  #[test]
+  fn center_layout_drops_transient_rebase_panes() {
+    let terminal = CenterTab::terminal(1);
+    let rebase = CenterTab::interactive_rebase();
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(terminal.clone()));
+    let pane_id = root_pane_id(&layout);
+    assert!(layout.split_pane(
+      pane_id,
+      CenterSurface::from_tab(rebase),
       CenterSplitDirection::Right,
     ));
 
     let persisted = layout
-      .persisted_terminal_layout(&HashMap::from([(1, 10)]))
-      .expect("persisted terminal layout");
+      .persisted_center_layout(&HashMap::from([(1, 10)]))
+      .expect("persisted center layout");
     assert_eq!(
       persisted.root,
-      PersistedTerminalNode::Pane {
-        terminals: vec![10],
-        active_terminal: 10,
+      PersistedCenterNode::Pane {
+        tabs: vec![PersistedCenterTab::Terminal { key: 10 }],
+        active_tab: PersistedCenterTab::Terminal { key: 10 },
       }
     );
   }
