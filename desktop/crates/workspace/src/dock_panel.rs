@@ -961,6 +961,7 @@ pub struct DockPanel {
   files_tree_state: Entity<TreeState>,
   files_context_menu_target: Option<FilesContextTarget>,
   files_inline_rename: Option<FilesInlineRename>,
+  files_inline_create_placeholder_to_ignore: Option<PathBuf>,
   files_loaded: bool,
   files_file_count: usize,
   files_include_gitignored: bool,
@@ -1079,13 +1080,20 @@ impl DockPanel {
       .focus_handle(cx)
       .tab_stop(true)
       .tab_index(0);
-    cx.subscribe(&files_tree_state, |_this, tree, event: &TreeEvent, cx| {
+    cx.subscribe(&files_tree_state, |this, tree, event: &TreeEvent, cx| {
       let (id, intent) = match event {
         TreeEvent::Selected(id) => (id.clone(), OpenIntent::Browse),
         TreeEvent::Confirmed(id) => (id.clone(), OpenIntent::Open),
         TreeEvent::Expanded(_) | TreeEvent::Collapsed(_) => return,
       };
-      if is_empty_folder_placeholder_id(id.as_ref()) {
+      let is_inline_create_placeholder = this.files_inline_rename.as_ref().is_some_and(|rename| {
+        matches!(rename.operation, FilesInlineOperation::Create { .. })
+          && file_tree_path_id(&rename.relative_path) == id.as_ref()
+      }) || this
+        .files_inline_create_placeholder_to_ignore
+        .as_ref()
+        .is_some_and(|path| file_tree_path_id(path) == id.as_ref());
+      if is_empty_folder_placeholder_id(id.as_ref()) || is_inline_create_placeholder {
         return;
       }
       // Walking onto a folder moves the selection and nothing else: a folder
@@ -1236,6 +1244,7 @@ impl DockPanel {
       files_tree_state,
       files_context_menu_target: None,
       files_inline_rename: None,
+      files_inline_create_placeholder_to_ignore: None,
       files_loaded: false,
       files_file_count: 0,
       files_include_gitignored: settings.files_show_gitignored,
@@ -1310,6 +1319,7 @@ impl DockPanel {
           this.files_tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
           });
+          this.files_inline_create_placeholder_to_ignore = None;
           this.files_loaded = true;
           if this.active_tab == DockPanelTab::Files
             && let Some(path) = this.files_reveal_path_when_loaded.take()
@@ -1618,12 +1628,19 @@ impl DockPanel {
   }
 
   fn reload_project_files_after_operation(&mut self, cx: &mut Context<Self>) {
-    let expanded = self
-      .files_loaded
-      .then(|| self.current_files_expanded_paths(cx));
+    let mut expanded = if self.files_loaded {
+      self.current_files_expanded_paths(cx)
+    } else {
+      HashSet::new()
+    };
+    if let Some(path) = &self.files_reveal_path_when_loaded
+      && let Some(parent) = path.parent()
+    {
+      add_path_and_ancestors_to_expanded(parent, &mut expanded);
+    }
     self.files_loading = false;
     self._files_task = None;
-    self.load_project_files_with_expansion(expanded, cx);
+    self.load_project_files_with_expansion(Some(expanded), cx);
     self.refresh_status(cx);
     cx.notify();
   }
@@ -1741,6 +1758,7 @@ impl DockPanel {
     cx: &mut Context<Self>,
   ) {
     self.cancel_inline_rename(cx);
+    self.files_inline_create_placeholder_to_ignore = None;
     let directory = self.files_context_directory(&target);
     let placeholder = self.next_inline_create_placeholder(directory.as_deref(), is_folder, cx);
     let initial_value = if is_folder {
@@ -1829,6 +1847,33 @@ impl DockPanel {
     entries
   }
 
+  fn files_selection_after_delete(&self, relative_path: &Path, cx: &App) -> Option<PathBuf> {
+    let target_id = file_tree_path_id(relative_path);
+    let tree = self.files_tree_state.read(cx);
+    let mut visible_ids = Vec::new();
+    let mut index = 0;
+    while let Some(entry) = tree.entry(index) {
+      let id = entry.item().id.as_ref();
+      if !is_empty_folder_placeholder_id(id) {
+        visible_ids.push(id.to_string());
+      }
+      index += 1;
+    }
+    let target_index = visible_ids.iter().position(|id| id == &target_id)?;
+    visible_ids
+      .iter()
+      .skip(target_index + 1)
+      .find(|id| !file_tree_path_is_self_or_descendant(id, &target_id))
+      .or_else(|| {
+        visible_ids
+          .iter()
+          .take(target_index)
+          .rev()
+          .find(|id| !file_tree_path_is_self_or_descendant(id, &target_id))
+      })
+      .map(PathBuf::from)
+  }
+
   fn remove_inline_create_placeholder(&mut self, placeholder: &Path, cx: &mut Context<Self>) {
     let placeholder_id = file_tree_path_id(placeholder);
     let entries = self
@@ -1891,8 +1936,15 @@ impl DockPanel {
         }
         Ok(())
       },
-      move |this, _| {
-        this.files_reveal_path_when_loaded = Some(created_relative_path);
+      move |this, cx| {
+        this.files_reveal_path_when_loaded = Some(created_relative_path.clone());
+        if !is_folder {
+          cx.emit(DockPanelEvent::OpenFile {
+            path: created_relative_path,
+            intent: OpenIntent::Open,
+            mode: DockPanelOpenFileMode::File,
+          });
+        }
       },
       cx,
     );
@@ -2004,6 +2056,9 @@ impl DockPanel {
       } => self.create_file_entry(directory.clone(), name, *is_folder, window, cx),
     };
     if confirmed {
+      if remove_placeholder {
+        self.files_inline_create_placeholder_to_ignore = Some(relative_path.clone());
+      }
       self.files_inline_rename = None;
       if remove_placeholder {
         self.remove_inline_create_placeholder(&relative_path, cx);
@@ -2136,7 +2191,12 @@ impl DockPanel {
   }
 
   fn delete_file_entry(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-    self.run_file_operation(
+    let select_after_delete = self
+      .project_root
+      .as_ref()
+      .and_then(|root| path.strip_prefix(root).ok())
+      .and_then(|relative_path| self.files_selection_after_delete(relative_path, cx));
+    self.run_file_operation_after_success(
       "Deleting failed",
       move || {
         let metadata = std::fs::metadata(&path)?;
@@ -2146,6 +2206,9 @@ impl DockPanel {
           std::fs::remove_file(&path)?;
         }
         Ok(())
+      },
+      move |this, _| {
+        this.files_reveal_path_when_loaded = select_after_delete;
       },
       cx,
     );
@@ -4178,10 +4241,13 @@ impl DockPanel {
     let (file_statuses, folder_statuses) = file_tree_status_maps(&self.status_entries);
 
     let panel = cx.entity().downgrade();
-    let inline_rename = self
-      .files_inline_rename
-      .as_ref()
-      .map(|rename| (rename.relative_path.clone(), rename.input.clone()));
+    let inline_rename = self.files_inline_rename.as_ref().map(|rename| {
+      (
+        rename.relative_path.clone(),
+        rename.input.clone(),
+        matches!(rename.operation, FilesInlineOperation::Create { .. }),
+      )
+    });
     let root_menu_panel = panel.clone();
     let clear_context_target_panel = panel.clone();
 
@@ -4242,10 +4308,14 @@ impl DockPanel {
           };
           let is_empty_placeholder = is_empty_folder_placeholder_id(item.id.as_ref());
           let relative_path = PathBuf::from(item.id.as_ref());
+          let is_inline_create_placeholder = inline_rename
+            .as_ref()
+            .is_some_and(|(path, _, is_create)| *is_create && path == &relative_path);
+          let is_internal_placeholder = is_empty_placeholder || is_inline_create_placeholder;
           let rename_input = inline_rename
             .as_ref()
-            .filter(|(path, _)| path == &relative_path)
-            .map(|(_, input)| input.clone());
+            .filter(|(path, _, _)| path == &relative_path)
+            .map(|(_, input, _)| input.clone());
           let status = if is_folder {
             folder_statuses.get(&relative_path).copied()
           } else {
@@ -4304,7 +4374,7 @@ impl DockPanel {
 
           let indent = px(8.) + px(14.) * entry.depth();
           ui::selectable_list_item(ix, selected, ui::SelectableRowStyle::Inset, &theme)
-            .when(!is_empty_placeholder, |this| {
+            .when(!is_internal_placeholder, |this| {
               this.on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
                 let target = context_target.clone();
                 let _ = context_target_panel.update(cx, |panel, _| {
@@ -5682,6 +5752,13 @@ fn file_tree_status_priority(status: RepoStatusKind) -> u8 {
   }
 }
 
+fn file_tree_path_is_self_or_descendant(path: &str, ancestor: &str) -> bool {
+  path == ancestor
+    || path
+      .strip_prefix(ancestor)
+      .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
 fn renamed_file_tree_path_id(path: &str, old_id: &str, new_id: &str) -> String {
   if path == old_id {
     return new_id.to_string();
@@ -6728,6 +6805,16 @@ mod tests {
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     await_refresh(&panel, cx).await;
     open_files_tab_and_wait(&panel, cx).await;
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenFile { path, intent, mode } = event {
+          seen.borrow_mut().push((path.clone(), *intent, *mode));
+        }
+      })
+      .detach();
+    });
 
     panel.update_in(cx, |panel, window, cx| {
       panel.start_inline_create(
@@ -6761,8 +6848,19 @@ mod tests {
     await_file_operation(&panel, cx).await;
 
     assert!(repo.path.join("src/main.rs").is_file());
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(
+        PathBuf::from("src/main.rs"),
+        OpenIntent::Open,
+        DockPanelOpenFileMode::File,
+      )],
+      "created files open in the editor"
+    );
     panel.read_with(cx, |panel, cx| {
       let tree = panel.files_tree_state.read(cx);
+      let selected = tree.selected_entry().expect("created file is selected");
+      assert_eq!(selected.item().id.as_ref(), "src/main.rs");
       assert!(tree.index_of(&"src/main.rs".into()).is_some());
       assert!(tree.index_of(&"src/.reviu-new-file".into()).is_none());
     });
@@ -6813,8 +6911,35 @@ mod tests {
         .index_of(&"assets".into())
         .and_then(|index| tree.entry(index))
         .expect("empty folder stays visible");
+      let selected = tree.selected_entry().expect("created folder is selected");
       assert!(assets.is_folder());
+      assert_eq!(selected.item().id.as_ref(), "assets");
       assert!(tree.index_of(&".reviu-new-folder".into()).is_none());
+    });
+  }
+
+  #[gpui::test]
+  async fn file_context_delete_selects_the_next_visible_entry(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-delete-select-next");
+    commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "a");
+    commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "b");
+    commit_text_file(&repo.path, Path::new("c.txt"), "c\n", "c");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update(cx, |panel, cx| {
+      panel.delete_file_entry(repo.path.join("b.txt"), cx);
+    });
+    await_file_operation(&panel, cx).await;
+
+    assert!(!repo.path.join("b.txt").exists());
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let selected = tree.selected_entry().expect("next file is selected");
+      assert_eq!(selected.item().id.as_ref(), "c.txt");
     });
   }
 
