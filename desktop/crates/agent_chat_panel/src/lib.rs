@@ -2335,6 +2335,9 @@ impl AgentChatPanel {
     let Some(session) = self.session.clone() else {
       return;
     };
+    if modes_are_access(&self.available_modes) {
+      persist_access_choice(&self.backend_kind, mode_id.0.as_ref());
+    }
     self.current_mode_id = Some(mode_id.clone());
     cx.notify();
     cx.spawn(async move |_, _| {
@@ -2484,6 +2487,43 @@ impl AgentChatPanel {
     self.set_model(model.model_id.clone(), cx);
   }
 
+  fn apply_saved_access_choice(&mut self, cx: &mut Context<Self>) {
+    let Some(saved) = load_access_choice(&self.backend_kind) else {
+      return;
+    };
+    if let Some(selector) = access_config_selector(&self.config_options) {
+      let Some((value_id, _, _)) = selector
+        .values
+        .iter()
+        .find(|(value_id, _, _)| value_id.0.as_ref() == saved)
+      else {
+        return;
+      };
+      let value_id = value_id.clone();
+      if selector.current_value == value_id {
+        return;
+      }
+      self.set_config_option(selector.id.clone(), value_id, cx);
+      return;
+    }
+    if !modes_are_access(&self.available_modes)
+      || self
+        .current_mode_id
+        .as_ref()
+        .is_some_and(|current| current.0.as_ref() == saved)
+    {
+      return;
+    }
+    let Some(mode) = self
+      .available_modes
+      .iter()
+      .find(|mode| mode.id.0.as_ref() == saved)
+    else {
+      return;
+    };
+    self.set_mode(mode.id.clone(), cx);
+  }
+
   fn set_config_options(&mut self, options: Vec<SessionConfigOption>) {
     let current_model_id =
       model_config_selector(&options).map(|selector| ModelId::new(selector.current_value.0));
@@ -2514,6 +2554,8 @@ impl AgentChatPanel {
     let is_model_config = self.config_options.iter().any(|option| {
       option.id == config_id && matches!(option.category, Some(SessionConfigOptionCategory::Model))
     });
+    let is_access_config =
+      access_config_selector(&self.config_options).is_some_and(|selector| selector.id == config_id);
     for opt in self.config_options.iter_mut() {
       if opt.id == config_id
         && let SessionConfigKind::Select(sel) = &mut opt.kind
@@ -2524,6 +2566,9 @@ impl AgentChatPanel {
     if is_model_config {
       persist_model_choice(&self.backend_kind, value_id.0.as_ref());
       self.current_model_id = Some(ModelId::new(value_id.0.clone()));
+    }
+    if is_access_config {
+      persist_access_choice(&self.backend_kind, value_id.0.as_ref());
     }
     cx.notify();
     cx.spawn(async move |_, _| {
@@ -3318,6 +3363,7 @@ impl AgentChatPanel {
             panel.current_model_id = info.current_model_id;
             panel.set_config_options(info.config_options);
             panel.apply_saved_model_choice(cx);
+            panel.apply_saved_access_choice(cx);
             if let Some(sid) = info.session_id {
               panel.current_conv.session_id = Some(sid);
               panel.persist_state(cx);
@@ -3609,9 +3655,29 @@ fn settings_with_model(
   settings
 }
 
+fn settings_with_access(
+  mut settings: serde_json::Value,
+  backend_key: &str,
+  access_id: &str,
+) -> serde_json::Value {
+  if !settings["access"].is_object() {
+    settings["access"] = serde_json::json!({});
+  }
+  settings["access"][backend_key] = serde_json::Value::String(access_id.to_string());
+  settings
+}
+
 fn model_choice_from_settings(settings: &serde_json::Value, backend_key: &str) -> Option<String> {
   settings
     .get("models")?
+    .get(backend_key)?
+    .as_str()
+    .map(str::to_string)
+}
+
+fn access_choice_from_settings(settings: &serde_json::Value, backend_key: &str) -> Option<String> {
+  settings
+    .get("access")?
     .get(backend_key)?
     .as_str()
     .map(str::to_string)
@@ -3627,8 +3693,17 @@ fn persist_model_choice(id: &AgentId, model_id: &str) {
   write_agent_settings_json(&settings);
 }
 
+fn persist_access_choice(id: &AgentId, access_id: &str) {
+  let settings = settings_with_access(read_agent_settings_json(), id.as_str(), access_id);
+  write_agent_settings_json(&settings);
+}
+
 fn load_model_choice(id: &AgentId) -> Option<String> {
   model_choice_from_settings(&read_agent_settings_json(), id.as_str())
+}
+
+fn load_access_choice(id: &AgentId) -> Option<String> {
+  access_choice_from_settings(&read_agent_settings_json(), id.as_str())
 }
 
 /// Codex names embed the model's DEFAULT reasoning level ("GPT-5.6-Sol (low)"),

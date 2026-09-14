@@ -2942,9 +2942,10 @@ fn humanize_agent_error_extracts_nested_detail() {
 }
 
 #[test]
-fn agent_settings_json_keeps_default_agent_and_models_independent() {
+fn agent_settings_json_keeps_default_agent_models_and_access_independent() {
   let settings = serde_json::json!({});
   let settings = settings_with_model(settings, "codex", "gpt-5.6-sol");
+  let settings = settings_with_access(settings, "claude", "approve_for_me");
   let settings = settings_with_default_agent(settings, "claude");
   let settings = settings_with_model(settings, "claude", "claude-opus-5");
 
@@ -2958,7 +2959,12 @@ fn agent_settings_json_keeps_default_agent_and_models_independent() {
     model_choice_from_settings(&settings, "claude").as_deref(),
     Some("claude-opus-5")
   );
+  assert_eq!(
+    access_choice_from_settings(&settings, "claude").as_deref(),
+    Some("approve_for_me")
+  );
   assert_eq!(model_choice_from_settings(&settings, "unknown"), None);
+  assert_eq!(access_choice_from_settings(&settings, "unknown"), None);
 }
 
 #[test]
