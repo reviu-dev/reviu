@@ -1206,11 +1206,25 @@ impl SessionPage {
       .unwrap_or(0);
 
     let selectable_tabs = tabs.clone();
+    let should_reveal_selected =
+      self.center_tabs_revealed_tab.borrow().as_ref() != Some(&selected_tab);
+    if should_reveal_selected {
+      let reveal_index = if selected_index == 0 {
+        0
+      } else {
+        selected_index.saturating_add(1)
+      };
+      self.center_tabs_scroll_handle.scroll_to_item(reveal_index);
+      self
+        .center_tabs_revealed_tab
+        .replace(Some(selected_tab.clone()));
+    }
     let statuses = self.session_statuses(cx);
     let mut tab_bar = TabBar::new(id.clone())
       .w_full()
       .h_full()
       .underline()
+      .track_scroll(&self.center_tabs_scroll_handle)
       .selected_index(selected_index)
       .suffix(
         h_flex()

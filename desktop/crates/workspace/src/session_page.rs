@@ -1,5 +1,6 @@
 //! Agent-first shell: sessions sidebar, conversation center, right dock.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -19,7 +20,7 @@ use editor::{ReviewCommentMode, ReviewCommentSide};
 use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-  PathPromptOptions, Render, SharedString, Task, Window, div, img, prelude::*, px,
+  PathPromptOptions, Render, ScrollHandle, SharedString, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Sizable as _,
@@ -298,6 +299,8 @@ pub struct SessionPage {
   center_layouts_by_tab: HashMap<CenterTab, CenterLayout>,
   center_drag_target: Option<CenterDropTarget>,
   center_tabs: Vec<CenterTab>,
+  center_tabs_scroll_handle: ScrollHandle,
+  center_tabs_revealed_tab: RefCell<Option<CenterTab>>,
   center_tab_history: Vec<CenterTab>,
   center_tabs_by_checkout: HashMap<PathBuf, Vec<CenterTab>>,
   center_active_tab_by_checkout: HashMap<PathBuf, CenterTab>,
@@ -649,6 +652,8 @@ impl SessionPage {
       center_layouts_by_tab: HashMap::new(),
       center_drag_target: None,
       center_tabs: CenterTab::default_tabs(),
+      center_tabs_scroll_handle: ScrollHandle::new(),
+      center_tabs_revealed_tab: RefCell::new(None),
       center_tab_history: CenterTab::default_tabs(),
       center_tabs_by_checkout: HashMap::new(),
       center_active_tab_by_checkout: HashMap::new(),
