@@ -1,67 +1,68 @@
 ---
 import BellIcon from "@lucide/astro/icons/bell";
+import CircleCheckIcon from "@lucide/astro/icons/circle-check";
 import GitBranchIcon from "@lucide/astro/icons/git-branch";
-import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import GitGraphIcon from "@lucide/astro/icons/git-graph";
-import LayoutPanelLeftIcon from "@lucide/astro/icons/layout-panel-left";
+import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
+import RotateCcwIcon from "@lucide/astro/icons/rotate-ccw";
+import SparklesIcon from "@lucide/astro/icons/sparkles";
 import { comparisons, getComparisonUrl } from "../lib/comparisons";
 
-const cards = [
+const loopSteps = [
   {
-    title: "One task. One worktree.",
-    description:
-      "Run agents in isolated branches with their own session, terminal, history, and review diff.",
+    title: "Agent writes",
+    description: "Starts in its own branch or worktree.",
+    icon: SparklesIcon,
+  },
+  {
+    title: "You review",
+    description: "Inspect the local diff before commit.",
+    icon: MessageCircleReplyIcon,
+  },
+  {
+    title: "Send fixes back",
+    description: "Turn line comments into one prompt.",
+    icon: RotateCcwIcon,
+  },
+  {
+    title: "Ship cleanly",
+    description: "Stage, rebase, push, and open the PR.",
+    icon: GitPullRequestIcon,
+  },
+];
+
+const rails = [
+  {
+    title: "Isolated worktree",
+    description: "Parallel agent tasks stay out of your main checkout.",
     label: "Isolation",
     icon: GitBranchIcon,
-    className: "lg:col-span-6",
-    visual: "branches",
   },
   {
-    title: "Review before it lands.",
-    description:
-      "Inspect the local diff, leave line comments, and send the batch back before anything is committed.",
-    label: "Review",
-    icon: MessageCircleReplyIcon,
-    className: "lg:col-span-6",
-    visual: "review",
-  },
-  {
-    title: "Arrange the work.",
-    description:
-      "Split the center view between agent chat, files, diffs, and terminal while the dock keeps Git and GitHub context visible.",
-    label: "Workspace",
-    icon: LayoutPanelLeftIcon,
-    className: "lg:col-span-3",
-    visual: "layout",
-  },
-  {
-    title: "Know who needs you.",
-    description:
-      "See which agent is running, waiting for approval, failed, or ready for review.",
-    label: "Attention",
+    title: "Attention states",
+    description: "See what is running, waiting, failed, or ready for review.",
+    label: "Signal",
     icon: BellIcon,
-    className: "lg:col-span-3",
-    visual: "states",
   },
   {
-    title: "Clean up before push.",
-    description:
-      "Stage hunks, rebase, resolve conflicts, amend, stash, and commit without switching apps.",
+    title: "Real Git nearby",
+    description: "Turn review decisions into staged hunks and clean history.",
     label: "Git",
     icon: GitGraphIcon,
-    className: "lg:col-span-3",
-    visual: "commands",
   },
   {
-    title: "Finish in the PR.",
-    description:
-      "Open the branch's pull request in the dock, review threads, track checks, and merge with Pro.",
+    title: "PR handoff",
+    description: "Use GitHub once the local branch has earned it.",
     label: "GitHub",
     icon: GitPullRequestIcon,
-    className: "lg:col-span-3",
-    visual: "checks",
   },
+];
+
+const reviewBatch = [
+  "Fix discount order",
+  "Add rounding test",
+  "Rename unclear helper",
 ];
 ---
 
@@ -71,137 +72,179 @@ const cards = [
   data-reveal-threshold="0.18"
 >
   <div class="mx-auto max-w-7xl px-6 lg:px-8">
-    <div class="reviu-reveal mx-auto max-w-4xl text-center">
+    <div class="reviu-reveal mx-auto max-w-3xl text-center">
       <p class="text-xs font-semibold tracking-[0.35em] text-primary uppercase">
         Agentic review
       </p>
       <h2
         class="mt-4 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl"
       >
-        Coding agents scaled. The tooling around them didn't.
+        Review agent work before it lands.
       </h2>
       <p class="mx-auto mt-6 max-w-2xl text-lg/8 text-muted-foreground">
-        Reviu is built for the new loop: agents create branches, developers
-        review their diffs, and Git plus GitHub finish the work.
+        Inspect the diff, leave line comments, send fixes back, then stage and
+        push a clean branch when the agent gets it right.
       </p>
     </div>
 
     <div
-      class="reviu-reveal relative mt-14 rounded-[2rem] border border-border bg-muted/30 p-3 shadow-2xl shadow-primary/5 dark:bg-white/[0.03] dark:shadow-black/20"
+      class="reviu-reveal relative mt-14 overflow-hidden rounded-[2rem] border border-border bg-muted/30 p-3 shadow-2xl shadow-primary/5 dark:bg-white/[0.03] dark:shadow-black/20"
       style="--reveal-delay: 150ms;"
     >
       <div
-        class="absolute inset-0 -z-10 rounded-[2rem] bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,0.14),transparent_24rem),radial-gradient(circle_at_bottom_right,rgba(14,165,233,0.12),transparent_26rem)] dark:bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,0.24),transparent_24rem),radial-gradient(circle_at_bottom_right,rgba(14,165,233,0.14),transparent_26rem)]"
+        class="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,0.16),transparent_24rem),radial-gradient(circle_at_bottom_right,rgba(14,165,233,0.12),transparent_28rem)] dark:bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,0.24),transparent_24rem),radial-gradient(circle_at_bottom_right,rgba(14,165,233,0.14),transparent_28rem)]"
         aria-hidden="true"
       >
       </div>
 
-      <div class="grid gap-3 lg:grid-cols-12">
+      <div class="grid gap-3 lg:grid-cols-[0.62fr_1.38fr] lg:items-start">
+        <aside class="rounded-3xl border border-border bg-background/80 p-5 shadow-sm backdrop-blur dark:bg-gray-950/55">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-semibold text-foreground">The review loop</p>
+              <p class="mt-1 text-xs text-muted-foreground">One task, one path.</p>
+            </div>
+            <span class="rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+              before commit
+            </span>
+          </div>
+
+          <ol class="mt-5 overflow-hidden rounded-2xl border border-border bg-muted/35 dark:bg-white/[0.03]">
+            {
+              loopSteps.map((step, index) => {
+                const Icon = step.icon;
+
+                return (
+                  <li class="border-b border-border last:border-b-0">
+                    <div class="grid grid-cols-[2.25rem_1fr_auto] gap-3 p-3">
+                      <div class="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                        <Icon class="size-4" aria-hidden="true" />
+                      </div>
+                      <div class="min-w-0">
+                        <h3 class="text-sm font-semibold text-foreground">
+                          {step.title}
+                        </h3>
+                        <p class="mt-1 text-xs/5 text-muted-foreground">
+                          {step.description}
+                        </p>
+                      </div>
+                      <span class="pt-0.5 text-xs font-semibold text-muted-foreground">
+                        0{index + 1}
+                      </span>
+                    </div>
+                  </li>
+                );
+              })
+            }
+          </ol>
+        </aside>
+
+        <article class="rounded-3xl border border-border bg-background/85 p-5 shadow-sm backdrop-blur dark:bg-gray-950/55">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+            <div class="flex min-w-0 items-center gap-3">
+              <div class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                <MessageCircleReplyIcon class="size-5" aria-hidden="true" />
+              </div>
+              <div class="min-w-0">
+                <p class="font-semibold text-foreground">Local review queue</p>
+                <p class="truncate text-xs text-muted-foreground">
+                  feat/checkout-discounts - 3 comments selected
+                </p>
+              </div>
+            </div>
+            <div class="inline-flex items-center gap-2 rounded-full border border-border bg-muted/60 px-3 py-1 text-xs font-semibold text-muted-foreground dark:bg-white/5">
+              <CircleCheckIcon class="size-3.5 text-primary" aria-hidden="true" />
+              isolated worktree
+            </div>
+          </div>
+
+          <div class="mt-5 grid gap-4 lg:grid-cols-[1.08fr_0.72fr]">
+            <div class="space-y-3">
+              <div class="overflow-hidden rounded-2xl border border-border bg-muted/50 text-xs dark:bg-white/[0.03]">
+                <div class="flex items-center justify-between border-b border-border bg-background/70 px-4 py-3 dark:bg-gray-950/60">
+                  <span class="font-mono text-muted-foreground">src/discounts.ts</span>
+                  <span class="font-semibold text-primary">reviewing</span>
+                </div>
+                <div class="grid grid-cols-[2.5rem_1fr] font-mono">
+                  <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">117</div>
+                  <div class="bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const total = getCartTotal(cart)</div>
+                  <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">118</div>
+                  <div class="bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const flat = getFlatDiscounts(cart)</div>
+                  <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">119</div>
+                  <div class="bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const percent = getPercentDiscount(cart)</div>
+                  <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">120</div>
+                  <div class="bg-red-500/10 px-3 py-2 text-red-700 dark:text-red-300">return applyPercent(total, percent)</div>
+                  <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">121</div>
+                  <div class="bg-emerald-500/10 px-3 py-2 text-emerald-700 dark:text-emerald-300">const subtotal = applyFlatDiscounts(total, flat)</div>
+                  <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">122</div>
+                  <div class="bg-emerald-500/10 px-3 py-2 text-emerald-700 dark:text-emerald-300">return applyPercent(subtotal, percent)</div>
+                </div>
+                <div class="border-t border-primary/20 bg-primary/10 p-3 text-primary">
+                  apply flat discounts before percentage discounts
+                </div>
+              </div>
+
+            </div>
+
+            <div class="space-y-3">
+              <div class="rounded-2xl border border-border bg-muted/40 p-3 dark:bg-white/[0.03]">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Batch to agent
+                </p>
+                <div class="mt-3 space-y-2 text-sm">
+                  {
+                    reviewBatch.map((item) => (
+                      <div class="rounded-xl bg-background/80 px-3 py-2 text-foreground dark:bg-gray-950/60">
+                        {item}
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+
+              <div class="rounded-2xl border border-primary/20 bg-primary/10 p-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <p class="font-semibold text-foreground">Send back</p>
+                    <p class="mt-1 text-xs/5 text-muted-foreground">
+                      File, line, and side context included.
+                    </p>
+                  </div>
+                  <span class="inline-flex shrink-0 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-white">
+                    Send 3
+                  </span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {
-          cards.map((card, index) => {
-            const Icon = card.icon;
+          rails.map((rail, index) => {
+            const Icon = rail.icon;
 
             return (
               <article
-                class={`reviu-reveal relative overflow-hidden rounded-3xl border border-border bg-background/80 p-6 shadow-sm backdrop-blur dark:bg-gray-950/55 ${card.className}`}
-                style={`--reveal-delay: ${index * 90 + 250}ms;`}
+                class="reviu-reveal rounded-3xl border border-border bg-background/80 p-4 shadow-sm backdrop-blur dark:bg-gray-950/55"
+                style={`--reveal-delay: ${index * 90 + 350}ms;`}
               >
                 <div class="flex items-start justify-between gap-4">
-                  <div class="flex size-12 items-center justify-center rounded-2xl border border-border bg-muted text-primary shadow-sm dark:bg-white/5">
+                  <div class="flex size-10 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
                     <Icon class="size-5" aria-hidden="true" />
                   </div>
                   <span class="rounded-full border border-border bg-muted/60 px-3 py-1 text-[0.65rem] font-semibold tracking-[0.18em] text-muted-foreground uppercase dark:bg-white/5">
-                    {card.label}
+                    {rail.label}
                   </span>
                 </div>
-
-                <div class="mt-12 max-w-sm">
-                  <h3 class="text-xl font-semibold tracking-tight text-foreground">
-                    {card.title}
-                  </h3>
-                  <p class="mt-3 text-sm/7 text-muted-foreground">
-                    {card.description}
-                  </p>
-                </div>
-
-                {card.visual === "branches" && (
-                  <div class="mt-8 hidden w-full max-w-58 rounded-2xl border border-border bg-muted/70 p-3 text-xs shadow-xl backdrop-blur sm:block dark:bg-white/5">
-                    {[
-                      ["feat/checkout-flow", "+128", "-24"],
-                      ["fix/session-restore", "+62", "-18"],
-                      ["docs/agent-teams", "+31", "-4"],
-                    ].map((row) => (
-                      <div class="flex items-center gap-3 rounded-lg px-2 py-1.5 text-muted-foreground">
-                        <GitBranchIcon class="size-3.5 text-primary" />
-                        <span class="min-w-0 flex-1 truncate font-mono">{row[0]}</span>
-                        <span class="text-emerald-500">{row[1]}</span>
-                        <span class="text-red-500">{row[2]}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {card.visual === "review" && (
-                  <div class="mt-8 hidden w-full max-w-64 rounded-2xl border border-border bg-muted/70 p-3 text-xs shadow-xl backdrop-blur sm:block dark:bg-white/5">
-                    <div class="grid grid-cols-[2rem_1fr] overflow-hidden rounded-xl border border-border bg-background/80 font-mono dark:bg-gray-950/70">
-                      <div class="bg-muted/70 py-2 text-center text-muted-foreground dark:bg-white/5">119</div>
-                      <div class="bg-emerald-500/10 py-2 pl-3 text-emerald-700 dark:text-emerald-300">return applyDiscounts(total)</div>
-                      <div class="bg-muted/70 py-2 text-center text-muted-foreground dark:bg-white/5">120</div>
-                      <div class="bg-red-500/10 py-2 pl-3 text-red-700 dark:text-red-300">subtotal * percent</div>
-                    </div>
-                    <div class="mt-2 rounded-xl border border-primary/20 bg-primary/10 p-2 text-primary">
-                      percentage should apply after flat discounts
-                    </div>
-                  </div>
-                )}
-
-                {card.visual === "layout" && (
-                  <div class="mt-8 hidden h-24 w-full grid-cols-[1fr_2fr_1fr] gap-1 rounded-2xl border border-border bg-muted/70 p-2 shadow-xl sm:grid dark:bg-white/5">
-                    <div class="h-20 rounded-lg bg-primary/20" />
-                    <div class="h-20 rounded-lg bg-muted dark:bg-white/10" />
-                    <div class="h-20 rounded-lg bg-primary/10" />
-                  </div>
-                )}
-
-                {card.visual === "states" && (
-                  <div class="mt-8 hidden space-y-2 rounded-2xl border border-border bg-muted/70 p-3 text-xs shadow-xl sm:block dark:bg-white/5">
-                    {[
-                      ["running", "bg-emerald-500"],
-                      ["waiting", "bg-amber-500"],
-                      ["review", "bg-blue-500"],
-                    ].map((state) => (
-                      <div class="flex items-center gap-2 rounded-lg bg-background/70 px-3 py-1.5 dark:bg-gray-950/60">
-                        <span class={`size-2 rounded-full ${state[1]}`} />
-                        <span class="font-medium text-muted-foreground">{state[0]}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {card.visual === "commands" && (
-                  <div class="mt-8 hidden flex-wrap gap-2 text-xs sm:flex">
-                    {["stage hunk", "rebase", "stash", "amend", "push"].map((command) => (
-                      <span class="rounded-full border border-border bg-muted/80 px-3 py-1 font-medium text-muted-foreground shadow-sm dark:bg-white/5">
-                        {command}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {card.visual === "checks" && (
-                  <div class="mt-8 hidden w-full rounded-2xl border border-border bg-muted/70 p-3 text-xs shadow-xl sm:block dark:bg-white/5">
-                    {[
-                      ["tests", "passed", "text-emerald-500"],
-                      ["review", "pending", "text-amber-500"],
-                      ["merge", "ready", "text-primary"],
-                    ].map((check) => (
-                      <div class="flex items-center justify-between rounded-lg px-2 py-1.5">
-                        <span class="text-muted-foreground">{check[0]}</span>
-                        <span class={`font-semibold ${check[2]}`}>{check[1]}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <h3 class="mt-5 text-lg font-semibold tracking-tight text-foreground">
+                  {rail.title}
+                </h3>
+                <p class="mt-2 text-sm/7 text-muted-foreground">
+                  {rail.description}
+                </p>
               </article>
             );
           })
