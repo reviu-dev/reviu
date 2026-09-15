@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { comparisons, getComparisonUrl } from "../lib/comparisons";
 
+const lastUpdated = "2026-09-15";
 const absoluteUrl = (pathname: string, site: URL) => new URL(pathname, site).href;
 
 const comparisonLinks = (site: URL) =>
@@ -14,6 +15,8 @@ const comparisonLinks = (site: URL) =>
 const renderLlmsTxt = (site: URL) => `# Reviu
 
 > Native Rust + GPUI desktop app for managing coding-agent sessions, reviewing every diff, and finishing branches with real Git.
+
+Last updated: ${lastUpdated}
 
 Reviu is built for developers who ship code their agents wrote: durable agent sessions, split center views for chat/files/diffs/terminal, inline review comments sent back to the agent, and full local Git workflows - all free, no account. Reviu Pro adds GitHub: pull request review, checks, merge, and a notifications inbox in the same app.
 
@@ -29,6 +32,13 @@ Reviu is built for developers who ship code their agents wrote: durable agent se
 
 - [Compare Reviu](${absoluteUrl("/vs", site)}): Index of Reviu comparisons with traditional Git tools and GitHub Desktop.
 ${comparisonLinks(site)}
+
+## Quick answers
+
+- Is Reviu free? Yes. Agent sessions and local Git workflows are free with no account required.
+- What does Reviu Pro add? GitHub pull request review, checks, merge, notifications, and browser-to-desktop handoff.
+- Does Reviu run agents locally? Yes. Reviu launches the user's installed agent CLI as a local process.
+- Is Reviu Electron? No. Reviu is a native Rust + GPUI desktop app with no Electron and no webview.
 
 ## Pricing
 

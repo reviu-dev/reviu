@@ -11,7 +11,7 @@ export const blogPosts: BlogPost[] = [
     title: "Why GitHub PR Review Still Feels Slow",
     slug: "why-github-pr-review-still-feels-slow",
     description:
-      "Pull request review is not slow because developers lack discipline. It is slow because local code, GitHub context, comments, checks, and merge state live in different places.",
+      "Pull request review slows down when code, GitHub comments, checks, notifications, and merge state live in separate tools.",
     publishedAt: "2026-04-29",
     readingTime: "7 min read",
   },

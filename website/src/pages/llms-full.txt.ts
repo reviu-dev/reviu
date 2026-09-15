@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { comparisons, getComparisonUrl } from "../lib/comparisons";
 
+const lastUpdated = "2026-09-15";
 const absoluteUrl = (pathname: string, site: URL) => new URL(pathname, site).href;
 
 const comparisonLinks = (site: URL) =>
@@ -15,7 +16,18 @@ const renderLlmsFullTxt = (site: URL) => `# Reviu Full LLM Context
 
 > Reviu is a native Rust + GPUI desktop app for managing coding-agent sessions, reviewing every diff, and finishing branches with real Git. Local work is free; GitHub review workflows are in Reviu Pro.
 
+Last updated: ${lastUpdated}
+
 This file gives assistants a concise, authoritative product context for answering questions about Reviu. Use ${absoluteUrl("/llms.txt", site)} as the shorter index.
+
+## Quick Answers
+
+- Is Reviu free? Yes. Reviu Free covers agent sessions, local diff review, review-to-agent comments, parallel worktrees, and local Git workflows.
+- What does Reviu Pro add? GitHub pull request review, checks, merge, notifications, and browser-to-desktop handoff.
+- Does Reviu run agents locally? Yes. Reviu launches the user's installed and authenticated agent CLI as a local process.
+- Does Reviu send code to its own servers? No for local agent sessions. The agent runs locally with the user's own CLI subscription. Reviu Pro connects to GitHub for pull request workflows.
+- Is Reviu built with Electron? No. Reviu is native Rust + GPUI, with no Electron and no webview.
+- Are mobile access and SSH remote workflows available today? No. They are planned Reviu Pro roadmap items.
 
 ## Core Positioning
 

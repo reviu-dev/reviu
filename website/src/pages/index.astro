@@ -12,7 +12,8 @@ import SiteFooter from "../components/SiteFooter.astro";
 import Layout from "../layouts/Layout.astro";
 
 const description =
-  "Reviu is a native Rust desktop app for managing coding-agent sessions, reviewing every diff, sending line comments back to the agent, and finishing the branch with real Git. Reviu Pro puts GitHub pull requests, checks, review, merge, and notifications in the same window.";
+  "Reviu is a native desktop app for reviewing code your agents write, sending comments back, and finishing branches with real Git. GitHub workflows are Pro.";
+const stripHtml = (value: string) => value.replace(/<[^>]*>/g, "");
 
 const faqItems: { question: string; answer: string }[] = [
   {
@@ -45,7 +46,6 @@ const faqItems: { question: string; answer: string }[] = [
     answer:
       'No. Reviu is a fully native desktop app built with <a href="https://gpui.rs" target="_blank" rel="noopener noreferrer" class="text-primary underline hover:text-primary/80">gpui.rs</a>, a Rust-based GPU-accelerated UI framework. No Electron, no webview - just native performance.',
   },
-
   {
     question: "Do I need an account to use Reviu?",
     answer:
@@ -113,7 +113,7 @@ const structuredData = [
       name: item.question,
       acceptedAnswer: {
         "@type": "Answer",
-        text: item.answer,
+        text: stripHtml(item.answer),
       },
     })),
   },
