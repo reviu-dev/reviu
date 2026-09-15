@@ -51,7 +51,9 @@ use crate::dock_panel::{
   DockPanelTab,
 };
 use crate::file_search_palette::open_file_search_palette;
-use crate::file_view::{BinaryPreview, build_binary_preview, render_binary_preview};
+use crate::file_view::{
+  BinaryPreview, build_binary_preview, render_binary_preview, render_dirty_indicator,
+};
 use crate::inbox::Inbox;
 use crate::open_intent::OpenIntent;
 use crate::project_files::list_project_files;
@@ -149,7 +151,7 @@ enum CenterView {
 
 #[derive(Clone)]
 struct CenterEditorState {
-  selected_file: PathBuf,
+  selected_file: Option<PathBuf>,
   file_modified: Option<SystemTime>,
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
@@ -309,6 +311,7 @@ pub struct SessionPage {
   editor_states: HashMap<CenterTab, CenterEditorState>,
   terminal_views: HashMap<u64, TerminalPane>,
   next_terminal_id: u64,
+  next_untitled_id: u64,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   _interactive_rebase_task: Option<Task<()>>,
   pub(crate) _merge_base_task: Option<Task<()>>,
@@ -322,6 +325,7 @@ pub struct SessionPage {
   driver_notifications: Vec<crate::DriverNotification>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
+  save_as_task: Option<Task<()>>,
   file_search_cache: Option<FileSearchCache>,
   recent_files: Vec<RecentFile>,
   _file_search_task: Option<Task<()>>,
@@ -662,6 +666,7 @@ impl SessionPage {
       editor_states: HashMap::new(),
       terminal_views: HashMap::new(),
       next_terminal_id: 1,
+      next_untitled_id: 1,
       interactive_rebase_todo_view: None,
       _interactive_rebase_task: None,
       _merge_base_task: None,
@@ -673,6 +678,7 @@ impl SessionPage {
       driver_notifications: Vec::new(),
       open_file_generation: 0,
       open_file_task: None,
+      save_as_task: None,
       file_search_cache: None,
       recent_files: Vec::new(),
       _file_search_task: None,
@@ -1813,7 +1819,9 @@ impl SessionPage {
         }
       }
       CenterTabKind::File => {
-        if let Some(path) = tab.path {
+        if tab.is_untitled() {
+          self.activate_untitled_file(tab, intent, window, cx);
+        } else if let Some(path) = tab.path {
           self.open_file(path, None, None, intent, window, cx);
         }
       }

@@ -136,6 +136,16 @@ impl Document {
     cx.notify();
   }
 
+  pub fn set_language_hint(&mut self, language_hint: Option<&str>, cx: &mut Context<Self>) {
+    self.highlighter = language_hint
+      .and_then(languages::detect_language_config)
+      .map(SyntaxHighlighter::new);
+    self.highlights.write().clear();
+    self.dirty_highlight_lines.write().clear();
+    self.schedule_initial_highlights(cx);
+    cx.notify();
+  }
+
   pub fn should_defer_full_highlight(&self) -> bool {
     should_defer_full_highlight(self.buffer.len_lines(), self.buffer.len())
   }

@@ -250,7 +250,10 @@ impl GitConfigPage {
   fn render_editor_header(&self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
-    let file_path = editor_state.workdir_path.clone();
+    let file_path = editor_state
+      .workdir_path
+      .clone()
+      .unwrap_or_else(|| PathBuf::from(".gitconfig"));
     let file_dirty = editor_state.is_dirty;
 
     let editor_entity = editor.clone();

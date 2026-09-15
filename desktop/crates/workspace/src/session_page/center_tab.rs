@@ -31,6 +31,7 @@ pub(super) struct CenterTab {
   pub(super) conversation_id: Option<String>,
   pub(super) snapshot: Option<CenterTabSnapshot>,
   pub(super) terminal_id: Option<u64>,
+  pub(super) untitled_id: Option<u64>,
 }
 
 impl CenterTab {
@@ -52,6 +53,7 @@ impl CenterTab {
       conversation_id: None,
       snapshot: None,
       terminal_id: None,
+      untitled_id: None,
     }
   }
 
@@ -62,6 +64,7 @@ impl CenterTab {
       conversation_id: Some(conversation_id.into()),
       snapshot: None,
       terminal_id: None,
+      untitled_id: None,
     }
   }
 
@@ -72,6 +75,18 @@ impl CenterTab {
       conversation_id: None,
       snapshot: None,
       terminal_id: None,
+      untitled_id: None,
+    }
+  }
+
+  pub(super) fn untitled(id: u64) -> Self {
+    Self {
+      kind: CenterTabKind::File,
+      path: None,
+      conversation_id: None,
+      snapshot: None,
+      terminal_id: None,
+      untitled_id: Some(id),
     }
   }
 
@@ -82,6 +97,7 @@ impl CenterTab {
       conversation_id: None,
       snapshot: None,
       terminal_id: None,
+      untitled_id: None,
     }
   }
 
@@ -92,6 +108,7 @@ impl CenterTab {
       conversation_id: None,
       snapshot: Some(CenterTabSnapshot::AgentTool { old_text, new_text }),
       terminal_id: None,
+      untitled_id: None,
     }
   }
 
@@ -102,6 +119,7 @@ impl CenterTab {
       conversation_id: None,
       snapshot: Some(CenterTabSnapshot::Commit { oid }),
       terminal_id: None,
+      untitled_id: None,
     }
   }
 
@@ -112,6 +130,7 @@ impl CenterTab {
       conversation_id: None,
       snapshot: Some(CenterTabSnapshot::PullRequestRange { base, head }),
       terminal_id: None,
+      untitled_id: None,
     }
   }
 
@@ -122,6 +141,7 @@ impl CenterTab {
       conversation_id: None,
       snapshot: None,
       terminal_id: None,
+      untitled_id: None,
     }
   }
 
@@ -132,6 +152,7 @@ impl CenterTab {
       conversation_id: None,
       snapshot: None,
       terminal_id: Some(id),
+      untitled_id: None,
     }
   }
 
@@ -149,6 +170,14 @@ impl CenterTab {
 
   pub(super) fn terminal_id(&self) -> Option<u64> {
     self.terminal_id
+  }
+
+  pub(super) fn untitled_id(&self) -> Option<u64> {
+    self.untitled_id
+  }
+
+  pub(super) fn is_untitled(&self) -> bool {
+    self.kind == CenterTabKind::File && self.path.is_none() && self.untitled_id.is_some()
   }
 
   pub(super) fn is_closeable(&self) -> bool {

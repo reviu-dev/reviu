@@ -371,6 +371,8 @@ pub enum CommandPaletteAction {
   DropStash(CommandPaletteStash),
   PopStash(CommandPaletteStash),
   OpenProject,
+  NewFile,
+  SaveFileAs,
   NewAgentSession,
   NewAgentWorktreeSession,
   OpenGithubRepoDetails {
@@ -1018,6 +1020,8 @@ pub enum CommandPaletteCommandId {
   DropStash,
   PopStash,
   OpenProject,
+  NewFile,
+  SaveFileAs,
   OpenGithubFromUrl,
   OpenGitConfigPage,
   OpenSettingsPage,
@@ -1091,6 +1095,8 @@ impl CommandPaletteCommandId {
       Self::DropStash => "drop_stash",
       Self::PopStash => "pop_stash",
       Self::OpenProject => "open_project",
+      Self::NewFile => "new_file",
+      Self::SaveFileAs => "save_file_as",
       Self::OpenGithubFromUrl => "open_github_from_url",
       Self::OpenGitConfigPage => "open_git_config_page",
       Self::OpenSettingsPage => "open_settings_page",
@@ -1160,6 +1166,8 @@ impl CommandPaletteCommandId {
       "drop_stash" => Some(Self::DropStash),
       "pop_stash" => Some(Self::PopStash),
       "open_project" => Some(Self::OpenProject),
+      "new_file" => Some(Self::NewFile),
+      "save_file_as" => Some(Self::SaveFileAs),
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
       "open_settings_page" => Some(Self::OpenSettingsPage),
@@ -1640,6 +1648,22 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn new_file() -> Self {
+    Self::new(
+      CommandPaletteCommandId::NewFile,
+      "New file",
+      "Open a new untitled editor in the current project",
+    )
+  }
+
+  pub fn save_file_as() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SaveFileAs,
+      "Save file as",
+      "Save the active editor under a new name",
+    )
+  }
+
   pub fn open_github_from_url() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenGithubFromUrl,
@@ -1948,6 +1972,10 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::ForgetProject
       | CommandPaletteCommandId::OpenProject => CommandPaletteGroup::Project,
 
+      CommandPaletteCommandId::NewFile | CommandPaletteCommandId::SaveFileAs => {
+        CommandPaletteGroup::Navigation
+      }
+
       CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::PullRequest,
 
       CommandPaletteCommandId::NewAgentSession
@@ -2023,6 +2051,8 @@ impl CommandPaletteCommand {
       Id::DiscardReview => &["clear"],
       Id::DiscardPullRequestReview => &["pr", "delete", "clear"],
       Id::OpenProject => &["open", "folder", "project"],
+      Id::NewFile => &["untitled", "create", "editor"],
+      Id::SaveFileAs => &["rename", "copy", "path"],
       Id::SwitchProject => &["recent"],
       Id::NewTerminal => &["shell", "console", "terminal"],
       Id::ShowChanges => &["staged", "working", "show"],
@@ -2104,6 +2134,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::DropStash => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::DeleteBranch => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::OpenProject => Icon::new(UiIconName::FolderPlus),
+      CommandPaletteCommandId::NewFile | CommandPaletteCommandId::SaveFileAs => {
+        Icon::new(IconName::File)
+      }
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
@@ -3292,6 +3325,12 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::OpenProject => {
         self.trigger_action(command, CommandPaletteAction::OpenProject, window, cx);
+      }
+      CommandPaletteCommandId::NewFile => {
+        self.trigger_action(command, CommandPaletteAction::NewFile, window, cx);
+      }
+      CommandPaletteCommandId::SaveFileAs => {
+        self.trigger_action(command, CommandPaletteAction::SaveFileAs, window, cx);
       }
       CommandPaletteCommandId::OpenGithubFromUrl => {
         let query = self.commands_list.read(cx).delegate().query.to_string();

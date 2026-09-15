@@ -434,6 +434,7 @@ impl SessionPage {
       tab
         .path()
         .map(|path| path.to_string_lossy().replace(['/', '\\', ':'], "_"))
+        .or_else(|| tab.untitled_id().map(|id| format!("untitled-{id}")))
         .unwrap_or_default()
     };
     match tab.kind {
@@ -567,14 +568,16 @@ impl SessionPage {
       .into_any_element()
   }
 
-  fn center_tab_label(
-    &self,
-    tab: &CenterTab,
-    dirty: bool,
-    cx: &mut Context<Self>,
-  ) -> Option<String> {
+  fn center_tab_label(&self, tab: &CenterTab, cx: &mut Context<Self>) -> Option<String> {
     match tab.kind {
       CenterTabKind::Chat => Some(self.center_chat_tab_label(tab, cx)),
+      CenterTabKind::File if tab.is_untitled() => {
+        let name = match tab.untitled_id().unwrap_or(1) {
+          1 => "Untitled".to_string(),
+          id => format!("Untitled {id}"),
+        };
+        Some(name)
+      }
       CenterTabKind::File | CenterTabKind::Diff => {
         let path = tab.path()?;
         let name = path
@@ -588,11 +591,7 @@ impl SessionPage {
           None if tab.kind == CenterTabKind::Diff => "Diff: ",
           None => "",
         };
-        Some(if dirty {
-          format!("{prefix}{name} *")
-        } else {
-          format!("{prefix}{name}")
-        })
+        Some(format!("{prefix}{name}"))
       }
       CenterTabKind::InteractiveRebase => Some("Interactive rebase".to_string()),
       CenterTabKind::Terminal => Some(self.terminal_label(tab, cx)),
@@ -607,6 +606,12 @@ impl SessionPage {
         .size_3()
         .text_color(theme.muted_foreground)
         .into_any_element(),
+      CenterTabKind::File if tab.is_untitled() => {
+        gpui_component::Icon::new(gpui_component::IconName::File)
+          .size_3()
+          .text_color(theme.muted_foreground)
+          .into_any_element()
+      }
       CenterTabKind::File | CenterTabKind::Diff => self.center_file_tab_icon(tab.path()?, cx),
       CenterTabKind::InteractiveRebase => gpui_component::Icon::new(UiIconName::GitMerge)
         .size_3()
@@ -1161,9 +1166,20 @@ impl SessionPage {
       .xsmall()
       .tooltip("New...")
       .dropdown_menu(move |menu, _, _| {
+        let file_page = page.clone();
         let mut menu = menu
           .max_h(px(CENTER_NEW_MENU_MAX_HEIGHT_PX))
-          .scrollable(true);
+          .scrollable(true)
+          .item(
+            PopupMenuItem::new("File")
+              .icon(gpui_component::IconName::File)
+              .on_click(move |_, window, cx| {
+                file_page.update(cx, |page, cx| {
+                  page.new_untitled_file_action(&crate::NewFile, window, cx);
+                });
+              }),
+          )
+          .separator();
         for (agent_id, label) in agents.clone() {
           let agent_page = page.clone();
           let icon = agent_chat_panel::backend_icon(&agent_id);
@@ -1257,7 +1273,7 @@ impl SessionPage {
           .get(&label_tab)
           .and_then(|state| state.editor.as_ref())
           .is_some_and(|editor| editor.read(cx).is_dirty);
-      let Some(label) = self.center_tab_label(&label_tab, dirty, cx) else {
+      let Some(label) = self.center_tab_label(&label_tab, cx) else {
         continue;
       };
       let status = Self::center_tab_status(&icon_tabs, &statuses);
@@ -1298,6 +1314,7 @@ impl SessionPage {
             .line_height(px(CENTER_TAB_LABEL_HEIGHT_PX))
             .child(label),
         )
+        .when(dirty, |this| this.child(render_dirty_indicator(cx)))
         .when_some(status, |this, status| {
           this.child(Self::render_center_tab_status(status, &theme))
         })
@@ -1935,7 +1952,6 @@ impl SessionPage {
     path: &Path,
     old_path: Option<&Path>,
     status: Option<RepoStatusKind>,
-    is_dirty: bool,
     cx: &App,
   ) -> AnyElement {
     let theme = cx.theme().clone();
@@ -2003,15 +2019,6 @@ impl SessionPage {
           .text_color(theme.foreground)
           .child(title),
       )
-      .when(is_dirty, |this| {
-        this.child(
-          div()
-            .size_2()
-            .rounded_full()
-            .bg(theme.foreground)
-            .flex_shrink_0(),
-        )
-      })
       .into_any_element()
   }
 
@@ -2152,13 +2159,22 @@ impl SessionPage {
     let mut toolbar = DiffToolbar::new("session-page");
 
     if let Some(path) = self.shown_selected_file().map(Path::to_path_buf) {
-      toolbar = toolbar.title(self.render_editor_path_title(
-        &path,
-        old_path.as_deref(),
-        file_status,
-        file_dirty,
-        cx,
-      ));
+      toolbar =
+        toolbar.title(self.render_editor_path_title(&path, old_path.as_deref(), file_status, cx));
+    } else if let Some(tab) = self.shown_editor_tab().filter(|tab| tab.is_untitled()) {
+      let title = match tab.untitled_id().unwrap_or(1) {
+        1 => "Untitled".to_string(),
+        id => format!("Untitled {id}"),
+      };
+      toolbar = toolbar.title(
+        div()
+          .min_w_0()
+          .flex_1()
+          .text_xs()
+          .text_color(cx.theme().muted_foreground)
+          .child(title)
+          .into_any_element(),
+      );
     }
 
     if has_editor && self.shown_previewable() {
@@ -2210,7 +2226,7 @@ impl SessionPage {
           .label("Save")
           .xsmall()
           .ghost()
-          .disabled(!file_dirty)
+          .disabled(!file_dirty && !self.shown_editor_tab().is_some_and(CenterTab::is_untitled))
           .on_click(move |_, _, cx| {
             if let Some(editor) = save_editor.clone() {
               editor.update(cx, |editor, cx| editor.save(cx));
@@ -2764,6 +2780,8 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::jump_to_latest_message_action))
       .on_action(cx.listener(Self::new_agent_session_action))
       .on_action(cx.listener(Self::new_agent_worktree_session_action))
+      .on_action(cx.listener(Self::new_untitled_file_action))
+      .on_action(cx.listener(Self::save_file_as_action))
       .on_action(cx.listener(Self::comment_hunk_action))
       .on_action(cx.listener(Self::toggle_diff_view_action))
       .on_action(cx.listener(Self::toggle_hide_whitespace_action))

@@ -1,7 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use app_root::AppRoot;
-use editor::Quit;
 use gpui::{App, Bounds, Focusable, WindowBounds, WindowOptions, prelude::*, px, size};
 #[cfg(target_os = "macos")]
 use gpui::{TitlebarOptions, point};
@@ -426,8 +425,6 @@ fn main() {
       }
     })
     .detach();
-
-    cx.on_action(|_: &Quit, cx| cx.quit());
   });
 }
 

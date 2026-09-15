@@ -79,6 +79,7 @@ impl SessionPage {
         conversation_id: None,
         snapshot: snapshot.clone(),
         terminal_id: None,
+        untitled_id: None,
       }),
       PersistedCenterTab::Terminal { key } => terminals.get(key).cloned(),
     }

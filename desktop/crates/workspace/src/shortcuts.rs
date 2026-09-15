@@ -18,10 +18,11 @@ use crate::config::ConfigStore;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CloseCenterTab, CommentHunk,
   CommitChanges, DeleteSelectedFileItem, ForcePushChanges, JumpToLatestMessage, NewAgentSession,
-  NewAgentWorktreeSession, NextAnnotation, NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar,
-  OpenGitHistorySidebar, OpenProject, OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage,
-  PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RenameSelectedFileItem,
-  RestoreFile, RestoreHunk, ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher,
+  NewAgentWorktreeSession, NewFile, NewFileInFilesPanel, NextAnnotation, NextCenterTab,
+  OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenProject,
+  OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, PreviousAnnotation,
+  PreviousCenterTab, PullChanges, PushChanges, RenameSelectedFileItem, RestoreFile, RestoreHunk,
+  ReturnFocusToEditor, SaveFileAs, SendReviewCommentsToAgent, ShowBranchSwitcher,
   ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
   ToggleHunkStage,
 };
@@ -74,6 +75,8 @@ pub enum ShortcutId {
   NextCenterTab,
   PreviousCenterTab,
   CloseCenterTab,
+  NewFile,
+  SaveFileAs,
   ShowFileSearch,
   OpenProject,
   CommitChanges,
@@ -111,6 +114,8 @@ impl ShortcutId {
       ShortcutId::NextCenterTab => "next_center_tab",
       ShortcutId::PreviousCenterTab => "previous_center_tab",
       ShortcutId::CloseCenterTab => "close_center_tab",
+      ShortcutId::NewFile => "new_file",
+      ShortcutId::SaveFileAs => "save_file_as",
       ShortcutId::ShowFileSearch => "show_file_search",
       ShortcutId::OpenProject => "open_project",
       ShortcutId::CommitChanges => "commit_changes",
@@ -148,6 +153,8 @@ impl ShortcutId {
       "next_center_tab" => Some(ShortcutId::NextCenterTab),
       "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
       "close_center_tab" => Some(ShortcutId::CloseCenterTab),
+      "new_file" => Some(ShortcutId::NewFile),
+      "save_file_as" => Some(ShortcutId::SaveFileAs),
       "show_file_search" => Some(ShortcutId::ShowFileSearch),
       "open_project" => Some(ShortcutId::OpenProject),
       "commit_changes" => Some(ShortcutId::CommitChanges),
@@ -202,7 +209,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -243,6 +250,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
     scope_label: "Workspace",
     category: ShortcutCategory::Core,
     keystroke: "cmd-w",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::NewFile,
+    title: "New File",
+    description: "Open a new untitled editor in the current project.",
+    scope_label: "Projects",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-n",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::SaveFileAs,
+    title: "Save File As",
+    description: "Save the active editor under a new name.",
+    scope_label: "Projects",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-shift-s",
     context: CENTER_TAB_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -826,6 +855,8 @@ impl ShortcutDefinition {
         KeyBinding::new(keystroke, PreviousCenterTab, Some(&context))
       }
       ShortcutId::CloseCenterTab => KeyBinding::new(keystroke, CloseCenterTab, Some(&context)),
+      ShortcutId::NewFile => KeyBinding::new(keystroke, NewFile, Some(&context)),
+      ShortcutId::SaveFileAs => KeyBinding::new(keystroke, SaveFileAs, Some(&context)),
       ShortcutId::ShowFileSearch => KeyBinding::new(keystroke, ShowFileSearch, Some(&context)),
       ShortcutId::OpenProject => KeyBinding::new(keystroke, OpenProject, Some(&context)),
       ShortcutId::CommitChanges => KeyBinding::new(keystroke, CommitChanges, Some(&context)),
@@ -1039,6 +1070,8 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::Pull => Some(ShortcutId::PullChanges),
     Command::SwitchBranch => Some(ShortcutId::ShowBranchSwitcher),
     Command::OpenProject => Some(ShortcutId::OpenProject),
+    Command::NewFile => Some(ShortcutId::NewFile),
+    Command::SaveFileAs => Some(ShortcutId::SaveFileAs),
     Command::OpenSettingsPage => Some(ShortcutId::OpenSettingsPage),
     Command::SendReview => Some(ShortcutId::SendReviewCommentsToAgent),
     // One key toggles either way, so both rows show it.
@@ -1237,6 +1270,7 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("cmd-f", Find, None),
     KeyBinding::new("escape", CloseFind, Some("Editor")),
     KeyBinding::new("escape", ReturnFocusToEditor, Some(DOCK_PANEL_CONTEXT)),
+    KeyBinding::new("cmd-n", NewFileInFilesPanel, Some(FILES_TREE_CONTEXT)),
     KeyBinding::new("f2", RenameSelectedFileItem, Some(FILES_TREE_CONTEXT)),
     KeyBinding::new("delete", DeleteSelectedFileItem, Some(FILES_TREE_CONTEXT)),
     KeyBinding::new("home", Home, None),
@@ -1464,6 +1498,8 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::NextCenterTab => f(&NextCenterTab),
     ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
     ShortcutId::CloseCenterTab => f(&CloseCenterTab),
+    ShortcutId::NewFile => f(&NewFile),
+    ShortcutId::SaveFileAs => f(&SaveFileAs),
     ShortcutId::ShowFileSearch => f(&ShowFileSearch),
     ShortcutId::OpenProject => f(&OpenProject),
     ShortcutId::CommitChanges => f(&CommitChanges),
@@ -1710,6 +1746,23 @@ mod tests {
     assert_eq!(
       first_binding_action_name("workspace", &[], "cmd-w", workspace_key_bindings(),),
       Some("workspace::CloseCenterTab")
+    );
+  }
+
+  #[test]
+  fn cmd_n_creates_inline_only_from_the_files_tree() {
+    assert_eq!(
+      first_binding_action_name("workspace", &[], "cmd-n", app_and_workspace_key_bindings()),
+      Some("workspace::NewFile")
+    );
+    assert_eq!(
+      first_binding_action_name(
+        "workspace",
+        &["Tree"],
+        "cmd-n",
+        app_and_workspace_key_bindings(),
+      ),
+      Some("workspace::NewFileInFilesPanel")
     );
   }
 

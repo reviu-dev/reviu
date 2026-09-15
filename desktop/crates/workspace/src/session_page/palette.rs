@@ -43,6 +43,15 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::switch_project());
     }
     commands.push(CommandPaletteCommand::open_project());
+    if self.fallback_repo.is_some() {
+      commands.push(CommandPaletteCommand::new_file());
+      if self
+        .shown_editor()
+        .is_some_and(|editor| !editor.read(cx).is_read_only)
+      {
+        commands.push(CommandPaletteCommand::save_file_as());
+      }
+    }
     if projects_len > 0 {
       commands.push(CommandPaletteCommand::forget_project());
     }
@@ -441,6 +450,14 @@ impl SessionPage {
       CommandPaletteAction::Fetch => self.run_repo_command(RepoCommand::Fetch, window, cx),
       CommandPaletteAction::OpenProject => {
         self.start_open_project(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::NewFile => {
+        self.new_untitled_file_action(&crate::NewFile, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::SaveFileAs => {
+        self.save_file_as_action(&crate::SaveFileAs, window, cx);
         Ok(())
       }
       CommandPaletteAction::SwitchProject(project) => {

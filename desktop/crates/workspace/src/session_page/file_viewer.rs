@@ -52,41 +52,16 @@ pub(super) enum UnsavedEditorAction {
   RunBranchCommand {
     command: RepoCommand,
   },
-  OpenDiff {
-    rel_path: PathBuf,
-    reveal_line: Option<u32>,
-    reveal_column: Option<u32>,
-    intent: OpenIntent,
-  },
-  OpenFile {
-    rel_path: PathBuf,
-    reveal_line: Option<u32>,
-    reveal_column: Option<u32>,
-    intent: OpenIntent,
-  },
-  AgentDiffSnapshot {
-    rel_path: PathBuf,
-    old_text: Option<String>,
-    new_text: String,
-    reveal_line: Option<u32>,
-    intent: OpenIntent,
-  },
-  CommitFile {
-    commit_oid: String,
-    rel_path: PathBuf,
-    intent: OpenIntent,
-  },
-  PullRequestFile {
-    base_oid: String,
-    head_oid: String,
-    rel_path: PathBuf,
-    reveal_line: Option<u32>,
-    intent: OpenIntent,
-  },
   CloseCenterTab {
     tab: CenterTab,
   },
   CloseCenterSurface {
+    tab: CenterTab,
+  },
+  CloseWindow {
+    tab: CenterTab,
+  },
+  Quit {
     tab: CenterTab,
   },
 }
@@ -177,12 +152,15 @@ fn update_editor_state_path(
   let Some(checkout_root) = checkout_root else {
     return;
   };
-  let file_path = checkout_root.join(&state.selected_file);
+  let Some(selected_file) = state.selected_file.as_ref() else {
+    return;
+  };
+  let file_path = checkout_root.join(selected_file);
   state.file_modified = worktree_file_modified(&file_path);
   if let Some(editor) = state.editor.clone() {
     let repo_file = git::RepoFile::new(checkout_root, &file_path).ok();
     editor.update(cx, |editor, _| {
-      editor.workdir_path = file_path;
+      editor.workdir_path = Some(file_path);
       editor.git_store = repo_file
         .as_ref()
         .map(|repo_file| git::GitStore::new(repo_file.repo_root.clone()));
@@ -230,6 +208,250 @@ fn agent_snapshot_diff_set(
 }
 
 impl SessionPage {
+  pub(super) fn new_untitled_file_action(
+    &mut self,
+    _: &crate::NewFile,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.checkout_root(cx) else {
+      window.push_notification(
+        Notification::warning("Open a project before creating a file."),
+        cx,
+      );
+      return;
+    };
+
+    self.cache_warm_editor();
+    let id = self.next_untitled_id;
+    self.next_untitled_id = self.next_untitled_id.saturating_add(1);
+    let tab = CenterTab::untitled(id);
+    let editor = cx.new(|cx| Editor::new_untitled(repo_root, cx));
+    editor.update(cx, |editor, cx| editor.set_git_diff_enabled(false, cx));
+    cx.subscribe_in(
+      &editor,
+      window,
+      move |this, editor, event: &EditorEvent, window, cx| match event {
+        EditorEvent::SavePathRequested => {
+          if let Some(tab) = this.tab_for_editor(editor) {
+            this.prompt_to_save_editor_as(tab, window, cx);
+          }
+        }
+        EditorEvent::SavedAs { path } => {
+          if let Some(tab) = this.tab_for_editor(editor) {
+            this.finish_editor_save_as(tab, path, cx);
+          }
+        }
+        EditorEvent::SaveFailed { message } => {
+          window.push_notification(Notification::error(message.clone()), cx)
+        }
+        EditorEvent::Saved => {
+          this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+        }
+        EditorEvent::HunkStagingChanged => {}
+      },
+    )
+    .detach();
+
+    self.center = CenterView::Diff;
+    self.diff_chat_open = false;
+    self.show_preview = false;
+    self.sync_agent_chat_close_control(cx);
+    self.remember_center_tab(tab.clone(), cx);
+    self.editor_tab = Some(tab.clone());
+    self.set_editor_tab_state(
+      tab,
+      CenterEditorState {
+        selected_file: None,
+        file_modified: None,
+        editor: Some(editor),
+        binary_preview: None,
+        opened_snapshot: None,
+      },
+    );
+    self
+      .dock_panel
+      .read(cx)
+      .changes_list()
+      .update(cx, |list, cx| list.select_path(None, cx));
+    self.focus_editor_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  pub(super) fn save_file_as_action(
+    &mut self,
+    _: &crate::SaveFileAs,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(tab) = self.shown_editor_tab().cloned() else {
+      cx.propagate();
+      return;
+    };
+    let Some(editor) = self
+      .editor_states
+      .get(&tab)
+      .and_then(|state| state.editor.clone())
+    else {
+      return;
+    };
+    if editor.read(cx).is_read_only {
+      return;
+    }
+    self.prompt_to_save_editor_as(tab, window, cx);
+  }
+
+  fn prompt_to_save_editor_as(
+    &mut self,
+    tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.checkout_root(cx) else {
+      return;
+    };
+    let Some(editor) = self
+      .editor_states
+      .get(&tab)
+      .and_then(|state| state.editor.clone())
+    else {
+      return;
+    };
+    let directory = self
+      .editor_states
+      .get(&tab)
+      .and_then(|state| state.selected_file.as_deref())
+      .and_then(Path::parent)
+      .filter(|path| !path.as_os_str().is_empty())
+      .map(|path| repo_root.join(path))
+      .unwrap_or_else(|| repo_root.clone());
+    let suggested_name = tab
+      .path()
+      .and_then(Path::file_name)
+      .map(|name| name.to_string_lossy().into_owned())
+      .unwrap_or_else(|| match tab.untitled_id().unwrap_or(1) {
+        1 => "untitled".to_string(),
+        id => format!("untitled-{id}"),
+      });
+    let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+    let window_handle = window.window_handle();
+    let source_tab = tab.clone();
+    self.save_as_task = Some(cx.spawn(async move |this, cx| {
+      let selected_path = receiver.await;
+      let _ = cx.update_window(window_handle, move |_, window, cx| {
+        let _ = this.update(cx, move |this, cx| {
+          let path = match selected_path {
+            Ok(Ok(Some(path))) => path,
+            Ok(Ok(None)) | Err(_) => {
+              editor.update(cx, |editor, _| editor.cancel_pending_untitled_save());
+              return;
+            }
+            Ok(Err(error)) => {
+              editor.update(cx, |editor, _| editor.cancel_pending_untitled_save());
+              window.push_notification(Notification::error(error.to_string()), cx);
+              return;
+            }
+          };
+          let Ok(relative_path) = path.strip_prefix(&repo_root).map(Path::to_path_buf) else {
+            editor.update(cx, |editor, _| editor.cancel_pending_untitled_save());
+            window.push_notification(
+              Notification::warning("Choose a location inside the current project."),
+              cx,
+            );
+            return;
+          };
+          if relative_path.as_os_str().is_empty() {
+            editor.update(cx, |editor, _| editor.cancel_pending_untitled_save());
+            window.push_notification(Notification::warning("Choose a file name."), cx);
+            return;
+          }
+          let destination_tab = CenterTab::file(relative_path);
+          let destination_is_open = this.center_tabs.contains(&destination_tab)
+            || this.center_layout.contains_tab(&destination_tab)
+            || this
+              .center_layouts_by_tab
+              .values()
+              .any(|layout| layout.contains_tab(&destination_tab));
+          if destination_tab != source_tab && destination_is_open {
+            editor.update(cx, |editor, _| editor.cancel_pending_untitled_save());
+            window.push_notification(Notification::warning("That file is already open."), cx);
+            return;
+          }
+          editor.update(cx, |editor, cx| editor.save_as(repo_root, path, cx));
+        });
+      });
+    }));
+  }
+
+  fn finish_editor_save_as(
+    &mut self,
+    old_tab: CenterTab,
+    absolute_path: &Path,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.checkout_root(cx) else {
+      return;
+    };
+    let Ok(relative_path) = absolute_path
+      .strip_prefix(&repo_root)
+      .map(Path::to_path_buf)
+    else {
+      return;
+    };
+    let new_tab = CenterTab::file(relative_path.clone());
+    if old_tab == new_tab {
+      return;
+    }
+
+    replace_center_tabs(&mut self.center_tabs, &old_tab, &new_tab);
+    replace_center_tabs(&mut self.center_tab_history, &old_tab, &new_tab);
+    replace_center_tab_option(&mut self.active_center_tab, &old_tab, &new_tab);
+    replace_center_tab_option(&mut self.editor_tab, &old_tab, &new_tab);
+    self.center_layout.replace_tab(&old_tab, &new_tab);
+    replace_center_layouts(&mut self.center_layouts_by_tab, &old_tab, &new_tab);
+    for tabs in self.center_tabs_by_checkout.values_mut() {
+      replace_center_tabs(tabs, &old_tab, &new_tab);
+    }
+    for active_tab in self.center_active_tab_by_checkout.values_mut() {
+      if active_tab == &old_tab {
+        *active_tab = new_tab.clone();
+      }
+    }
+    if let Some(mut state) = self.editor_states.remove(&old_tab) {
+      state.selected_file = Some(relative_path.clone());
+      state.file_modified = worktree_file_modified(absolute_path);
+      self.editor_states.insert(new_tab.clone(), state);
+    }
+    self.record_recent_file(&repo_root, &relative_path);
+    self.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+    self.reveal_center_tab_in_files_panel(&new_tab, cx);
+    self.persist_current_center_workspace(cx);
+    cx.notify();
+  }
+
+  pub(super) fn activate_untitled_file(
+    &mut self,
+    tab: CenterTab,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.editor_states.contains_key(&tab) {
+      return;
+    }
+    self.cache_warm_editor();
+    self.center = CenterView::Diff;
+    self.diff_chat_open = false;
+    self.show_preview = false;
+    self.sync_agent_chat_close_control(cx);
+    self.remember_center_tab(tab.clone(), cx);
+    self.editor_tab = Some(tab);
+    if intent.takes_focus() {
+      self.focus_editor_on_next_frame(window, cx);
+    }
+    cx.notify();
+  }
+
   pub(super) fn open_diff(
     &mut self,
     rel_path: PathBuf,
@@ -250,19 +472,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.should_prompt_before_opening(&CenterTab::diff(rel_path.clone()), cx) {
-      self.open_unsaved_editor_dialog(
-        UnsavedEditorAction::OpenDiff {
-          rel_path,
-          reveal_line,
-          reveal_column,
-          intent,
-        },
-        window,
-        cx,
-      );
-      return;
-    }
     self.open_diff_without_unsaved_prompt(rel_path, reveal_line, reveal_column, intent, window, cx);
   }
 
@@ -275,19 +484,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.should_prompt_before_opening(&CenterTab::file(rel_path.clone()), cx) {
-      self.open_unsaved_editor_dialog(
-        UnsavedEditorAction::OpenFile {
-          rel_path,
-          reveal_line,
-          reveal_column,
-          intent,
-        },
-        window,
-        cx,
-      );
-      return;
-    }
     self.open_file_without_unsaved_prompt(rel_path, reveal_line, reveal_column, intent, window, cx);
   }
 
@@ -446,9 +642,9 @@ impl SessionPage {
           }
         });
         this.set_editor_tab_state(
-          load_tab,
+          load_tab.clone(),
           CenterEditorState {
-            selected_file: rel_path.clone(),
+            selected_file: Some(rel_path.clone()),
             file_modified,
             editor: Some(editor.clone()),
             binary_preview,
@@ -474,16 +670,28 @@ impl SessionPage {
         }
         cx.subscribe(
           &editor,
-          |this, _editor, event: &EditorEvent, cx| match event {
+          move |this, editor, event: &EditorEvent, cx| match event {
             EditorEvent::Saved => {
-              let file_modified = this.warm_worktree_file_modified(cx);
-              if let Some(state) = this.editor_tab_state_mut() {
-                state.file_modified = file_modified;
+              if let Some(tab) = this.tab_for_editor(&editor)
+                && let Some(state) = this.editor_states.get_mut(&tab)
+              {
+                let path = editor.read(cx).workdir_path.clone();
+                state.file_modified = path.as_deref().and_then(worktree_file_modified);
               }
-              this.cache_warm_editor();
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             }
-            EditorEvent::HunkStagingChanged => {
+            EditorEvent::SavedAs { path } => {
+              if let Some(tab) = this.tab_for_editor(&editor) {
+                this.finish_editor_save_as(tab, path, cx);
+              }
+            }
+            EditorEvent::SaveFailed { message } => {
+              let message = message.clone();
+              let _ = cx.update_window(this.window_handle, move |_, window, cx| {
+                window.push_notification(Notification::error(message), cx);
+              });
+            }
+            EditorEvent::SavePathRequested | EditorEvent::HunkStagingChanged => {
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             }
           },
@@ -602,9 +810,12 @@ impl SessionPage {
       .into_iter()
       .map(|(tab, mut state)| {
         let new_tab = renamed_center_tab(&tab, old_path, new_path).unwrap_or(tab);
-        if let Some(selected_file) = renamed_relative_path(&state.selected_file, old_path, new_path)
+        if let Some(selected_file) = state
+          .selected_file
+          .as_ref()
+          .and_then(|selected_file| renamed_relative_path(selected_file, old_path, new_path))
         {
-          state.selected_file = selected_file;
+          state.selected_file = Some(selected_file);
           if state.opened_snapshot.is_none() {
             update_editor_state_path(&mut state, checkout_root, cx);
           }
@@ -786,7 +997,7 @@ impl SessionPage {
         this.set_editor_tab_state(
           load_tab.clone(),
           CenterEditorState {
-            selected_file: rel_path.clone(),
+            selected_file: Some(rel_path.clone()),
             file_modified,
             editor: Some(editor.clone()),
             binary_preview,
@@ -804,18 +1015,30 @@ impl SessionPage {
           }
         }
         if is_worktree {
-          let event_tab = load_tab.clone();
-          let event_path = file_path.clone();
           cx.subscribe(
             &editor,
-            move |this, _editor, event: &EditorEvent, cx| match event {
+            move |this, editor, event: &EditorEvent, cx| match event {
               EditorEvent::Saved => {
-                if let Some(state) = this.editor_states.get_mut(&event_tab) {
-                  state.file_modified = worktree_file_modified(&event_path);
+                if let Some(tab) = this.tab_for_editor(&editor)
+                  && let Some(state) = this.editor_states.get_mut(&tab)
+                {
+                  let path = editor.read(cx).workdir_path.clone();
+                  state.file_modified = path.as_deref().and_then(worktree_file_modified);
                 }
                 this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
               }
-              EditorEvent::HunkStagingChanged => {
+              EditorEvent::SavedAs { path } => {
+                if let Some(tab) = this.tab_for_editor(&editor) {
+                  this.finish_editor_save_as(tab, path, cx);
+                }
+              }
+              EditorEvent::SaveFailed { message } => {
+                let message = message.clone();
+                let _ = cx.update_window(this.window_handle, move |_, window, cx| {
+                  window.push_notification(Notification::error(message), cx);
+                });
+              }
+              EditorEvent::SavePathRequested | EditorEvent::HunkStagingChanged => {
                 this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
               }
             },
@@ -853,17 +1076,12 @@ impl SessionPage {
       .and_then(|tab| self.editor_states.get(tab))
   }
 
-  fn editor_tab_state_mut(&mut self) -> Option<&mut CenterEditorState> {
-    let tab = self.warm_editor_tab()?.clone();
-    self.editor_states.get_mut(&tab)
-  }
-
   pub(super) fn warm_editor(&self) -> Option<Entity<Editor>> {
     self.editor_tab_state()?.editor.clone()
   }
 
   pub(super) fn warm_selected_file(&self) -> Option<&Path> {
-    Some(self.editor_tab_state()?.selected_file.as_path())
+    self.editor_tab_state()?.selected_file.as_deref()
   }
 
   pub(super) fn warm_binary_preview(&self) -> Option<&BinaryPreview> {
@@ -884,8 +1102,18 @@ impl SessionPage {
     self.shown_editor_state()?.editor.clone()
   }
 
+  fn tab_for_editor(&self, editor: &Entity<Editor>) -> Option<CenterTab> {
+    self.editor_states.iter().find_map(|(tab, state)| {
+      state
+        .editor
+        .as_ref()
+        .is_some_and(|candidate| candidate == editor)
+        .then(|| tab.clone())
+    })
+  }
+
   pub(super) fn shown_selected_file(&self) -> Option<&Path> {
-    Some(self.shown_editor_state()?.selected_file.as_path())
+    self.shown_editor_state()?.selected_file.as_deref()
   }
 
   pub(super) fn shown_binary_preview(&self) -> Option<&BinaryPreview> {
@@ -910,7 +1138,7 @@ impl SessionPage {
     self.set_editor_tab_state(
       tab,
       CenterEditorState {
-        selected_file,
+        selected_file: Some(selected_file),
         file_modified: None,
         editor: None,
         binary_preview: None,
@@ -928,12 +1156,6 @@ impl SessionPage {
 
   fn clear_editor_tab_selection(&mut self) {
     self.editor_tab = None;
-  }
-
-  fn warm_worktree_file_modified(&self, cx: &App) -> Option<SystemTime> {
-    let repo_root = self.checkout_root(cx)?;
-    let selected_file = self.warm_selected_file()?;
-    worktree_file_modified(&repo_root.join(selected_file))
   }
 
   fn cache_warm_editor(&mut self) {
@@ -1025,20 +1247,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.should_prompt_before_replacing_editor(cx) {
-      self.open_unsaved_editor_dialog(
-        UnsavedEditorAction::AgentDiffSnapshot {
-          rel_path,
-          old_text,
-          new_text,
-          reveal_line,
-          intent,
-        },
-        window,
-        cx,
-      );
-      return;
-    }
     self.open_agent_diff_snapshot_without_unsaved_prompt(
       rel_path,
       old_text,
@@ -1145,7 +1353,7 @@ impl SessionPage {
         this.set_editor_tab_state(
           load_tab,
           CenterEditorState {
-            selected_file: rel_path.clone(),
+            selected_file: Some(rel_path.clone()),
             file_modified: None,
             editor: Some(editor.clone()),
             binary_preview: None,
@@ -1176,18 +1384,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.should_prompt_before_replacing_editor(cx) {
-      self.open_unsaved_editor_dialog(
-        UnsavedEditorAction::CommitFile {
-          commit_oid,
-          rel_path,
-          intent,
-        },
-        window,
-        cx,
-      );
-      return;
-    }
     self.open_commit_file_without_unsaved_prompt(commit_oid, rel_path, intent, window, cx);
   }
 
@@ -1257,7 +1453,7 @@ impl SessionPage {
         this.set_editor_tab_state(
           load_tab,
           CenterEditorState {
-            selected_file: rel_path.clone(),
+            selected_file: Some(rel_path.clone()),
             file_modified: None,
             editor: Some(editor),
             binary_preview,
@@ -1286,20 +1482,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.should_prompt_before_replacing_editor(cx) {
-      self.open_unsaved_editor_dialog(
-        UnsavedEditorAction::PullRequestFile {
-          base_oid,
-          head_oid,
-          rel_path,
-          reveal_line,
-          intent,
-        },
-        window,
-        cx,
-      );
-      return;
-    }
     self.open_pull_request_file_without_unsaved_prompt(
       base_oid,
       head_oid,
@@ -1404,7 +1586,7 @@ impl SessionPage {
         this.set_editor_tab_state(
           load_tab,
           CenterEditorState {
-            selected_file: rel_path.clone(),
+            selected_file: Some(rel_path.clone()),
             file_modified: None,
             editor: Some(editor.clone()),
             binary_preview,
@@ -1940,7 +2122,7 @@ impl SessionPage {
       self.close_center_tab(tab, window, cx);
       return;
     }
-    if self.editor_is_dirty(cx) && self.editor_tab.as_ref() == Some(&tab) {
+    if self.editor_tab_is_dirty(&tab, cx) {
       self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseCenterSurface { tab }, window, cx);
       return;
     }
@@ -2132,7 +2314,7 @@ impl SessionPage {
       CenterTabKind::Terminal => {}
       CenterTabKind::File | CenterTabKind::Diff => {}
     }
-    if self.editor_is_dirty(cx) && self.editor_tab.as_ref() == Some(&tab) {
+    if self.editor_tab_is_dirty(&tab, cx) {
       self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseCenterTab { tab }, window, cx);
       return;
     }
@@ -2295,6 +2477,32 @@ impl SessionPage {
     self.show_conversation_or_empty(window, cx);
   }
 
+  pub(crate) fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(tab) = self.dirty_editor_tab(cx) {
+      self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseWindow { tab }, window, cx);
+    } else {
+      window.remove_window();
+    }
+  }
+
+  pub(crate) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(tab) = self.dirty_editor_tab(cx) {
+      self.open_unsaved_editor_dialog(UnsavedEditorAction::Quit { tab }, window, cx);
+    } else {
+      cx.quit();
+    }
+  }
+
+  fn dirty_editor_tab(&self, cx: &App) -> Option<CenterTab> {
+    self.editor_states.iter().find_map(|(tab, state)| {
+      state
+        .editor
+        .as_ref()
+        .is_some_and(|editor| editor.read(cx).is_dirty)
+        .then(|| tab.clone())
+    })
+  }
+
   pub(super) fn editor_is_dirty(&self, cx: &App) -> bool {
     self
       .warm_editor()
@@ -2302,22 +2510,27 @@ impl SessionPage {
       .is_some_and(|editor| editor.read(cx).is_dirty)
   }
 
-  fn should_prompt_before_opening(&self, tab: &CenterTab, cx: &App) -> bool {
-    self.editor_is_dirty(cx) && self.editor_tab.as_ref() != Some(tab)
+  fn editor_tab_is_dirty(&self, tab: &CenterTab, cx: &App) -> bool {
+    self
+      .editor_states
+      .get(tab)
+      .and_then(|state| state.editor.as_ref())
+      .is_some_and(|editor| editor.read(cx).is_dirty)
   }
 
-  fn should_prompt_before_replacing_editor(&self, cx: &App) -> bool {
-    self.editor_is_dirty(cx)
+  fn discard_editor(&mut self, tab: &CenterTab) {
+    self.clear_editor_tab(tab);
+    self.open_file_task = None;
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
   }
 
+  #[cfg(test)]
   fn discard_warm_editor(&mut self) {
     if let Some(tab) = self.editor_tab.clone() {
-      self.clear_editor_tab(&tab);
+      self.discard_editor(&tab);
     } else {
       self.clear_editor_tab_selection();
     }
-    self.open_file_task = None;
-    self.open_file_generation = self.open_file_generation.wrapping_add(1);
   }
 
   #[cfg(test)]
@@ -2329,6 +2542,31 @@ impl SessionPage {
   ) {
     window.close_dialog(cx);
     self.discard_warm_editor();
+    self.perform_unsaved_editor_action(action, window, cx);
+  }
+
+  fn perform_unsaved_editor_action_after_save(
+    &mut self,
+    action: UnsavedEditorAction,
+    editor: &Entity<Editor>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let action = match action {
+      UnsavedEditorAction::CloseCenterTab { tab } if !self.editor_states.contains_key(&tab) => self
+        .tab_for_editor(editor)
+        .map_or(UnsavedEditorAction::CloseCenterTab { tab }, |tab| {
+          UnsavedEditorAction::CloseCenterTab { tab }
+        }),
+      UnsavedEditorAction::CloseCenterSurface { tab } if !self.editor_states.contains_key(&tab) => {
+        self
+          .tab_for_editor(editor)
+          .map_or(UnsavedEditorAction::CloseCenterSurface { tab }, |tab| {
+            UnsavedEditorAction::CloseCenterSurface { tab }
+          })
+      }
+      action => action,
+    };
     self.perform_unsaved_editor_action(action, window, cx);
   }
 
@@ -2390,73 +2628,14 @@ impl SessionPage {
           window.push_notification(Notification::warning(error), cx);
         }
       }
-      UnsavedEditorAction::OpenDiff {
-        rel_path,
-        reveal_line,
-        reveal_column,
-        intent,
-      } => self.open_diff_without_unsaved_prompt(
-        rel_path,
-        reveal_line,
-        reveal_column,
-        intent,
-        window,
-        cx,
-      ),
-      UnsavedEditorAction::OpenFile {
-        rel_path,
-        reveal_line,
-        reveal_column,
-        intent,
-      } => self.open_file_without_unsaved_prompt(
-        rel_path,
-        reveal_line,
-        reveal_column,
-        intent,
-        window,
-        cx,
-      ),
-      UnsavedEditorAction::AgentDiffSnapshot {
-        rel_path,
-        old_text,
-        new_text,
-        reveal_line,
-        intent,
-      } => self.open_agent_diff_snapshot_without_unsaved_prompt(
-        rel_path,
-        old_text,
-        new_text,
-        reveal_line,
-        intent,
-        window,
-        cx,
-      ),
-      UnsavedEditorAction::CommitFile {
-        commit_oid,
-        rel_path,
-        intent,
-      } => self.open_commit_file_without_unsaved_prompt(commit_oid, rel_path, intent, window, cx),
-      UnsavedEditorAction::PullRequestFile {
-        base_oid,
-        head_oid,
-        rel_path,
-        reveal_line,
-        intent,
-      } => self.open_pull_request_file_without_unsaved_prompt(
-        base_oid,
-        head_oid,
-        rel_path,
-        reveal_line,
-        intent,
-        window,
-        cx,
-      ),
       UnsavedEditorAction::CloseCenterTab { tab } => {
         self.close_center_tab_without_unsaved_prompt(tab, window, cx)
       }
       UnsavedEditorAction::CloseCenterSurface { tab } => {
         self.close_center_surface_without_unsaved_prompt(tab, window, cx)
       }
+      UnsavedEditorAction::CloseWindow { .. } => self.request_close_window(window, cx),
+      UnsavedEditorAction::Quit { .. } => self.request_quit(window, cx),
     }
   }
 
@@ -2467,7 +2646,17 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let view = cx.entity();
-    let editor = self.warm_editor();
+    let editor_tab = match &action {
+      UnsavedEditorAction::CloseCenterTab { tab }
+      | UnsavedEditorAction::CloseCenterSurface { tab }
+      | UnsavedEditorAction::CloseWindow { tab }
+      | UnsavedEditorAction::Quit { tab } => tab.clone(),
+      _ => self.editor_tab.clone().unwrap_or_else(CenterTab::chat),
+    };
+    let editor = self
+      .editor_states
+      .get(&editor_tab)
+      .and_then(|state| state.editor.clone());
     let window_handle = window.window_handle();
 
     window.open_alert_dialog(cx, move |alert, _, _| {
@@ -2476,6 +2665,7 @@ impl SessionPage {
       let save_editor = editor.clone();
       let save_action = action.clone();
       let discard_action = action.clone();
+      let discard_editor_tab = editor_tab.clone();
 
       alert
         .title("Save file changes?")
@@ -2502,8 +2692,9 @@ impl SessionPage {
                 .on_click(move |_, window, cx| {
                   window.close_dialog(cx);
                   let discard_action = discard_action.clone();
+                  let discard_editor_tab = discard_editor_tab.clone();
                   discard_view.update(cx, move |view, cx| {
-                    view.discard_warm_editor();
+                    view.discard_editor(&discard_editor_tab);
                     view.perform_unsaved_editor_action(discard_action, window, cx);
                   });
                 }),
@@ -2519,17 +2710,21 @@ impl SessionPage {
                   if let Some(editor) = save_editor.clone() {
                     let save_view = save_view.clone();
                     let save_action = save_action.clone();
+                    let saved_editor = editor.clone();
                     editor.update(cx, |editor, cx| {
                       editor.save_with_completion(
                         cx,
                         Some(Box::new(move |cx| {
                           let save_view = save_view.clone();
                           let save_action = save_action.clone();
-                          let _ = cx.update_window(window_handle, move |_, window, _cx| {
-                            window.on_next_frame(move |window, cx| {
-                              save_view.update(cx, move |view, cx| {
-                                view.perform_unsaved_editor_action(save_action, window, cx);
-                              });
+                          let _ = cx.update_window(window_handle, move |_, window, cx| {
+                            save_view.update(cx, move |view, cx| {
+                              view.perform_unsaved_editor_action_after_save(
+                                save_action,
+                                &saved_editor,
+                                window,
+                                cx,
+                              );
                             });
                           });
                         })),
@@ -2679,6 +2874,218 @@ mod tests {
       });
       editor.is_dirty = true;
     });
+  }
+
+  #[gpui::test]
+  async fn new_files_start_as_distinct_untitled_editors(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-untitled-files");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_untitled_file_action(&crate::NewFile, window, cx);
+      page.new_untitled_file_action(&crate::NewFile, window, cx);
+    });
+
+    page.read_with(cx, |page, cx| {
+      let untitled_tabs = page
+        .center_tabs
+        .iter()
+        .filter(|tab| tab.is_untitled())
+        .collect::<Vec<_>>();
+      assert_eq!(untitled_tabs.len(), 2);
+      assert_ne!(untitled_tabs[0], untitled_tabs[1]);
+      assert!(page.shown_editor().is_some());
+      assert!(page.shown_selected_file().is_none());
+      assert!(!page.shown_editor().expect("editor").read(cx).is_dirty);
+    });
+    assert!(!repo.path.join("untitled").exists());
+    assert!(!repo.path.join("untitled-2").exists());
+  }
+
+  #[gpui::test]
+  async fn quitting_asks_before_discarding_a_dirty_untitled_file(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-quit-dirty-untitled");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_untitled_file_action(&crate::NewFile, window, cx);
+    });
+    dirty_warm_editor(&page, cx, "unsaved\n");
+    page.update_in(cx, |page, window, cx| page.request_quit(window, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert!(!repo.path.join("Untitled").exists());
+  }
+
+  #[gpui::test]
+  async fn saving_a_closing_untitled_file_closes_its_renamed_tab(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-save-closing-untitled");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_untitled_file_action(&crate::NewFile, window, cx);
+    });
+    dirty_warm_editor(&page, cx, "saved before closing\n");
+    let editor = page
+      .read_with(cx, |page, _| page.shown_editor())
+      .expect("untitled editor");
+    let tab = page
+      .read_with(cx, |page, _| page.shown_editor_tab().cloned())
+      .expect("untitled tab");
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(tab, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let save = cx
+      .debug_bounds(UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR)
+      .expect("save button");
+    cx.simulate_click(save.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let prompt_task = page
+      .update(cx, |page, _| page.save_as_task.take())
+      .expect("save path task");
+    let saved_path = repo.path.join("notes.txt");
+    cx.simulate_new_path_selection(|_| Some(saved_path.clone()));
+    prompt_task.await;
+    let save_task = editor
+      .update(cx, |editor, _| editor.save_task.take())
+      .expect("editor save task");
+    save_task.await;
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(saved_path).expect("saved file"),
+      "saved before closing\n"
+    );
+    page.read_with(cx, |page, _| {
+      assert!(!page.center_tabs.iter().any(CenterTab::is_untitled));
+      assert!(
+        !page
+          .center_tabs
+          .contains(&CenterTab::file(PathBuf::from("notes.txt")))
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn cancelling_an_untitled_save_keeps_the_dirty_editor(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-cancel-save-untitled");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_untitled_file_action(&crate::NewFile, window, cx);
+    });
+    let editor = page
+      .read_with(cx, |page, _| page.shown_editor())
+      .expect("untitled editor");
+    dirty_warm_editor(&page, cx, "unsaved\n");
+    editor.update(cx, |editor, cx| editor.save(cx));
+    cx.run_until_parked();
+    let prompt_task = page
+      .update(cx, |page, _| page.save_as_task.take())
+      .expect("save path task");
+    cx.simulate_new_path_selection(|_| None);
+    prompt_task.await;
+    cx.run_until_parked();
+
+    assert!(editor.read_with(cx, |editor, _| editor.is_dirty));
+    assert!(editor.read_with(cx, |editor, _| editor.is_untitled()));
+    assert!(page.read_with(cx, |page, _| {
+      page.center_tabs.iter().any(CenterTab::is_untitled)
+    }));
+  }
+
+  #[gpui::test]
+  async fn first_save_names_an_untitled_file_and_reuses_the_editor(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-save-untitled");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_untitled_file_action(&crate::NewFile, window, cx);
+    });
+    let editor = page
+      .read_with(cx, |page, _| page.shown_editor())
+      .expect("untitled editor");
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all("fn main() {}\n", cx)
+      });
+      editor.is_dirty = true;
+      editor.save(cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path());
+    let prompt_task = page
+      .update(cx, |page, _| page.save_as_task.take())
+      .expect("save path task");
+    let saved_path = repo.path.join("src/main.rs");
+    std::fs::create_dir_all(saved_path.parent().expect("save parent")).expect("create parent");
+    cx.simulate_new_path_selection(|directory| {
+      assert_eq!(directory, repo.path.as_path());
+      Some(saved_path.clone())
+    });
+    prompt_task.await;
+    let save_task = editor
+      .update(cx, |editor, _| editor.save_task.take())
+      .expect("editor save task");
+    save_task.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(&saved_path).expect("saved file"),
+      "fn main() {}\n"
+    );
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.shown_selected_file(), Some(Path::new("src/main.rs")));
+      assert_eq!(page.shown_editor(), Some(editor.clone()));
+      assert!(!editor.read(cx).is_dirty);
+      assert!(!editor.read(cx).is_untitled());
+      assert!(
+        page
+          .center_tabs
+          .contains(&CenterTab::file(PathBuf::from("src/main.rs")))
+      );
+      assert!(!page.center_tabs.iter().any(CenterTab::is_untitled));
+    });
+
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all("fn main() { println!(\"saved again\"); }\n", cx)
+      });
+      editor.is_dirty = true;
+      editor.save(cx);
+    });
+    let second_save = editor
+      .update(cx, |editor, _| editor.save_task.take())
+      .expect("second save task");
+    second_save.await;
+    assert_eq!(
+      std::fs::read_to_string(&saved_path).expect("saved file again"),
+      "fn main() { println!(\"saved again\"); }\n"
+    );
   }
 
   fn snapshot_changed_line_count(
@@ -3023,7 +3430,10 @@ mod tests {
           .contains(&CenterTab::file(PathBuf::from("test.htm")))
       );
       let editor = page.warm_editor().expect("open editor");
-      assert_eq!(editor.read(cx).workdir_path, repo.path.join("test.html"));
+      assert_eq!(
+        editor.read(cx).workdir_path.as_deref(),
+        Some(repo.path.join("test.html").as_path())
+      );
     });
   }
 
@@ -3747,7 +4157,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn opening_another_file_asks_before_discarding_dirty_edits(cx: &mut TestAppContext) {
+  async fn opening_another_file_keeps_dirty_edits_in_their_tab(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-dirty-open-other");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     commit_text_file(&repo.path, Path::new("other.md"), "a\n", "other");
@@ -3777,36 +4187,27 @@ mod tests {
         cx,
       );
     });
-    cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
-
-    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
-    assert!(
-      cx.debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
-        .is_some()
-    );
-    page.read_with(cx, |page, _| {
-      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
-    });
-
-    page.update_in(cx, |page, window, cx| {
-      page.discard_unsaved_editor_for_test(
-        UnsavedEditorAction::OpenDiff {
-          rel_path: PathBuf::from("other.md"),
-          reveal_line: None,
-          reveal_column: None,
-          intent: OpenIntent::Open,
-        },
-        window,
-        cx,
-      );
-    });
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
       assert_eq!(page.warm_selected_file(), Some(Path::new("other.md")));
       assert!(page.warm_editor().is_some());
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::diff(PathBuf::from("README.md")),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    page.read_with(cx, |page, cx| {
+      let editor = page.warm_editor().expect("dirty editor restored");
+      let document = editor.read(cx).document().read(cx);
+      assert_eq!(document.slice_to_string(0..document.len()), "unsaved\n");
+      assert!(editor.read(cx).is_dirty);
     });
     assert_eq!(
       std::fs::read_to_string(repo.path.join("README.md")).expect("read first file"),

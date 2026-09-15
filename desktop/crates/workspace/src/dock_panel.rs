@@ -2109,6 +2109,22 @@ impl DockPanel {
     }
   }
 
+  fn new_file_in_files_panel_action(
+    &mut self,
+    _: &crate::NewFileInFilesPanel,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab != DockPanelTab::Files {
+      cx.propagate();
+      return;
+    }
+    let target = self
+      .selected_files_context_target(cx)
+      .unwrap_or_else(FilesContextTarget::root);
+    self.start_inline_create(target, false, window, cx);
+  }
+
   fn rename_selected_file_item_action(
     &mut self,
     _: &crate::RenameSelectedFileItem,
@@ -5674,6 +5690,7 @@ impl Render for DockPanel {
       .key_context(crate::shortcuts::DOCK_PANEL_CONTEXT)
       .on_key_down(cx.listener(Self::on_dock_key_down))
       .on_action(cx.listener(|this, _: &crate::CommitChanges, _, cx| this.commit(cx)))
+      .on_action(cx.listener(Self::new_file_in_files_panel_action))
       .on_action(cx.listener(Self::rename_selected_file_item_action))
       .on_action(cx.listener(Self::delete_selected_file_item_action))
       .child(header)

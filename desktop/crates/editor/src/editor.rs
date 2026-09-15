@@ -811,6 +811,12 @@ struct ReviewCommentCreateDraft {
 pub enum EditorEvent {
   /// The buffer was written to disk.
   Saved,
+  /// An untitled buffer needs a path before it can be saved.
+  SavePathRequested,
+  /// An untitled buffer was written and attached to a file.
+  SavedAs { path: PathBuf },
+  /// A save failed and should be surfaced by the host.
+  SaveFailed { message: Arc<str> },
   /// A hunk was staged, unstaged or restored: the index moved under the host.
   HunkStagingChanged,
 }
@@ -868,7 +874,7 @@ pub struct Editor {
   conflict_cache: RwLock<ConflictCache>,
   pub last_mouse_position: Option<Point<Pixels>>,
   pub expanded_gaps: HashMap<GapId, GapReveal>,
-  pub workdir_path: PathBuf,
+  pub workdir_path: Option<PathBuf>,
   pub repo_file: Option<RepoFile>,
   pub git_store: Option<GitStore>,
   git_state: BufferGitState,
@@ -947,6 +953,7 @@ pub struct Editor {
   pub index_mtime: Option<SystemTime>,
   pub is_dirty: bool,
   pub save_task: Option<Task<()>>,
+  pending_untitled_save_completion: Option<SaveCompletion>,
   pub optimistic_unstaged_groups: HashSet<Arc<str>>,
 
   diff_view_mode: DiffViewMode,
@@ -1269,6 +1276,18 @@ impl Editor {
     Self::new_with_loaded_file(repo_root, file_path, loaded, cx)
   }
 
+  pub fn new_untitled(repo_root: PathBuf, cx: &mut Context<Self>) -> Self {
+    let loaded = EditorFileLoad {
+      content: String::new(),
+      binary_bytes: None,
+      is_read_only: false,
+      language_hint: None,
+      file_mtime: None,
+      index_mtime: None,
+    };
+    Self::new_with_loaded_file_internal(repo_root, None, loaded, cx)
+  }
+
   pub fn load_file_for_editor(repo_root: &Path, workdir_path: &Path) -> EditorFileLoad {
     let language_hint = Self::language_hint_for_path(workdir_path);
     let (content, binary_bytes, is_read_only) = match std::fs::read(workdir_path) {
@@ -1307,10 +1326,20 @@ impl Editor {
     loaded: EditorFileLoad,
     cx: &mut Context<Self>,
   ) -> Self {
-    let workdir_path = file_path;
+    Self::new_with_loaded_file_internal(repo_root, Some(file_path), loaded, cx)
+  }
+
+  fn new_with_loaded_file_internal(
+    repo_root: PathBuf,
+    workdir_path: Option<PathBuf>,
+    loaded: EditorFileLoad,
+    cx: &mut Context<Self>,
+  ) -> Self {
     let document = cx.new(|cx| Document::new(&loaded.content, loaded.language_hint.as_deref(), cx));
     let cursor_blink = cx.new(CursorBlink::new);
-    let repo_file = RepoFile::new(repo_root, workdir_path.clone()).ok();
+    let repo_file = workdir_path
+      .as_ref()
+      .and_then(|workdir_path| RepoFile::new(repo_root, workdir_path).ok());
     let git_store = repo_file
       .as_ref()
       .map(|repo_file| GitStore::new(repo_file.repo_root.clone()));
@@ -1441,6 +1470,7 @@ impl Editor {
       index_mtime: loaded.index_mtime,
       is_dirty: false,
       save_task: None,
+      pending_untitled_save_completion: None,
       optimistic_unstaged_groups: HashSet::new(),
       diff_view_mode: DiffViewMode::Inline,
       ignore_whitespace: false,
@@ -6682,6 +6712,10 @@ impl Editor {
     }));
   }
 
+  pub fn is_untitled(&self) -> bool {
+    self.workdir_path.is_none()
+  }
+
   pub fn save(&mut self, cx: &mut Context<Self>) {
     self.save_with_completion(cx, None);
   }
@@ -6690,7 +6724,11 @@ impl Editor {
     if self.is_read_only {
       return;
     }
-    let workdir_path = self.workdir_path.clone();
+    let Some(workdir_path) = self.workdir_path.clone() else {
+      self.pending_untitled_save_completion = on_saved;
+      cx.emit(EditorEvent::SavePathRequested);
+      return;
+    };
     let contents = {
       let document = self.document.read(cx);
       document.slice_to_string(0..document.len())
@@ -6749,11 +6787,73 @@ impl Editor {
             on_saved(cx);
           }
         }
-        Err(err) => {
-          log::warn!("[editor] save failed: {:?}", err);
+        Err(error) => {
+          log::warn!("[editor] save failed: {error:?}");
+          cx.emit(EditorEvent::SaveFailed {
+            message: Arc::from(error.to_string()),
+          });
         }
       });
     }));
+  }
+
+  pub fn save_as(&mut self, repo_root: PathBuf, workdir_path: PathBuf, cx: &mut Context<Self>) {
+    if self.is_read_only {
+      return;
+    }
+    let contents = {
+      let document = self.document.read(cx);
+      document.slice_to_string(0..document.len())
+    };
+    let saved_path = workdir_path.clone();
+
+    self.save_task = Some(cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(async move {
+          std::fs::write(&workdir_path, contents)?;
+          let file_mtime = std::fs::metadata(&workdir_path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+          Ok::<_, std::io::Error>(file_mtime)
+        })
+        .await;
+
+      let _ = this.update(cx, move |editor, cx| match result {
+        Ok(file_mtime) => {
+          editor.workdir_path = Some(saved_path.clone());
+          editor.repo_file = RepoFile::new(&repo_root, &saved_path).ok();
+          editor.git_store = editor
+            .repo_file
+            .as_ref()
+            .map(|repo_file| GitStore::new(repo_file.repo_root.clone()));
+          editor.file_mtime = file_mtime;
+          editor.is_dirty = false;
+          let language_hint = Self::language_hint_for_path(&saved_path);
+          editor.document.update(cx, |document, cx| {
+            document.set_language_hint(language_hint.as_deref(), cx)
+          });
+          editor.start_polling(cx);
+          cx.emit(EditorEvent::SavedAs {
+            path: saved_path.clone(),
+          });
+          cx.emit(EditorEvent::Saved);
+          cx.notify();
+          if let Some(on_saved) = editor.pending_untitled_save_completion.take() {
+            on_saved(cx);
+          }
+        }
+        Err(error) => {
+          editor.pending_untitled_save_completion = None;
+          cx.emit(EditorEvent::SaveFailed {
+            message: Arc::from(error.to_string()),
+          });
+        }
+      });
+    }));
+  }
+
+  pub fn cancel_pending_untitled_save(&mut self) {
+    self.pending_untitled_save_completion = None;
   }
 
   pub fn selected_text_for_copy(&self, cx: &App) -> Option<String> {
@@ -6937,7 +7037,10 @@ impl Editor {
       }
     }
 
-    let workdir_path = self.workdir_path.clone();
+    let Some(workdir_path) = self.workdir_path.clone() else {
+      self.git_op_in_flight = false;
+      return;
+    };
     let workdir_path_for_fallback = workdir_path.clone();
     let hunk_for_fallback = hunk.clone();
     let reverse_for_fallback = reverse;
@@ -7043,7 +7146,7 @@ impl Editor {
   }
 
   fn start_polling(&mut self, cx: &mut Context<Self>) {
-    if self.poll_task.is_some() {
+    if self.poll_task.is_some() || self.workdir_path.is_none() {
       return;
     }
 
@@ -7066,7 +7169,7 @@ impl Editor {
         let Some((repo_file, workdir_path, last_file_mtime, last_index_mtime)) = state else {
           return;
         };
-        let Some(repo_file) = repo_file else {
+        let (Some(repo_file), Some(workdir_path)) = (repo_file, workdir_path) else {
           continue;
         };
 
@@ -11577,7 +11680,7 @@ pub mod tests {
           conflict_cache: RwLock::new(ConflictCache::default()),
           last_mouse_position: None,
           expanded_gaps: HashMap::new(),
-          workdir_path: PathBuf::new(),
+          workdir_path: None,
           repo_file: None,
           git_store: None,
           git_state: BufferGitState::default(),
@@ -11596,6 +11699,7 @@ pub mod tests {
           index_mtime: None,
           is_dirty: false,
           save_task: None,
+          pending_untitled_save_completion: None,
           diff_view_mode: DiffViewMode::Inline,
           ignore_whitespace: false,
           git_diff_enabled: true,

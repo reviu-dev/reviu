@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use editor::{Copy, Cut, Paste, Quit, Redo, SelectAll, Undo, set_indent_rainbow_enabled};
+use editor::{Copy, Cut, Paste, Quit, Redo, Save, SelectAll, Undo, set_indent_rainbow_enabled};
 #[cfg(test)]
 use gpui::Keystroke;
 use gpui::{
@@ -117,6 +117,19 @@ fn build_app_menus_with_subscription(has_subscription: bool) -> Vec<Menu> {
       ],
     },
     Menu {
+      name: "File".into(),
+      disabled: false,
+      items: vec![
+        MenuItem::action("New File", crate::NewFile),
+        MenuItem::action("Open Project...", crate::OpenProject),
+        MenuItem::separator(),
+        MenuItem::action("Save", Save),
+        MenuItem::action("Save As...", crate::SaveFileAs),
+        MenuItem::separator(),
+        MenuItem::action("Close Tab", crate::CloseCenterTab),
+      ],
+    },
+    Menu {
       name: "Edit".into(),
       disabled: false,
       items: vec![
@@ -194,6 +207,13 @@ impl WorkspaceView {
     cx.set_menus(build_app_menus_for_current_auth(cx));
   }
 
+  fn quit_action(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
+    self
+      .session_page
+      .update(cx, |page, cx| page.request_quit(window, cx));
+    cx.stop_propagation();
+  }
+
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     if let Some(dir) = AppProfile::current().config_dir() {
       agent_chat_panel::set_settings_dir(dir);
@@ -259,6 +279,18 @@ impl WorkspaceView {
       onboarding_page.read(cx).focus_handle(cx)
     };
     window.focus(&focus_handle, cx);
+
+    let workspace = cx.entity().downgrade();
+    window.on_window_should_close(cx, move |window, cx| {
+      workspace
+        .update(cx, |workspace, cx| {
+          workspace
+            .session_page
+            .update(cx, |page, cx| page.request_close_window(window, cx));
+          false
+        })
+        .unwrap_or(true)
+    });
 
     let view = Self {
       session_page,
@@ -1341,6 +1373,7 @@ impl Render for WorkspaceView {
       .flex()
       .flex_col()
       .key_context(key_context.as_str())
+      .on_action(cx.listener(Self::quit_action))
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, window, cx| {
         open_billing_dialog(window, cx);
       }))
@@ -1515,7 +1548,7 @@ mod tests {
   }
 
   #[test]
-  fn build_app_menus_keep_workspace_actions_out_of_the_app_menu() {
+  fn build_app_menus_include_file_actions_without_cluttering_the_app_menu() {
     let menus = build_app_menus_with_subscription(false);
     let app_menu = menus
       .iter()
@@ -1533,9 +1566,19 @@ mod tests {
         "Quit Reviu"
       ]
     );
-    assert!(
-      menus.iter().all(|menu| menu.name != "File"),
-      "workspace actions live in the workspace UI and palette"
+    let file_menu = menus
+      .iter()
+      .find(|menu| menu.name == "File")
+      .expect("file menu");
+    assert_eq!(
+      action_menu_item_names(file_menu),
+      vec![
+        "New File",
+        "Open Project...",
+        "Save",
+        "Save As...",
+        "Close Tab"
+      ]
     );
   }
 

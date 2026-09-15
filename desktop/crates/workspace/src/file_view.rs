@@ -9,6 +9,7 @@ use gpui_component::{ActiveTheme as _, Icon, IconName, h_flex, v_flex};
 use git::RepoStatusKind;
 
 pub(crate) const FILE_TITLE_OLD_NAME_DEBUG_SELECTOR: &str = "file-title-old-name";
+pub(crate) const DIRTY_INDICATOR_DEBUG_SELECTOR: &str = "dirty-indicator";
 
 use crate::file_preview::{
   FilePreviewKind, file_preview_kind, raster_image_from_bytes,
@@ -158,6 +159,16 @@ pub(crate) fn render_binary_preview(preview: &BinaryPreview, cx: &gpui::App) -> 
 
 /// File title used in editor/diff headers: type icon, file name, unsaved dot,
 /// then the directory path trailing on the right.
+pub(crate) fn render_dirty_indicator(cx: &gpui::App) -> AnyElement {
+  div()
+    .debug_selector(|| DIRTY_INDICATOR_DEBUG_SELECTOR.to_string())
+    .size(px(5.0))
+    .rounded_full()
+    .bg(cx.theme().foreground)
+    .flex_shrink_0()
+    .into_any_element()
+}
+
 pub(crate) fn render_file_title(path: &Path, is_dirty: bool, cx: &gpui::App) -> AnyElement {
   render_file_title_with_status(path, None, None, is_dirty, cx)
 }
@@ -247,15 +258,7 @@ pub(crate) fn render_file_title_with_status(
           false,
         )),
     )
-    .when(is_dirty, |this| {
-      this.child(
-        div()
-          .size_2()
-          .rounded_full()
-          .bg(theme.foreground)
-          .flex_shrink_0(),
-      )
-    })
+    .when(is_dirty, |this| this.child(render_dirty_indicator(cx)))
     .when(!dir.is_empty(), |this| {
       this.child(
         div()
