@@ -26,9 +26,9 @@ const faqItems: { question: string; answer: string }[] = [
       "Any agent from the official Agent Client Protocol registry: Claude Code, Codex, Gemini, Copilot, Cline, and about twenty others. Reviu drives the CLI you already installed and signed into, so agents run with your existing subscription - no API key to paste. Agents run as local processes on your machine.",
   },
   {
-    question: "Can I review my agent's code inside Reviu?",
+    question: "Do I need Pro to review agent code?",
     answer:
-      "Yes, that's the point. Review the diff your agent produced in a real editor, leave inline review comments on the lines you want changed, and send them back to the agent without copy-paste. You can also run several sessions in parallel, each in its own isolated Git worktree, and split the center view between agent chat, files, diffs, and terminal.",
+      "No. Agent sessions, local diff review, inline comments sent back to the agent, parallel worktrees, and local Git workflows are free. Reviu Pro adds GitHub pull requests in the dock, GitHub review comments, checks, merge actions, notifications, and the browser extension.",
   },
   {
     question: "Where does Reviu fit if I already have Git tooling?",
@@ -36,20 +36,16 @@ const faqItems: { question: string; answer: string }[] = [
       "Keep the tools you like. Reviu is built for the loop that starts before the commit: the agent works in a durable session, you review the diff, send fixes back from inline comments, then finish with hunk staging, interactive rebase, conflicts, history, and push in the same app. Pro adds your branch's pull request in the dock.",
   },
   {
-    question: "Where does Reviu fit next to GitHub Desktop?",
+    question: "Does Reviu run agents in the cloud?",
     answer:
-      "GitHub Desktop is great for cloning, committing, and opening a pull request branch locally. Reviu starts earlier with agent sessions and code review, then keeps the pull request next to your working tree: inline comments, replies, resolved threads, checks, and merge from the desktop.",
+      "No. Reviu launches the agent CLI you already installed and signed into, so the agent runs as a local process on your machine. Reviu Pro connects that local workflow to GitHub pull requests, checks, reviews, merge, and notifications.",
   },
   {
     question: "Is Reviu built with a webview?",
     answer:
       'No. Reviu is a fully native desktop app built with <a href="https://gpui.rs" target="_blank" rel="noopener noreferrer" class="text-primary underline hover:text-primary/80">gpui.rs</a>, a Rust-based GPU-accelerated UI framework. No Electron, no webview - just native performance.',
   },
-  {
-    question: "Is Reviu open source?",
-    answer:
-      'Reviu is source-available. The full desktop client lives in a public <a href="https://github.com/reviu-dev/reviu" target="_blank" rel="noopener noreferrer" class="text-primary underline hover:text-primary/80">GitHub repository</a> under the Functional Source License (FSL-1.1), and each release converts to Apache-2.0 two years after it ships. You can read, build, and modify it for any non-competing use. The GitHub-integration backend that powers Reviu Pro stays closed-source.',
-  },
+
   {
     question: "Do I need an account to use Reviu?",
     answer:
