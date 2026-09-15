@@ -2,11 +2,7 @@
 import sessionsDark from "../assets/app_screenshots/sessions_dark.png";
 import sessionsLight from "../assets/app_screenshots/sessions_light.png";
 import GitBranchIcon from "@lucide/astro/icons/git-branch";
-import KeyRoundIcon from "@lucide/astro/icons/key-round";
-import LayersIcon from "@lucide/astro/icons/layers";
 import LockIcon from "@lucide/astro/icons/lock";
-import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
-import ReceiptTextIcon from "@lucide/astro/icons/receipt-text";
 import TerminalIcon from "@lucide/astro/icons/terminal";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
@@ -24,32 +20,26 @@ const sessionRows = [
   ["Write cart property tests", "review", "bg-blue-500"],
 ];
 
+
 const cards = [
   {
-    name: "Parallel work without collisions",
+    name: "Parallel worktrees",
     description:
-      "Start a session in the main checkout or give the agent its own worktree. Reviu keeps branch, center views, terminal, changes, and history pointed at the selected session.",
+      "Run multiple agents at once without letting one task dirty another checkout.",
     icon: GitBranchIcon,
     visual: "worktrees",
   },
   {
-    name: "The transcript stays useful",
+    name: "Readable agent activity",
     description:
-      "Tool calls, command output, reads, edits, permissions, and failed turns are shown as reviewable events instead of a terminal wall.",
+      "Commands, reads, edits, permissions, and failures stay grouped as reviewable events.",
     icon: TerminalIcon,
     visual: "tools",
   },
   {
-    name: "Review comments become instructions",
-    description:
-      "Leave comments on the local diff, collect them in the Review panel, and send the selected batch back to the agent with file and line context.",
-    icon: MessageCircleReplyIcon,
-    visual: "comments",
-  },
-  {
     name: "Local by default",
     description:
-      "Reviu launches your installed agent CLI with the subscription you already use. Your code and agent process stay on your machine.",
+      "Reviu launches the CLI you already use. Your code and agent process stay on your machine.",
     icon: LockIcon,
     visual: "local",
   },
@@ -80,13 +70,12 @@ const cards = [
           <p
             class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-5xl"
           >
-            Manage agents like real work, not disposable chats.
+            Manage sessions like real work.
           </p>
           <p class="mt-6 text-lg/8 text-muted-foreground">
-            Reviu turns each coding task into a session with its own state:
-            conversation, file edits, branch, terminal, checkpoints, and review
-            queue. Split the center view between agent chat, files, diffs, and
-            terminal while agents keep running in the background.
+            Each task becomes a durable session, not a disposable chat, with its
+            own conversation, branch, terminal, checkpoints, file edits, and
+            review queue. Switch sessions without stopping running agents.
           </p>
         </div>
 
@@ -118,30 +107,10 @@ const cards = [
           </div>
         </div>
 
-        <div
-          class="reviu-reveal mt-6 grid gap-3 sm:grid-cols-3"
-          style="--reveal-delay: 250ms;"
-        >
-          <div class="rounded-2xl border border-border bg-background p-4 shadow-sm dark:bg-gray-950/40">
-            <LayersIcon class="size-5 text-primary" aria-hidden="true" />
-            <p class="mt-3 text-sm font-semibold text-foreground">Worktrees</p>
-            <p class="mt-1 text-xs text-muted-foreground">parallel by default</p>
-          </div>
-          <div class="rounded-2xl border border-border bg-background p-4 shadow-sm dark:bg-gray-950/40">
-            <ReceiptTextIcon class="size-5 text-primary" aria-hidden="true" />
-            <p class="mt-3 text-sm font-semibold text-foreground">Receipts</p>
-            <p class="mt-1 text-xs text-muted-foreground">files and line counts</p>
-          </div>
-          <div class="rounded-2xl border border-border bg-background p-4 shadow-sm dark:bg-gray-950/40">
-            <KeyRoundIcon class="size-5 text-primary" aria-hidden="true" />
-            <p class="mt-3 text-sm font-semibold text-foreground">Your agent</p>
-            <p class="mt-1 text-xs text-muted-foreground">no API key to paste</p>
-          </div>
-        </div>
       </div>
 
       <div
-        class="reviu-reveal relative lg:-mr-24 xl:-mr-40"
+        class="reviu-reveal relative lg:-mr-16 xl:-mr-24"
         style="--reveal-delay: 300ms;"
       >
         <div
@@ -150,17 +119,19 @@ const cards = [
         >
         </div>
         <div class="rounded-[2rem] border border-border bg-background/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur dark:bg-white/[0.04] dark:shadow-black/30">
-          <ThemePicture
-            sources={sectionImage}
-            alt="Reviu agent sessions workspace screenshot"
-            loading="lazy"
-            class="w-full max-w-none rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10"
-          />
+          <div class="aspect-[1.5/1] overflow-hidden rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10">
+            <ThemePicture
+              sources={sectionImage}
+              alt="Reviu agent sessions workspace screenshot"
+              loading="lazy"
+              class="h-full w-full max-w-none object-cover object-left-top"
+            />
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="mt-20 grid gap-4 lg:grid-cols-4">
+    <div class="mt-14 grid gap-4 lg:grid-cols-3">
       {
         cards.map((card, index) => {
           const Icon = card.icon;
@@ -170,18 +141,22 @@ const cards = [
               class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
               style={`--reveal-delay: ${index * 90 + 250}ms;`}
             >
-              <div class="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
-                <Icon class="size-5" aria-hidden="true" />
+              <div class="flex items-start gap-4">
+                <div class="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                  <Icon class="size-5" aria-hidden="true" />
+                </div>
+                <div>
+                  <h3 class="text-lg font-semibold text-foreground">
+                    {card.name}
+                  </h3>
+                  <p class="mt-2 text-sm/7 text-muted-foreground">
+                    {card.description}
+                  </p>
+                </div>
               </div>
-              <h3 class="mt-6 text-lg font-semibold text-foreground">
-                {card.name}
-              </h3>
-              <p class="mt-3 text-sm/7 text-muted-foreground">
-                {card.description}
-              </p>
 
               {card.visual === "worktrees" && (
-                <div class="mt-6 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
+                <div class="mt-6 grid gap-2 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
                   {[
                     ["main", "current"],
                     ["reviu-discounts", "agent"],
@@ -196,7 +171,7 @@ const cards = [
               )}
 
               {card.visual === "tools" && (
-                <div class="mt-6 space-y-2 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
+                <div class="mt-6 grid gap-2 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
                   {[
                     ["read", "src/discounts.ts"],
                     ["edit", "+42 -8"],
@@ -210,26 +185,19 @@ const cards = [
                 </div>
               )}
 
-              {card.visual === "comments" && (
-                <div class="mt-6 rounded-2xl border border-primary/20 bg-primary/10 p-3 text-xs text-primary">
-                  <div class="flex items-center justify-between gap-3">
-                    <span>3 comments selected</span>
-                    <span class="rounded-full bg-primary px-2 py-1 font-semibold text-white">
-                      Send
-                    </span>
-                  </div>
-                </div>
-              )}
-
               {card.visual === "local" && (
-                <div class="mt-6 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
-                  <div class="flex items-center justify-between gap-3">
+                <div class="mt-6 grid gap-2 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
+                  <div class="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5">
                     <span class="text-muted-foreground">agent process</span>
                     <span class="font-semibold text-emerald-500">local</span>
                   </div>
-                  <div class="mt-2 flex items-center justify-between gap-3">
+                  <div class="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5">
                     <span class="text-muted-foreground">subscription</span>
                     <span class="font-semibold text-primary">yours</span>
+                  </div>
+                  <div class="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5">
+                    <span class="text-muted-foreground">API key</span>
+                    <span class="font-semibold text-primary">none</span>
                   </div>
                 </div>
               )}
