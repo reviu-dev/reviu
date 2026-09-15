@@ -6,7 +6,6 @@ import CircleCheckIcon from "@lucide/astro/icons/circle-check";
 import GitMergeIcon from "@lucide/astro/icons/git-merge";
 import GitPullRequestCreateIcon from "@lucide/astro/icons/git-pull-request-create";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
-import PuzzleIcon from "@lucide/astro/icons/puzzle";
 import ServerCogIcon from "@lucide/astro/icons/server-cog";
 import ShieldCheckIcon from "@lucide/astro/icons/shield-check";
 import SmartphoneIcon from "@lucide/astro/icons/smartphone";
@@ -15,57 +14,41 @@ import { themeImageSources } from "../lib/themeImage";
 
 const sectionImage = await themeImageSources(prLight, prDark, 3020, 1894);
 
-const incomingFeatures = [
-  {
-    name: "Mobile access",
-    description:
-      "Read and control agent sessions from your phone when you need to keep work moving away from the desktop.",
-    icon: SmartphoneIcon,
-  },
-  {
-    name: "Remote over SSH",
-    description:
-      "Run Reviu workflows against your own servers, VPS, and remote machines without Reviu hosting your agents.",
-    icon: ServerCogIcon,
-  },
-];
-
 const features = [
   {
     name: "The PR follows your branch",
     description:
-      "Check out a branch and Reviu finds its pull request. If none exists, create it from the header, or publish the branch first.",
+      "Check out a branch and Reviu finds its pull request, or helps create one from the header.",
     icon: GitPullRequestCreateIcon,
   },
   {
     name: "Review GitHub diffs locally",
     description:
-      "Open PR files in the same editor, leave inline comments, reply to threads, resolve conversations, and submit a full review.",
+      "Open PR files in the editor, comment inline, reply to threads, and submit a full review.",
     icon: MessageCircleReplyIcon,
-  },
-  {
-    name: "Checks and merge readiness",
-    description:
-      "See required checks, skipped or failing jobs, reviewer state, mergeability, and the merge methods the repository allows.",
-    icon: CircleCheckIcon,
   },
   {
     name: "Merge like GitHub would",
     description:
-      "Squash, merge, or rebase with GitHub's generated title, message, bullets, and co-author trailers before you confirm.",
+      "Squash, merge, or rebase with GitHub's generated title, message, bullets, and trailers.",
     icon: GitMergeIcon,
   },
+];
+
+const mergeRows = [
+  ["checks", "passed", "text-emerald-500"],
+  ["review", "approved", "text-emerald-500"],
+  ["merge", "ready", "text-primary"],
+];
+
+const incomingItems = [
   {
-    name: "Notifications beside sessions",
-    description:
-      "The GitHub inbox lives next to your sessions. Open a notification, jump to the right PR context, and mark it done.",
-    icon: BellIcon,
+    name: "Mobile access",
+    icon: SmartphoneIcon,
   },
   {
-    name: "Browser to local checkout",
-    description:
-      "The extension opens a pull request from github.com in Reviu and offers to check out the branch safely.",
-    icon: PuzzleIcon,
+    name: "Remote over SSH",
+    icon: ServerCogIcon,
   },
 ];
 ---
@@ -95,16 +78,16 @@ const features = [
       <h2
         class="mt-6 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl"
       >
-        GitHub pull requests without losing your local context.
+        GitHub PRs without losing local context.
       </h2>
       <p class="mx-auto mt-6 max-w-3xl text-lg/8 text-muted-foreground">
-        Your branch, agent session, working tree, review comments, checks, and
-        merge button live in one window. Use GitHub when it matters, without
-        turning every review into a browser tab hunt.
+        Your branch, agent session, working tree, review threads, checks, and
+        merge button live in one window. Use GitHub without turning every review
+        into a browser tab hunt.
       </p>
     </div>
 
-    <div class="mt-14 grid gap-6 lg:grid-cols-[1fr_0.38fr]">
+    <div class="mt-14 grid gap-6 lg:grid-cols-[1fr_0.36fr]">
       <div
         class="reviu-reveal relative rounded-[2rem] border border-border bg-background/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur dark:bg-white/[0.04] dark:shadow-black/30"
         style="--reveal-delay: 150ms;"
@@ -119,14 +102,14 @@ const features = [
 
       <div class="grid gap-4">
         <div
-          class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+          class="reviu-reveal rounded-3xl border border-border bg-background p-5 shadow-sm dark:bg-gray-950/40"
           style="--reveal-delay: 250ms;"
         >
           <div class="flex items-center gap-3">
             <BellIcon class="size-5 text-primary" aria-hidden="true" />
             <h3 class="font-semibold text-foreground">Inbox</h3>
           </div>
-          <div class="mt-5 space-y-2 text-sm">
+          <div class="mt-4 space-y-2 text-sm">
             {[
               ["Noah requested changes", "2m"],
               ["CI finished for #48", "6m"],
@@ -143,42 +126,44 @@ const features = [
         </div>
 
         <div
-          class="reviu-reveal rounded-3xl border border-primary/20 bg-primary/10 p-6 shadow-sm"
+          class="reviu-reveal rounded-3xl border border-primary/20 bg-primary/10 p-5 shadow-sm"
           style="--reveal-delay: 350ms;"
         >
-          <p class="text-sm font-semibold text-primary">Pro pricing</p>
-          <div class="mt-3 flex items-end gap-2">
-            <span class="text-4xl font-semibold tracking-tight text-foreground">$9</span>
-            <span class="pb-1 text-sm text-muted-foreground">/month</span>
+          <div class="flex items-center gap-3">
+            <CircleCheckIcon class="size-5 text-primary" aria-hidden="true" />
+            <h3 class="font-semibold text-foreground">Ready to merge</h3>
           </div>
-          <p class="mt-2 text-sm text-muted-foreground">
-            Or $79/year. Includes a 14-day free trial.
-          </p>
-          <a
-            href="#pricing"
-            data-umami-event="pro-section-pricing"
-            class="mt-5 inline-flex rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary/80"
-          >
-            See pricing
-          </a>
+          <div class="mt-4 space-y-2 text-sm">
+            {
+              mergeRows.map((row) => (
+                <div class="flex items-center justify-between rounded-2xl border border-primary/20 bg-background/75 px-3 py-2 dark:bg-gray-950/40">
+                  <span class="text-muted-foreground">{row[0]}</span>
+                  <span class={`text-xs font-semibold ${row[2]}`}>{row[1]}</span>
+                </div>
+              ))
+            }
+          </div>
+          <div class="mt-4 rounded-md bg-primary px-3.5 py-2.5 text-center text-sm font-semibold text-white">
+            Create merge commit
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="mt-10 grid gap-4 lg:grid-cols-3">
       {
         features.map((feature, index) => {
           const Icon = feature.icon;
 
           return (
             <article
-              class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+              class="reviu-reveal rounded-3xl border border-border bg-background p-5 shadow-sm dark:bg-gray-950/40"
               style={`--reveal-delay: ${index * 80 + 300}ms;`}
             >
-              <div class="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+              <div class="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
                 <Icon class="size-5" aria-hidden="true" />
               </div>
-              <h3 class="mt-6 text-lg font-semibold text-foreground">
+              <h3 class="mt-5 text-lg font-semibold text-foreground">
                 {feature.name}
               </h3>
               <p class="mt-3 text-sm/7 text-muted-foreground">
@@ -191,44 +176,32 @@ const features = [
     </div>
 
     <div
-      class="reviu-reveal mt-8 rounded-[2rem] border border-primary/20 bg-primary/10 p-6 shadow-sm sm:p-8"
-      style="--reveal-delay: 820ms;"
+      class="reviu-reveal mt-8 rounded-[2rem] border border-primary/20 bg-primary/10 p-5 shadow-sm sm:flex sm:items-center sm:justify-between sm:gap-6"
+      style="--reveal-delay: 650ms;"
     >
-      <p class="text-sm font-semibold uppercase tracking-[0.18em] text-primary">
-        Incoming
-      </p>
-      <div class="mt-4 grid gap-6 lg:grid-cols-[0.7fr_1fr] lg:items-start">
-        <div>
-          <h3 class="text-2xl font-semibold tracking-tight text-foreground">
-            Mobile and SSH remote workflows are next.
-          </h3>
-          <p class="mt-3 text-sm/7 text-muted-foreground">
-            Both are on the Reviu Pro roadmap. The order may change, but both
-            are planned as part of taking agent sessions beyond one local
-            desktop.
-          </p>
-        </div>
-        <div class="grid gap-4 sm:grid-cols-2">
-          {
-            incomingFeatures.map((feature) => {
-              const Icon = feature.icon;
+      <div>
+        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+          Incoming
+        </p>
+        <h3 class="mt-2 text-xl font-semibold tracking-tight text-foreground">
+          Mobile and SSH remote workflows are next.
+        </h3>
+      </div>
+      <div class="mt-4 flex flex-wrap gap-3 sm:mt-0 sm:justify-end">
+        {
+          incomingItems.map((item) => {
+            const Icon = item.icon;
 
-              return (
-                <article class="rounded-3xl border border-primary/20 bg-background/80 p-5 shadow-sm dark:bg-gray-950/40">
-                  <div class="flex items-center gap-3">
-                    <span class="flex size-10 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
-                      <Icon class="size-5" aria-hidden="true" />
-                    </span>
-                    <h4 class="font-semibold text-foreground">{feature.name}</h4>
-                  </div>
-                  <p class="mt-3 text-sm/7 text-muted-foreground">
-                    {feature.description}
-                  </p>
-                </article>
-              );
-            })
-          }
-        </div>
+            return (
+              <div class="inline-flex items-center gap-3 rounded-2xl border border-primary/20 bg-background/80 px-4 py-3 text-sm font-semibold text-foreground shadow-sm dark:bg-gray-950/40">
+                <span class="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                  <Icon class="size-4" aria-hidden="true" />
+                </span>
+                {item.name}
+              </div>
+            );
+          })
+        }
       </div>
     </div>
   </div>
