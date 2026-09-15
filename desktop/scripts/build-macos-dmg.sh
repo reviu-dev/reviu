@@ -283,7 +283,7 @@ main() {
   local attach_line
   local device=""
 
-  require_cmd hdiutil
+  require_cmd diskutil
   if [[ "${REVIU_SKIP_CODESIGN:-0}" != "1" ]]; then
     require_cmd codesign
     require_cmd security
@@ -306,7 +306,7 @@ main() {
     (
       cd "${desktop_dir}"
       API_BASE_URL="${api_base_url}" \
-        cargo bundle -p reviu --release --target "${target}"
+        cargo bundle -p reviu --release --target "${target}" --format osx
     )
   else
     log "Skipping cargo bundle build"
@@ -378,8 +378,8 @@ main() {
   fi
 
   dmg_root="$(mktemp -d "${TMPDIR:-/tmp}/reviu-dmg-root.XXXXXX")"
-  rw_dmg_path="${runner_temp}/${app_name}-${target}-rw.dmg"
-  rm -f "${rw_dmg_path}"
+  rw_dmg_path="${runner_temp}/${app_name}-${target}-rw.sparsebundle"
+  rm -rf "${rw_dmg_path}"
   cp -R "${app_path}" "${dmg_root}/${app_name}.app"
   ln -s /Applications "${dmg_root}/Applications"
 
@@ -397,33 +397,30 @@ main() {
     : > "${dmg_path}"
   else
     log "Creating DMG staging image"
-    hdiutil create \
-      -volname "${volume_name}" \
-      -srcfolder "${dmg_root}" \
-      -ov \
-      -fs HFS+ \
-      -format UDRW \
+    diskutil image create from \
+      --format UDSB \
+      --volumeName "${volume_name}" \
+      "${dmg_root}" \
       "${rw_dmg_path}" >/dev/null
 
-    attach_info="$(hdiutil attach -readwrite -noverify -noautoopen "${rw_dmg_path}")"
+    attach_info="$(diskutil image attach "${rw_dmg_path}")"
     attach_line="$(printf '%s\n' "${attach_info}" | awk '/\/Volumes\// {print; exit}')"
     device="${attach_line%%[[:space:]]*}"
     if [[ -z "${device}" ]]; then
-      die "Failed to mount temporary DMG. hdiutil output: ${attach_info}"
+      die "Failed to mount temporary DMG. diskutil output: ${attach_info}"
     fi
 
     apply_dmg_layout "${volume_name}" "${app_name}" "${has_background}"
 
-    hdiutil detach "${device}" -quiet
+    diskutil eject "${device}" >/dev/null
     device=""
 
     log "Converting DMG"
-    hdiutil convert \
+    diskutil image create from \
+      --format UDZO \
       "${rw_dmg_path}" \
-      -format UDZO \
-      -imagekey zlib-level=9 \
-      -o "${dmg_path}" >/dev/null
-    rm -f "${rw_dmg_path}"
+      "${dmg_path}" >/dev/null
+    rm -rf "${rw_dmg_path}"
   fi
 
   rm -rf "${dmg_root}"
