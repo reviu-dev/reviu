@@ -16,21 +16,21 @@ const workflow = [
   {
     title: "Shape the diff",
     description:
-      "Edit files directly, stage only the hunks you trust, unstage what needs another pass, and restore the rest.",
+      "Stage the hunks you trust, unstage another pass, and restore the rest.",
     icon: PencilLineIcon,
     commands: ["stage hunk", "unstage", "restore"],
   },
   {
     title: "Clean the branch",
     description:
-      "Squash, fixup, drop, and reorder commits in the full-width interactive rebase before the PR exists.",
+      "Squash, fixup, drop, and reorder commits before the PR exists.",
     icon: ListTodoIcon,
     commands: ["pick", "squash", "fixup", "drop"],
   },
   {
-    title: "Recover when Git gets messy",
+    title: "Recover messy states",
     description:
-      "Resolve conflicts, continue or abort rebases and merges, stash work, cherry-pick commits, and undo mistakes.",
+      "Resolve conflicts, continue rebases, stash work, cherry-pick, and undo mistakes.",
     icon: GitMergeConflictIcon,
     commands: ["conflicts", "stash", "cherry-pick"],
   },
@@ -46,16 +46,11 @@ const dockItems = [
 const paletteCommands = [
   "Commit",
   "Amend commit",
-  "Fetch",
-  "Pull",
   "Push",
   "Force push with lease",
-  "Create branch",
-  "Merge branch",
   "Interactive rebase",
   "Pop stash",
 ];
-
 ---
 
 <section
@@ -76,7 +71,7 @@ const paletteCommands = [
   </div>
 
   <div class="mx-auto max-w-7xl px-6 lg:px-8">
-    <div class="grid gap-12 lg:grid-cols-[1fr_0.9fr] lg:items-end">
+    <div class="grid gap-10 lg:grid-cols-[0.95fr_0.9fr] lg:items-end">
       <div class="reviu-reveal max-w-3xl">
         <p class="text-base/7 font-semibold text-primary">
           Real Git underneath
@@ -84,22 +79,22 @@ const paletteCommands = [
         <h2
           class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-6xl"
         >
-          The agent writes the code. You still own the branch.
+          The agent writes. You own the branch.
         </h2>
       </div>
       <p
         class="reviu-reveal text-lg/8 text-muted-foreground lg:pb-2"
         style="--reveal-delay: 120ms;"
       >
-        Agent work is only useful when it turns into a clean commit. Reviu keeps
-        the Git tools close to the diff, so review decisions become staged
-        hunks, rewritten history, and a branch you can push with confidence.
+        Agent work only matters when it becomes a clean commit. Reviu keeps Git
+        close to the diff, so review decisions become staged hunks, rewritten
+        history, and a branch you can push with confidence.
       </p>
     </div>
 
-    <div class="mt-14 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+    <div class="mt-12 grid gap-5 lg:grid-cols-[1.22fr_0.78fr]">
       <div
-        class="reviu-reveal relative lg:-ml-24 xl:-ml-40"
+        class="reviu-reveal relative lg:-ml-20 xl:-ml-32"
         style="--reveal-delay: 200ms;"
       >
         <div class="rounded-[2rem] border border-border bg-background/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur dark:bg-white/[0.04] dark:shadow-black/30">
@@ -114,30 +109,30 @@ const paletteCommands = [
         </div>
       </div>
 
-      <div class="grid gap-4">
+      <div class="grid gap-3">
         {
           workflow.map((item, index) => {
             const Icon = item.icon;
 
             return (
               <article
-                class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+                class="reviu-reveal rounded-3xl border border-border bg-background p-5 shadow-sm dark:bg-gray-950/40"
                 style={`--reveal-delay: ${index * 100 + 250}ms;`}
               >
                 <div class="flex items-start gap-4">
-                  <div class="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
-                    <Icon class="size-5" aria-hidden="true" />
+                  <div class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                    <Icon class="size-4" aria-hidden="true" />
                   </div>
                   <div>
                     <h3 class="text-lg font-semibold text-foreground">
                       {item.title}
                     </h3>
-                    <p class="mt-2 text-sm/7 text-muted-foreground">
+                    <p class="mt-2 text-sm/6 text-muted-foreground">
                       {item.description}
                     </p>
                   </div>
                 </div>
-                <div class="mt-5 flex flex-wrap gap-2">
+                <div class="mt-4 flex flex-wrap gap-2">
                   {item.commands.map((command) => (
                     <span class="rounded-full border border-border bg-muted/60 px-3 py-1 text-xs font-medium text-muted-foreground dark:bg-white/[0.03]">
                       {command}
@@ -151,16 +146,16 @@ const paletteCommands = [
       </div>
     </div>
 
-    <div class="mt-6 grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
+    <div class="mt-5 grid gap-5 lg:grid-cols-[0.78fr_1.22fr]">
       <div
-        class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+        class="reviu-reveal rounded-3xl border border-border bg-background p-5 shadow-sm dark:bg-gray-950/40"
         style="--reveal-delay: 450ms;"
       >
         <div class="flex items-center gap-3">
           <TerminalIcon class="size-5 text-primary" aria-hidden="true" />
           <h3 class="font-semibold text-foreground">Every surface follows the checkout</h3>
         </div>
-        <div class="mt-5 space-y-2">
+        <div class="mt-4 space-y-2">
           {
             dockItems.map((item) => (
               <div class="flex items-center justify-between rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm dark:bg-white/[0.03]">
@@ -173,7 +168,7 @@ const paletteCommands = [
       </div>
 
       <div
-        class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+        class="reviu-reveal rounded-3xl border border-border bg-background p-5 shadow-sm dark:bg-gray-950/40"
         style="--reveal-delay: 550ms;"
       >
         <div class="flex items-center gap-3">
@@ -181,11 +176,10 @@ const paletteCommands = [
           <h3 class="font-semibold text-foreground">Git from the command palette</h3>
         </div>
         <p class="mt-2 max-w-2xl text-sm/7 text-muted-foreground">
-          Commit, amend, branch, fetch, pull, push, merge, rebase, stash, and
-          cherry-pick are command-palette actions with clear disabled states and
-          keyboard shortcuts where they matter.
+          Commit, amend, push, rebase, and stash from the same keyboard-first
+          flow as the rest of the app.
         </p>
-        <div class="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {
             paletteCommands.map((command) => (
               <div class="flex items-center gap-2 rounded-2xl border border-border bg-muted/40 px-3 py-2 text-sm text-foreground dark:bg-white/[0.03]">
