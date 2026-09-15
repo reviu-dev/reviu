@@ -71,7 +71,7 @@ const reviewBatch = [
   data-reveal-root
   data-reveal-threshold="0.18"
 >
-  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
     <div class="reviu-reveal mx-auto max-w-3xl text-center">
       <p class="text-base/7 font-semibold text-primary">
         Agentic review
@@ -88,7 +88,7 @@ const reviewBatch = [
     </div>
 
     <div
-      class="reviu-reveal relative mt-14 overflow-hidden rounded-[2rem] border border-border bg-muted/30 p-3 shadow-2xl shadow-primary/5 dark:bg-white/[0.03] dark:shadow-black/20"
+      class="reviu-reveal relative mt-14 overflow-hidden rounded-[2rem] border border-border bg-muted/30 p-2 shadow-2xl shadow-primary/5 sm:p-3 dark:bg-white/[0.03] dark:shadow-black/20"
       style="--reveal-delay: 150ms;"
     >
       <div
@@ -98,13 +98,13 @@ const reviewBatch = [
       </div>
 
       <div class="grid gap-3 lg:grid-cols-[0.62fr_1.38fr] lg:items-start">
-        <aside class="rounded-3xl border border-border bg-background/80 p-5 shadow-sm backdrop-blur dark:bg-gray-950/55">
-          <div class="flex items-start justify-between gap-4">
+        <aside class="min-w-0 rounded-3xl border border-border bg-background/80 p-4 shadow-sm backdrop-blur sm:p-5 dark:bg-gray-950/55">
+          <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p class="text-sm font-semibold text-foreground">The review loop</p>
               <p class="mt-1 text-xs text-muted-foreground">One task, one path.</p>
             </div>
-            <span class="rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+            <span class="shrink-0 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
               before commit
             </span>
           </div>
@@ -116,7 +116,7 @@ const reviewBatch = [
 
                 return (
                   <li class="border-b border-border last:border-b-0">
-                    <div class="grid grid-cols-[2.25rem_1fr_auto] gap-3 p-3">
+                    <div class="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 p-3 sm:grid-cols-[2.25rem_minmax(0,1fr)_auto]">
                       <div class="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
                         <Icon class="size-4" aria-hidden="true" />
                       </div>
@@ -128,7 +128,7 @@ const reviewBatch = [
                           {step.description}
                         </p>
                       </div>
-                      <span class="pt-0.5 text-xs font-semibold text-muted-foreground">
+                      <span class="hidden pt-0.5 text-xs font-semibold text-muted-foreground sm:block">
                         0{index + 1}
                       </span>
                     </div>
@@ -139,7 +139,7 @@ const reviewBatch = [
           </ol>
         </aside>
 
-        <article class="rounded-3xl border border-border bg-background/85 p-5 shadow-sm backdrop-blur dark:bg-gray-950/55">
+        <article class="min-w-0 rounded-3xl border border-border bg-background/85 p-4 shadow-sm backdrop-blur sm:p-5 dark:bg-gray-950/55">
           <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
             <div class="flex min-w-0 items-center gap-3">
               <div class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
@@ -158,35 +158,35 @@ const reviewBatch = [
             </div>
           </div>
 
-          <div class="mt-5 grid gap-4 lg:grid-cols-[1.08fr_0.72fr]">
-            <div class="space-y-3">
-              <div class="overflow-hidden rounded-2xl border border-border bg-muted/50 text-xs dark:bg-white/[0.03]">
-                <div class="flex items-center justify-between border-b border-border bg-background/70 px-4 py-3 dark:bg-gray-950/60">
-                  <span class="font-mono text-muted-foreground">src/discounts.ts</span>
-                  <span class="font-semibold text-primary">reviewing</span>
+          <div class="mt-5 grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.08fr)_minmax(0,0.72fr)]">
+            <div class="min-w-0 space-y-3">
+              <div class="min-w-0 overflow-hidden rounded-2xl border border-border bg-muted/50 text-xs dark:bg-white/[0.03]">
+                <div class="flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background/70 px-3 py-3 sm:px-4 dark:bg-gray-950/60">
+                  <span class="min-w-0 truncate font-mono text-muted-foreground">src/discounts.ts</span>
+                  <span class="shrink-0 font-semibold text-primary">reviewing</span>
                 </div>
-                <div class="grid grid-cols-[2.5rem_1fr] font-mono">
+                <div class="grid grid-cols-[2.5rem_minmax(0,1fr)] font-mono">
                   <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">117</div>
-                  <div class="bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const total = getCartTotal(cart)</div>
+                  <div class="truncate bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const total = getCartTotal(cart)</div>
                   <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">118</div>
-                  <div class="bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const flat = getFlatDiscounts(cart)</div>
+                  <div class="truncate bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const flat = getFlatDiscounts(cart)</div>
                   <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">119</div>
-                  <div class="bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const percent = getPercentDiscount(cart)</div>
+                  <div class="truncate bg-background/70 px-3 py-2 text-muted-foreground dark:bg-gray-950/50">const percent = getPercentDiscount(cart)</div>
                   <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">120</div>
-                  <div class="bg-red-500/10 px-3 py-2 text-red-700 dark:text-red-300">return applyPercent(total, percent)</div>
+                  <div class="truncate bg-red-500/10 px-3 py-2 text-red-700 dark:text-red-300">return applyPercent(total, percent)</div>
                   <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">121</div>
-                  <div class="bg-emerald-500/10 px-3 py-2 text-emerald-700 dark:text-emerald-300">const subtotal = applyFlatDiscounts(total, flat)</div>
+                  <div class="truncate bg-emerald-500/10 px-3 py-2 text-emerald-700 dark:text-emerald-300">const subtotal = applyFlatDiscounts(total, flat)</div>
                   <div class="bg-muted/70 px-2 py-2 text-right text-muted-foreground dark:bg-white/5">122</div>
-                  <div class="bg-emerald-500/10 px-3 py-2 text-emerald-700 dark:text-emerald-300">return applyPercent(subtotal, percent)</div>
+                  <div class="truncate bg-emerald-500/10 px-3 py-2 text-emerald-700 dark:text-emerald-300">return applyPercent(subtotal, percent)</div>
                 </div>
-                <div class="border-t border-primary/20 bg-primary/10 p-3 text-primary">
+                <div class="truncate border-t border-primary/20 bg-primary/10 p-3 text-primary">
                   apply flat discounts before percentage discounts
                 </div>
               </div>
 
             </div>
 
-            <div class="space-y-3">
+            <div class="min-w-0 space-y-3">
               <div class="rounded-2xl border border-border bg-muted/40 p-3 dark:bg-white/[0.03]">
                 <p class="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                   Batch to agent
@@ -203,8 +203,8 @@ const reviewBatch = [
               </div>
 
               <div class="rounded-2xl border border-primary/20 bg-primary/10 p-3">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="min-w-0">
                     <p class="font-semibold text-foreground">Send back</p>
                     <p class="mt-1 text-xs/5 text-muted-foreground">
                       File, line, and side context included.
