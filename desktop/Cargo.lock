@@ -9085,6 +9085,7 @@ dependencies = [
  "parking_lot",
  "regex",
  "serde",
+ "shell-words",
  "sysinfo",
 ]
 

@@ -1,9 +1,10 @@
 use alacritty_terminal::{event::Event as TerminalEvent, term::cell::Flags};
 use gpui::{
-  Action, App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, Font,
-  FontFallbacks, FontFeatures, FontStyle, FontWeight, InteractiveElement, IntoElement,
-  KeyDownEvent, Keystroke, Modifiers, MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent,
-  Styled, Subscription, Task, TouchPhase, Window, div, prelude::*, px, relative, rgb,
+  Action, App, ClipboardEntry, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
+  FocusHandle, Focusable, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight,
+  InteractiveElement, IntoElement, KeyDownEvent, Keystroke, Modifiers, MouseButton, ParentElement,
+  Pixels, Render, ScrollWheelEvent, Styled, Subscription, Task, TouchPhase, Window, div,
+  prelude::*, px, relative, rgb,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::Disableable as _;
@@ -50,6 +51,21 @@ fn updated_unseen_output_lines(
     .saturating_sub(previous_total_lines)
     .max(display_offset.saturating_sub(previous_display_offset));
   current.saturating_add(appended_lines)
+}
+
+fn terminal_text_for_paths(paths: &[PathBuf]) -> Option<String> {
+  let mut text = String::new();
+  for path in paths.iter().filter_map(|path| path.to_str()) {
+    text.push(' ');
+    text.push_str(&shell_words::quote(path));
+  }
+
+  if text.is_empty() {
+    None
+  } else {
+    text.push(' ');
+    Some(text)
+  }
 }
 
 fn collect_pending_session_events(
@@ -1272,12 +1288,19 @@ impl TerminalView {
     }
 
     if self.matches_paste_shortcut(event) {
-      if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-        self.reset_selection();
-        if let Some(session) = self.session.as_mut() {
-          session.paste(&text);
-          self.refresh_snapshot();
-          cx.notify();
+      if let Some(item) = cx.read_from_clipboard() {
+        if let Some(paths) = item.entries().iter().find_map(|entry| match entry {
+          ClipboardEntry::ExternalPaths(paths) => Some(paths),
+          _ => None,
+        }) {
+          self.paste_paths(paths.paths(), window, cx);
+        } else if let Some(text) = item.text() {
+          self.reset_selection();
+          if let Some(session) = self.session.as_mut() {
+            session.paste(&text);
+            self.refresh_snapshot();
+            cx.notify();
+          }
         }
       }
       cx.stop_propagation();
@@ -1315,6 +1338,28 @@ impl TerminalView {
       .or_else(|| {
         selection_text_from_screen(&self.screen, selection).filter(|text| !text.is_empty())
       })
+  }
+
+  fn paste_paths(
+    &mut self,
+    paths: &[PathBuf],
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(text) = terminal_text_for_paths(paths) else {
+      return false;
+    };
+
+    self.focus_terminal(window, cx);
+    self.reset_selection();
+    let Some(session) = self.session.as_mut() else {
+      return false;
+    };
+
+    session.paste(&text);
+    self.refresh_snapshot();
+    cx.notify();
+    true
   }
 
   fn matches_copy_shortcut(&self, event: &KeyDownEvent) -> bool {
@@ -1590,6 +1635,11 @@ impl Render for TerminalView {
       .flex()
       .flex_col()
       .bg(theme.background)
+      .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+      .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+        this.paste_paths(paths.paths(), window, cx);
+        cx.stop_propagation();
+      }))
       .on_mouse_down(
         MouseButton::Left,
         cx.listener(|this, _, window, cx| {
@@ -1757,7 +1807,8 @@ mod tests {
     TERMINAL_SCROLLBAR_DEBUG_SELECTOR, TERMINAL_SEARCH_DEBUG_SELECTOR,
     TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalEvent, TerminalView, TerminalViewEvent,
     collect_pending_session_events, selection_matches_screen_text, selection_mode_for_click_count,
-    selection_text_from_screen, should_defer_to_ime, updated_unseen_output_lines,
+    selection_text_from_screen, should_defer_to_ime, terminal_text_for_paths,
+    updated_unseen_output_lines,
   };
   use crate::{
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
@@ -1771,7 +1822,7 @@ mod tests {
     ScrollWheelEvent, Styled, TestAppContext, TouchPhase, VisualTestContext, Window, div, point,
     px,
   };
-  use std::{cell::RefCell, rc::Rc, sync::Arc};
+  use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Arc};
 
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
@@ -1948,6 +1999,25 @@ mod tests {
         .size_full()
         .child(div().w(px(240.)).h(px(180.)).child(self.terminal.clone()))
     }
+  }
+
+  #[test]
+  fn terminal_text_for_paths_shell_quotes_each_path() {
+    let paths = [
+      PathBuf::from("/tmp/simple.txt"),
+      PathBuf::from("/tmp/file with spaces.txt"),
+      PathBuf::from("/tmp/it's-quoted.txt"),
+    ];
+
+    assert_eq!(
+      terminal_text_for_paths(&paths).as_deref(),
+      Some(" /tmp/simple.txt '/tmp/file with spaces.txt' '/tmp/it'\\''s-quoted.txt' ")
+    );
+  }
+
+  #[test]
+  fn terminal_text_for_paths_ignores_empty_input() {
+    assert_eq!(terminal_text_for_paths(&[]), None);
   }
 
   #[test]
