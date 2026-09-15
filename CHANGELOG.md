@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.0.1
+
+### Search Agents During Setup
+
+The onboarding agent picker now includes a search field so you can quickly filter the registry by name, description or id before choosing which agents Reviu should show.
+
 ## 1.0.0
 
 ### Reviu, Rebuilt Around The Agent

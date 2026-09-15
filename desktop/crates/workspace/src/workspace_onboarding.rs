@@ -5,10 +5,11 @@ use gpui::{
   prelude::*, px, relative,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _,
+  ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _,
   button::Button,
   checkbox::Checkbox,
   h_flex,
+  input::{Input, InputEvent, InputState},
   scroll::ScrollableElement as _,
   select::{Select, SelectEvent, SelectItem, SelectState},
   v_flex,
@@ -85,6 +86,7 @@ pub(crate) struct WorkspaceOnboarding {
   default_agent: agent_registry::AgentId,
   enabled_agents: Vec<agent_registry::AgentId>,
   agent_scroll_handle: ScrollHandle,
+  agent_filter_input: Entity<InputState>,
   default_agent_select: Entity<SelectState<Vec<AgentSelectOption>>>,
   _subscriptions: Vec<Subscription>,
 }
@@ -117,6 +119,14 @@ impl WorkspaceOnboarding {
         cx.refresh_windows();
       },
     );
+    let agent_filter_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Search agents..."));
+    let agent_filter_input_subscription =
+      cx.subscribe(&agent_filter_input, |_, _, event: &InputEvent, cx| {
+        if matches!(event, InputEvent::Change) {
+          cx.notify();
+        }
+      });
 
     Self {
       session_page,
@@ -125,8 +135,12 @@ impl WorkspaceOnboarding {
       default_agent: agent_settings.default_agent,
       enabled_agents: agent_settings.enabled_agents,
       agent_scroll_handle: ScrollHandle::new(),
+      agent_filter_input,
       default_agent_select,
-      _subscriptions: vec![default_agent_select_subscription],
+      _subscriptions: vec![
+        default_agent_select_subscription,
+        agent_filter_input_subscription,
+      ],
     }
   }
 
@@ -364,18 +378,38 @@ impl WorkspaceOnboarding {
       .into_any_element()
   }
 
+  fn agent_matches_filter(agent: &agent_registry::RegistryAgent, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+      return true;
+    }
+
+    let description = agent.description.to_lowercase();
+    let display_name = agent.display_name().to_lowercase();
+    let id = agent.id.as_str().to_lowercase();
+
+    query
+      .split_whitespace()
+      .all(|term| display_name.contains(term) || description.contains(term) || id.contains(term))
+  }
+
   fn render_agents_section(
     &self,
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     let registry = agent_registry::global();
+    let query = self.agent_filter_input.read(cx).value();
     let agents = registry
       .runnable()
       .into_iter()
+      .filter(|agent| Self::agent_matches_filter(agent, &query))
       .map(|agent| self.render_agent_row(agent, cx))
       .collect::<Vec<_>>();
+    let has_agents = !agents.is_empty();
     let default_agent_select = self.default_agent_select.clone();
+    let agent_filter_input = self.agent_filter_input.clone();
+    let theme = cx.theme().clone();
     let body = v_flex()
       .gap_4()
       .child(
@@ -386,7 +420,7 @@ impl WorkspaceOnboarding {
           .child(
             div()
               .text_sm()
-              .text_color(cx.theme().muted_foreground)
+              .text_color(theme.muted_foreground)
               .child("Pick at least one agent. New chats use your default agent."),
           )
           .child(
@@ -403,6 +437,13 @@ impl WorkspaceOnboarding {
           ),
       )
       .child(
+        Input::new(&agent_filter_input)
+          .small()
+          .w_full()
+          .prefix(Icon::new(IconName::Search).text_color(theme.muted_foreground))
+          .cleanable(true),
+      )
+      .child(
         div()
           .relative()
           .child(
@@ -412,7 +453,20 @@ impl WorkspaceOnboarding {
               .max_h(px(300.))
               .overflow_y_scroll()
               .track_scroll(&self.agent_scroll_handle)
-              .children(agents),
+              .when(has_agents, |this| this.children(agents))
+              .when(!has_agents, |this| {
+                this.child(
+                  div()
+                    .p_4()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border.opacity(0.7))
+                    .bg(theme.secondary.opacity(0.35))
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("No agents match your search."),
+                )
+              }),
           )
           .vertical_scrollbar(&self.agent_scroll_handle),
       );
@@ -652,5 +706,47 @@ impl Render for WorkspaceOnboarding {
 impl Focusable for WorkspaceOnboarding {
   fn focus_handle(&self, _: &App) -> FocusHandle {
     self.focus_handle.clone()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use agent_registry::{AgentId, Distribution, RegistryAgent, Runner};
+
+  use super::WorkspaceOnboarding;
+
+  fn test_agent() -> RegistryAgent {
+    RegistryAgent {
+      id: AgentId::from("claude-acp"),
+      name: "Claude".to_string(),
+      version: "1.0.0".to_string(),
+      description: "ACP wrapper for Anthropic's Claude".to_string(),
+      icon: None,
+      repository: None,
+      website: None,
+      distribution: Distribution::Command {
+        runner: Runner::Npx,
+        package: "@anthropic-ai/claude-code-acp".to_string(),
+        args: Vec::new(),
+        env: Vec::new(),
+      },
+    }
+  }
+
+  #[test]
+  fn agent_filter_matches_display_name_description_and_id() {
+    let agent = test_agent();
+
+    assert!(WorkspaceOnboarding::agent_matches_filter(&agent, ""));
+    assert!(WorkspaceOnboarding::agent_matches_filter(&agent, "claude"));
+    assert!(WorkspaceOnboarding::agent_matches_filter(
+      &agent,
+      "anthropic"
+    ));
+    assert!(WorkspaceOnboarding::agent_matches_filter(
+      &agent,
+      "claude acp"
+    ));
+    assert!(!WorkspaceOnboarding::agent_matches_filter(&agent, "gemini"));
   }
 }
