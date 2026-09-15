@@ -268,8 +268,9 @@ main() {
   local output_dir="${repo_root}/dist/release/macos/${target}"
   local dmg_name="${app_name}-${version}-macos-${manifest_arch}.dmg"
   local dmg_path="${output_dir}/${dmg_name}"
-  local artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${dmg_name}"
-  local release_notes_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+  local github_repository="${GITHUB_REPOSITORY:-reviu-dev/reviu}"
+  local artifact_url="https://github.com/${github_repository}/releases/download/${tag}/${dmg_name}"
+  local release_notes_url="https://github.com/${github_repository}/releases/tag/${tag}"
   local app_zip_path="${runner_temp}/${app_name}-${target}.app.zip"
   local app_submit_output_path="${runner_temp}/${app_name}-${target}.app.notary-submit.json"
   local app_notary_log_path="${runner_temp}/${app_name}-${target}.app.notary-log.json"
@@ -283,8 +284,10 @@ main() {
   local device=""
 
   require_cmd hdiutil
-  require_cmd codesign
-  require_cmd security
+  if [[ "${REVIU_SKIP_CODESIGN:-0}" != "1" ]]; then
+    require_cmd codesign
+    require_cmd security
+  fi
   require_cmd shasum
   require_cmd xcrun
 
@@ -309,14 +312,19 @@ main() {
     log "Skipping cargo bundle build"
   fi
 
-  require_env \
-    APPLE_KEYCHAIN_PATH \
-    APPLE_KEYCHAIN_PASSWORD \
-    APPLE_SIGNING_IDENTITY \
-    APPLE_NOTARYTOOL_APPLE_ID \
-    APPLE_NOTARYTOOL_APP_PASSWORD \
-    APPLE_NOTARYTOOL_TEAM_ID \
-    GITHUB_REPOSITORY
+  if [[ "${REVIU_SKIP_CODESIGN:-0}" != "1" ]]; then
+    require_env \
+      APPLE_KEYCHAIN_PATH \
+      APPLE_KEYCHAIN_PASSWORD \
+      APPLE_SIGNING_IDENTITY
+  fi
+
+  if [[ "${notarize}" == "1" ]]; then
+    require_env \
+      APPLE_NOTARYTOOL_APPLE_ID \
+      APPLE_NOTARYTOOL_APP_PASSWORD \
+      APPLE_NOTARYTOOL_TEAM_ID
+  fi
 
   if [[ ! -d "${app_path}" ]]; then
     die "Expected app bundle not found: ${app_path}"
@@ -327,7 +335,7 @@ main() {
   rm -rf "${output_dir}"
   mkdir -p "${output_dir}"
 
-  if [[ "${REVIU_DRY_RUN:-0}" != "1" ]]; then
+  if [[ "${REVIU_DRY_RUN:-0}" != "1" && "${REVIU_SKIP_CODESIGN:-0}" != "1" ]]; then
     unlock_signing_keychain
     assert_signing_identity
 
@@ -343,7 +351,7 @@ main() {
 
     /usr/bin/codesign --verify --deep --strict --verbose=2 "${app_path}"
   else
-    log "Dry run: skipping app codesign"
+    log "Skipping app codesign"
   fi
 
   if [[ "${notarize}" == "1" ]]; then
@@ -420,7 +428,7 @@ main() {
 
   rm -rf "${dmg_root}"
 
-  if [[ "${REVIU_DRY_RUN:-0}" != "1" ]]; then
+  if [[ "${REVIU_DRY_RUN:-0}" != "1" && "${REVIU_SKIP_CODESIGN:-0}" != "1" ]]; then
     unlock_signing_keychain
 
     log "Signing DMG"
@@ -433,7 +441,7 @@ main() {
 
     /usr/bin/codesign --verify --verbose=2 "${dmg_path}"
   else
-    log "Dry run: skipping DMG codesign"
+    log "Skipping DMG codesign"
   fi
 
   if [[ "${notarize}" == "1" ]]; then
