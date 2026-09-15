@@ -2545,6 +2545,32 @@ impl SessionPage {
     self.perform_unsaved_editor_action(action, window, cx);
   }
 
+  fn save_editor_before_unsaved_action(
+    &mut self,
+    editor: Entity<Editor>,
+    action: UnsavedEditorAction,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let view = cx.entity();
+    let window_handle = window.window_handle();
+    let saved_editor = editor.clone();
+    editor.update(cx, |editor, cx| {
+      editor.save_with_completion(
+        cx,
+        Some(Box::new(move |cx| {
+          let view = view.clone();
+          let action = action.clone();
+          let _ = cx.update_window(window_handle, move |_, window, cx| {
+            view.update(cx, move |view, cx| {
+              view.perform_unsaved_editor_action_after_save(action, &saved_editor, window, cx);
+            });
+          });
+        })),
+      );
+    });
+  }
+
   fn perform_unsaved_editor_action_after_save(
     &mut self,
     action: UnsavedEditorAction,
@@ -2657,8 +2683,6 @@ impl SessionPage {
       .editor_states
       .get(&editor_tab)
       .and_then(|state| state.editor.clone());
-    let window_handle = window.window_handle();
-
     window.open_alert_dialog(cx, move |alert, _, _| {
       let save_view = view.clone();
       let discard_view = view.clone();
@@ -2708,27 +2732,9 @@ impl SessionPage {
                 .on_click(move |_, window, cx| {
                   window.close_dialog(cx);
                   if let Some(editor) = save_editor.clone() {
-                    let save_view = save_view.clone();
                     let save_action = save_action.clone();
-                    let saved_editor = editor.clone();
-                    editor.update(cx, |editor, cx| {
-                      editor.save_with_completion(
-                        cx,
-                        Some(Box::new(move |cx| {
-                          let save_view = save_view.clone();
-                          let save_action = save_action.clone();
-                          let _ = cx.update_window(window_handle, move |_, window, cx| {
-                            save_view.update(cx, move |view, cx| {
-                              view.perform_unsaved_editor_action_after_save(
-                                save_action,
-                                &saved_editor,
-                                window,
-                                cx,
-                              );
-                            });
-                          });
-                        })),
-                      );
+                    save_view.update(cx, move |view, cx| {
+                      view.save_editor_before_unsaved_action(editor, save_action, window, cx);
                     });
                   }
                 }),
@@ -2950,14 +2956,23 @@ mod tests {
       .read_with(cx, |page, _| page.shown_editor_tab().cloned())
       .expect("untitled tab");
     page.update_in(cx, |page, window, cx| {
-      page.close_center_tab(tab, window, cx)
+      page.close_center_tab(tab.clone(), window, cx)
     });
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    let save = cx
-      .debug_bounds(UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR)
-      .expect("save button");
-    cx.simulate_click(save.center(), gpui::Modifiers::default());
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR)
+        .is_some()
+    );
+    page.update_in(cx, |page, window, cx| {
+      window.close_dialog(cx);
+      page.save_editor_before_unsaved_action(
+        editor.clone(),
+        UnsavedEditorAction::CloseCenterTab { tab },
+        window,
+        cx,
+      );
+    });
     cx.run_until_parked();
 
     let prompt_task = page
