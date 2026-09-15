@@ -91,7 +91,6 @@ fn render(
     .border_1()
     .border_color(theme.border)
     .bg(theme.background)
-    .overflow_hidden()
     .child(
       h_flex()
         .items_center()
