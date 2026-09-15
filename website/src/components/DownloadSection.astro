@@ -33,7 +33,7 @@ const downloadPlatforms = [
   {
     id: "linux",
     title: "Linux",
-    badge: "Shell",
+    badge: "Script",
     icon: HardDriveIcon,
     description: "Install from the terminal and keep updates simple.",
     installCommand: linuxInstallCommand,
@@ -79,42 +79,41 @@ const downloadPlatforms = [
         <h2
           class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl"
         >
-          Install Reviu and start with a local agent session.
+          Download Reviu for your platform.
         </h2>
       </div>
       <div
-        class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+        class="reviu-reveal rounded-3xl border border-border bg-background p-5 shadow-sm dark:bg-gray-950/40"
         style="--reveal-delay: 120ms;"
       >
         <div class="flex items-start gap-4">
           <ShieldCheckIcon class="mt-1 size-5 shrink-0 text-primary" aria-hidden="true" />
           <div>
-            <p class="font-semibold text-foreground">No account required for local work</p>
+            <p class="font-semibold text-foreground">No account for local sessions</p>
             <p class="mt-2 text-sm/7 text-muted-foreground">
-              Download the native app, open a repository, and run the agent CLI
-              you already use. Sign in only when you want Reviu Pro's GitHub
-              pull request workflow.
+              Open a repository and run the agent CLI you already use. Sign in
+              only for Reviu Pro's GitHub pull request workflow.
             </p>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="mt-12 grid gap-6 lg:grid-cols-3">
+    <div class="mt-10 grid gap-5 lg:grid-cols-3">
       {
         downloadPlatforms.map((platform, index) => (
           <article
-            class="reviu-reveal flex h-full flex-col rounded-[2rem] border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+            class="reviu-reveal flex h-full flex-col rounded-[2rem] border border-border bg-background p-5 shadow-sm dark:bg-gray-950/40"
             style={`--reveal-delay: ${index * 125 + 150}ms;`}
           >
             <div class="flex items-start justify-between gap-4">
-              <div class="inline-flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
-                <platform.icon class="size-6" aria-hidden="true" />
+              <div class="inline-flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                <platform.icon class="size-5" aria-hidden="true" />
               </div>
               <Badge variant="primary">{platform.badge}</Badge>
             </div>
 
-            <div class="mt-6">
+            <div class="mt-5">
               <h3 class="text-2xl font-semibold text-foreground">
                 {platform.title}
               </h3>
@@ -123,7 +122,7 @@ const downloadPlatforms = [
               </p>
             </div>
 
-            <div class="mt-auto pt-8">
+            <div class="mt-auto pt-6">
               {"downloads" in platform && platform.downloads.length > 0 ? (
                 <div class="flex flex-col gap-3">
                   {platform.downloads.map((download) => (
@@ -138,7 +137,7 @@ const downloadPlatforms = [
                   ))}
                 </div>
               ) : "installCommand" in platform ? (
-                <div class="rounded-2xl border border-border bg-muted/40 p-4 dark:bg-white/[0.03]">
+                <div class="rounded-2xl border border-border bg-muted/40 p-3 dark:bg-white/[0.03]">
                   <div class="flex items-center justify-between gap-3">
                     <p class="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-primary">
                       <TerminalIcon class="size-3.5" aria-hidden="true" />
