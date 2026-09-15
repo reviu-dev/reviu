@@ -1,0 +1,365 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import SiteFooter from "../../components/SiteFooter.astro";
+import ThemePicture from "../../components/ThemePicture.astro";
+import { themeImageSources } from "../../lib/themeImage";
+import heroLight from "../../assets/app_screenshots/hero_light.png";
+import heroDark from "../../assets/app_screenshots/hero_dark.png";
+import sessionsLight from "../../assets/app_screenshots/sessions_light.png";
+import sessionsDark from "../../assets/app_screenshots/sessions_dark.png";
+import prLight from "../../assets/app_screenshots/pr_light.png";
+import prDark from "../../assets/app_screenshots/pr_dark.png";
+import { blogPosts } from "../../lib/blog";
+
+const heroImage = await themeImageSources(
+  heroLight,
+  heroDark,
+  heroLight.width,
+  heroLight.height,
+);
+const sessionsImage = await themeImageSources(
+  sessionsLight,
+  sessionsDark,
+  sessionsLight.width,
+  sessionsLight.height,
+);
+const pullRequestImage = await themeImageSources(
+  prLight,
+  prDark,
+  prLight.width,
+  prLight.height,
+);
+
+const post = blogPosts.find((item) => item.slug === "reviu-1-0");
+
+if (!post) {
+  throw new Error("Missing blog post metadata.");
+}
+
+const formattedDate = new Date(
+  `${post.publishedAt}T00:00:00Z`,
+).toLocaleDateString("en-US", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
+const site = Astro.site ?? new URL("https://reviu.dev");
+const articleImageUrl = new URL(heroLight.src, site).toString();
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  headline: post.title,
+  description: post.description,
+  image: articleImageUrl,
+  datePublished: post.publishedAt,
+  dateModified: post.updatedAt ?? post.publishedAt,
+  author: {
+    "@type": "Person",
+    name: "Joris Gallot",
+  },
+  publisher: {
+    "@type": "Organization",
+    name: "Reviu",
+    url: "https://reviu.dev",
+  },
+  mainEntityOfPage: "https://reviu.dev/blog/reviu-1-0",
+};
+---
+
+<Layout
+  title={post.title}
+  description={post.description}
+  pathname="/blog/reviu-1-0"
+  image={heroLight}
+  type="article"
+  structuredData={structuredData}
+>
+  <main class="py-20 sm:py-24">
+    <article class="mx-auto max-w-5xl px-6 lg:px-8">
+      <a
+        href="/blog"
+        class="inline-flex items-center rounded-md bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
+      >
+        &larr; Blog
+      </a>
+
+      <header class="mt-6" data-reveal-root data-reveal-threshold="0.05">
+        <div
+          class="reviu-reveal flex flex-wrap items-center gap-3 text-sm text-muted-foreground"
+        >
+          <span>Joris Gallot</span>
+          <span aria-hidden="true">/</span>
+          <time datetime={post.publishedAt}>{formattedDate}</time>
+          <span aria-hidden="true">/</span>
+          <span>{post.readingTime}</span>
+        </div>
+        <h1
+          class="reviu-reveal mt-4 text-4xl font-semibold tracking-tight text-foreground sm:text-5xl"
+          style="--reveal-delay: 100ms;"
+        >
+          {post.title}
+        </h1>
+        <p
+          class="reviu-reveal mt-5 text-xl/8 text-muted-foreground"
+          style="--reveal-delay: 180ms;"
+        >
+          Reviu started as a native Git client with an agent on the side. In
+          1.0, the agent session becomes the workspace.
+        </p>
+      </header>
+
+      <figure class="mt-10">
+        <ThemePicture
+          sources={heroImage}
+          alt="Reviu 1.0 workspace with agent sessions, split center views, changes, and pull request context."
+          loading="eager"
+          fetchpriority="high"
+          class="w-full rounded-lg border border-border bg-secondary"
+        />
+      </figure>
+
+      <div class="blog-article mt-12 text-base/8 text-muted-foreground">
+        <p>
+          I started Reviu as the Git client I wanted to use: native, fast, and
+          designed around the keyboard. By version 0.18 it covered a lot of
+          ground. It had a complete local Git page, several GitHub pages, pull
+          request review, and an agent panel for Claude and Codex.
+        </p>
+
+        <p>
+          The agent panel worked, but it exposed a problem with the rest of the
+          app. I could ask an agent to change something, review its diff, and
+          send comments back, yet the session was still treated as an accessory
+          to the Git page. Opening another repository changed the context around
+          it. Moving between the conversation, files, terminal, local changes,
+          and pull request meant moving through surfaces designed before the
+          agent existed.
+        </p>
+
+        <p>
+          I first tried to improve that arrangement. The more I worked on it,
+          the clearer it became that another panel or shortcut would not fix the
+          underlying shape. The session had to become the thing the rest of the
+          app was organized around.
+        </p>
+
+        <h2>A rewrite that started by deleting</h2>
+
+        <p>
+          The first pull request for this direction added the Sessions workspace
+          and deleted almost 33,000 lines. Most of those lines belonged to the
+          broad GitHub client: the GitHub home, repository browser, profiles,
+          commit details, issues, and the old pull request pages. That was only
+          the start.
+        </p>
+
+        <p>
+          During the following month I moved every local Git workflow into the
+          new workspace, removed the separate Git page, and rebuilt the center
+          of the app around tabs. Conversations, files, diffs, and terminals now
+          use the same tab model. They can be reordered, restored per checkout,
+          or dragged into resizable splits.
+        </p>
+
+        <p>
+          The result is one window with a stable layout. Projects and their
+          checkouts are on the left. The work itself is in the center. Repository
+          state stays in a dock on the right, where Changes, Files, History,
+          Review, and Pull Request are always close without taking over the
+          workspace.
+        </p>
+
+        <figure>
+          <ThemePicture
+            sources={sessionsImage}
+            alt="Agent sessions grouped by project in the Reviu 1.0 workspace."
+            loading="lazy"
+            class="w-full rounded-lg border border-border bg-secondary"
+          />
+        </figure>
+
+        <h2>The session now owns its context</h2>
+
+        <p>
+          A Reviu session is tied to a project and checkout. Selecting it points
+          the file tree, diff, terminal, history, and branch controls at the same
+          place. Its draft and reading position survive a restart, and the agent
+          keeps running if you open another session.
+        </p>
+
+        <p>
+          For work that should not touch the main checkout, Reviu creates a Git
+          worktree and branch for the session. Several agents can run at the same
+          time without writing into the same working directory. Their status is
+          visible next to the project, so I can move to another task without
+          forgetting which process is working or waiting for permission.
+        </p>
+
+        <p>
+          Agents come from the official Agent Client Protocol registry rather
+          than a fixed list maintained in Reviu. The app launches the CLI already
+          installed and authenticated on the machine. I use Codex and Claude
+          most often, but Gemini, Copilot, Cline, and the other registry agents
+          go through the same session and review UI.
+        </p>
+
+        <h2>Reviewing the result is the important part</h2>
+
+        <p>
+          I do not need another chat window that hides what happened between the
+          prompt and the final answer. While an agent works, Reviu shows its tool
+          calls, commands, output, thinking, and permission requests in the
+          conversation. When a turn changes files, it ends with a receipt that
+          opens each diff and shows the number of lines added and removed.
+        </p>
+
+        <p>
+          From a diff I can comment on the exact lines I want changed. Those
+          comments collect in the Review panel and go back to the agent with the
+          file and line context intact. If the next turn rewrites those lines,
+          Reviu marks the old comment instead of quietly losing it. I can also
+          send a selection, attach a screenshot, queue the next message, or steer
+          a turn that is already running.
+        </p>
+
+        <p>
+          Every prompt creates a checkpoint before the agent starts. Undo on a
+          turn restores the files while keeping the conversation. Going further
+          back restores the earlier working tree and trims the conversation to
+          that point. Editing an old prompt uses the same mechanism, then starts
+          again from the corrected instruction. HEAD and the staged state are
+          left alone.
+        </p>
+
+        <p>
+          This part took much more work than placing a chat beside a diff, but it
+          is also the reason Reviu exists. The useful boundary is not between the
+          agent and Git. It is between code the agent produced and code I have
+          actually reviewed.
+        </p>
+
+        <h2>Git remains visible</h2>
+
+        <p>
+          Rebuilding around sessions did not remove the Git client. The same
+          workspace can stage individual hunks, amend and undo commits, switch
+          branches, manage stashes, cherry-pick, resolve conflicts, inspect
+          history, and run an interactive rebase. The project explorer edits and
+          creates files, while the terminal keeps its scrollback, working
+          directory, search, and links into the editor.
+        </p>
+
+        <p>
+          I want the agent to handle as much implementation work as I ask it to,
+          but I still want to see the branch and working tree underneath. When
+          something goes wrong, those are the tools I trust to understand and
+          fix it.
+        </p>
+
+        <h2>Why GitHub became smaller</h2>
+
+        <p>
+          Reviu 0.18 tried to reproduce a large part of GitHub in a desktop app.
+          It was expensive to maintain and most of it sat outside the daily path
+          I was now building for. github.com already has good repository,
+          profile, issue, commit, and discussion pages. Reviu did not need a
+          second version of each one.
+        </p>
+
+        <p>
+          Reviu Pro now keeps the GitHub pieces attached to the branch being
+          shipped. Its pull request appears in the right dock with changed files,
+          comments, checks, reviewers, merge state, and the merge methods allowed
+          by the repository. GitHub notifications remain in the sidebar. A link
+          or the browser extension can bring a pull request into Reviu and check
+          out its branch after confirmation; broader GitHub links open in the
+          browser.
+        </p>
+
+        <figure>
+          <ThemePicture
+            sources={pullRequestImage}
+            alt="A GitHub pull request with files, checks, reviewers, and merge controls in the Reviu dock."
+            loading="lazy"
+            class="w-full rounded-lg border border-border bg-secondary"
+          />
+        </figure>
+
+        <p>
+          I also removed Reviu's OpenAI and Anthropic key settings, pull request
+          briefs, and generated commit messages. The coding agent already has the
+          repository, the diff, and the model subscription. Asking it for a
+          summary or commit message is simpler than configuring a second AI path
+          inside Reviu.
+        </p>
+
+        <h2>What ships in 1.0</h2>
+
+        <p>
+          The local workflow is free and needs no Reviu account: agent sessions,
+          parallel worktrees, checkpoints, the editor and terminal, review
+          comments sent back to the agent, and the full local Git toolset. Reviu
+          Pro remains the paid GitHub layer for pull request review, checks,
+          merge, notifications, and browser handoff.
+        </p>
+
+        <p>
+          Version 1.0 is a much smaller product idea than the one I was building
+          before, even though the app can now do more around an agent session. It
+          has one job: let the agent work, let me inspect the result properly,
+          and keep the real repository close until the branch is ready to ship.
+        </p>
+      </div>
+
+      <section class="mt-14 border-t border-border pt-8">
+        <h2 class="text-2xl font-semibold tracking-tight text-foreground">
+          Try Reviu 1.0
+        </h2>
+        <p class="mt-3 text-base/7 text-muted-foreground">
+          Run your agent, review every diff, and finish the branch with real Git
+          in one native workspace.
+        </p>
+        <div class="mt-5 flex flex-wrap items-center gap-4">
+          <a
+            href="/#downloads"
+            data-umami-event="download-blog-reviu-1-0"
+            class="reviu-hover-lift inline-flex items-center gap-2 rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          >
+            Download now
+          </a>
+          <a
+            href="/changelog"
+            data-umami-event="changelog-blog-reviu-1-0"
+            class="inline-flex rounded-md px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
+          >
+            Read the release notes <span aria-hidden="true">&nbsp;&rarr;</span>
+          </a>
+        </div>
+      </section>
+    </article>
+  </main>
+  <SiteFooter />
+</Layout>
+
+<style is:global>
+  .blog-article h2 {
+    margin-top: 2rem;
+    margin-bottom: 0.75rem;
+    color: var(--foreground);
+    font-size: 1.5rem;
+    line-height: 2rem;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  .blog-article p {
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .blog-article figure {
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+  }
+</style>

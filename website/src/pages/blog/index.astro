@@ -4,7 +4,7 @@ import SiteFooter from "../../components/SiteFooter.astro";
 import { blogPosts, getBlogPostUrl } from "../../lib/blog";
 
 const description =
-  "Articles about Git workflows, pull request review, and building a faster local-to-GitHub review loop with Reviu.";
+  "Articles about coding-agent workflows, Git, pull request review, and building Reviu.";
 
 const structuredData = {
   "@context": "https://schema.org",
@@ -17,6 +17,7 @@ const structuredData = {
     headline: post.title,
     description: post.description,
     datePublished: post.publishedAt,
+    dateModified: post.updatedAt ?? post.publishedAt,
     url: `https://reviu.dev${getBlogPostUrl(post.slug)}`,
   })),
 };
@@ -47,8 +48,8 @@ const structuredData = {
           class="reviu-reveal mt-4 text-lg text-muted-foreground"
           style="--reveal-delay: 100ms;"
         >
-          Practical writing on Git workflows, pull request review, and desktop
-          developer tools.
+          Product stories and practical writing on coding agents, Git, pull
+          request review, and desktop developer tools.
         </p>
       </div>
 

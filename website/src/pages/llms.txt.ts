@@ -24,6 +24,7 @@ Reviu is built for developers who ship code their agents wrote: durable agent se
 
 - [Home](${absoluteUrl("/", site)}): Product overview, downloads, pricing, platforms, and feature sections.
 - [Changelog](${absoluteUrl("/changelog", site)}): User-facing release notes for Reviu.
+- [Introducing Reviu 1.0](${absoluteUrl("/blog/reviu-1-0", site)}): How Reviu became a review workspace built around durable coding-agent sessions.
 - [Why GitHub PR Review Still Feels Slow](${absoluteUrl("/blog/why-github-pr-review-still-feels-slow", site)}): Article about keeping local Git and GitHub review context in one desktop workflow.
 - [Install script](${absoluteUrl("/install.sh", site)}): Linux install script for Reviu.
 - [Full LLM context](${absoluteUrl("/llms-full.txt", site)}): Detailed product facts, feature boundaries, pricing, and messaging guardrails.

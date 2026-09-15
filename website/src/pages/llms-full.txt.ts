@@ -84,7 +84,8 @@ Reviu supports macOS on Apple Silicon and Intel, Windows on ARM64 and x64, and L
 
 - [Home](${absoluteUrl("/", site)}): Main product page with positioning, downloads, pricing, FAQ, and screenshots.
 - [Changelog](${absoluteUrl("/changelog", site)}): User-facing release notes.
-- [Blog](${absoluteUrl("/blog", site)}): Articles about Git workflows and pull request review.
+- [Blog](${absoluteUrl("/blog", site)}): Articles about coding-agent workflows, Git, and pull request review.
+- [Introducing Reviu 1.0](${absoluteUrl("/blog/reviu-1-0", site)}): The story of Reviu's move from a Git client with an agent panel to an agent-first review workspace.
 - [Why GitHub PR Review Still Feels Slow](${absoluteUrl("/blog/why-github-pr-review-still-feels-slow", site)}): Article about local Git and GitHub review context.
 - [Compare Reviu](${absoluteUrl("/vs", site)}): Index of comparisons with traditional Git tools and GitHub Desktop.
 ${comparisonLinks(site)}

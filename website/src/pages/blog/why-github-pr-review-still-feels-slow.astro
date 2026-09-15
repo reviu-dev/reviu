@@ -3,31 +3,31 @@ import Layout from "../../layouts/Layout.astro";
 import SiteFooter from "../../components/SiteFooter.astro";
 import ThemePicture from "../../components/ThemePicture.astro";
 import { themeImageSources } from "../../lib/themeImage";
-import gitLight from "../../assets/app_screenshots/git_light.png";
-import gitDark from "../../assets/app_screenshots/git_dark.png";
-import githubHomeLight from "../../assets/app_screenshots/github_home_light.png";
-import githubHomeDark from "../../assets/app_screenshots/github_home_dark.png";
-import githubPrConvLight from "../../assets/app_screenshots/github_pr_conv_light.png";
-import githubPrConvDark from "../../assets/app_screenshots/github_pr_conv_dark.png";
+import heroLight from "../../assets/app_screenshots/hero_light.png";
+import heroDark from "../../assets/app_screenshots/hero_dark.png";
+import sessionsLight from "../../assets/app_screenshots/sessions_light.png";
+import sessionsDark from "../../assets/app_screenshots/sessions_dark.png";
+import prLight from "../../assets/app_screenshots/pr_light.png";
+import prDark from "../../assets/app_screenshots/pr_dark.png";
 import { blogPosts } from "../../lib/blog";
 
-const prConvImage = await themeImageSources(
-  githubPrConvLight,
-  githubPrConvDark,
-  githubPrConvLight.width,
-  githubPrConvLight.height,
+const pullRequestImage = await themeImageSources(
+  prLight,
+  prDark,
+  prLight.width,
+  prLight.height,
 );
-const githubHomeImage = await themeImageSources(
-  githubHomeLight,
-  githubHomeDark,
-  githubHomeLight.width,
-  githubHomeLight.height,
+const sessionsImage = await themeImageSources(
+  sessionsLight,
+  sessionsDark,
+  sessionsLight.width,
+  sessionsLight.height,
 );
-const gitImage = await themeImageSources(
-  gitLight,
-  gitDark,
-  gitLight.width,
-  gitLight.height,
+const workspaceImage = await themeImageSources(
+  heroLight,
+  heroDark,
+  heroLight.width,
+  heroLight.height,
 );
 
 const post = blogPosts.find(
@@ -46,7 +46,7 @@ const formattedDate = new Date(
   day: "numeric",
 });
 const site = Astro.site ?? new URL("https://reviu.dev");
-const articleImageUrl = new URL(githubPrConvLight.src, site).toString();
+const articleImageUrl = new URL(prLight.src, site).toString();
 
 const structuredData = {
   "@context": "https://schema.org",
@@ -55,7 +55,7 @@ const structuredData = {
   description: post.description,
   image: articleImageUrl,
   datePublished: post.publishedAt,
-  dateModified: post.publishedAt,
+  dateModified: post.updatedAt ?? post.publishedAt,
   author: {
     "@type": "Person",
     name: "Joris Gallot",
@@ -74,7 +74,7 @@ const structuredData = {
   title={post.title}
   description={post.description}
   pathname="/blog/why-github-pr-review-still-feels-slow"
-  image={githubPrConvLight}
+  image={prLight}
   type="article"
   structuredData={structuredData}
 >
@@ -113,8 +113,8 @@ const structuredData = {
 
       <figure class="mt-10">
         <ThemePicture
-          sources={prConvImage}
-          alt="Reviu pull request review screen with changed files, diff context, and review comments."
+          sources={pullRequestImage}
+          alt="Reviu workspace with a pull request, changed files, checks, and review context in the dock."
           loading="eager"
           fetchpriority="high"
           class="w-full rounded-lg border border-border bg-secondary"
@@ -195,8 +195,8 @@ const structuredData = {
 
         <figure>
           <ThemePicture
-            sources={githubHomeImage}
-            alt="Reviu GitHub notification and pull request workflow."
+            sources={sessionsImage}
+            alt="Reviu agent sessions and review workspace."
             loading="lazy"
             class="w-full rounded-lg border border-border bg-secondary"
           />
@@ -249,8 +249,8 @@ const structuredData = {
 
         <figure>
           <ThemePicture
-            sources={gitImage}
-            alt="Reviu local Git screen with staged and unstaged files plus a split diff."
+            sources={workspaceImage}
+            alt="Reviu workspace with an agent conversation, local diff, and Git changes."
             loading="lazy"
             class="w-full rounded-lg border border-border bg-secondary"
           />
@@ -266,9 +266,10 @@ const structuredData = {
         </p>
 
         <p>
-          The best improvements are usually practical, keep notifications close
-          to the PR list, keep comments beside the diff, keep checks and merge
-          state visible, keep branch actions reachable, make file and hunk
+          The best improvements are usually practical, keep notifications in
+          the workspace and the branch's pull request beside its local diff,
+          keep comments, checks and merge state visible, keep branch actions
+          reachable, make file and hunk
           navigation keyboard-friendly, let the reviewer stay inside one flow
           long enough to build real context.
         </p>
