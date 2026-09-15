@@ -1,6 +1,5 @@
 ---
 import CheckIcon from "@lucide/astro/icons/check";
-import CircleIcon from "@lucide/astro/icons/circle";
 import GitBranchIcon from "@lucide/astro/icons/git-branch";
 import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import MinusIcon from "@lucide/astro/icons/minus";
@@ -17,28 +16,14 @@ const tiers = [
     price: "$0",
     eyebrow: "Local agent review",
     description:
-      "For coding with agents on your machine, reviewing the diff, and finishing the branch with Git.",
+      "For coding with agents on your machine, reviewing their diffs, and finishing branches with local Git.",
     icon: GitBranchIcon,
     cta: "Download Reviu",
-    featureGroups: [
-      {
-        title: "Agent sessions",
-        features: [
-          "Claude Code, Codex, Gemini, and ACP registry agents",
-          "Parallel sessions in isolated Git worktrees",
-          "Conversation, terminal, permissions, and turn receipts",
-          "Checkpoints and rollback for agent turns",
-        ],
-      },
-      {
-        title: "Local Git workflows",
-        features: [
-          "Diff editor with inline and split views",
-          "Inline comments sent back to the agent",
-          "Hunk staging, restore, history, and stash",
-          "Interactive rebase, conflicts, cherry-pick, terminal, palette",
-        ],
-      },
+    features: [
+      "Agent sessions with ACP registry agents",
+      "Parallel worktrees and durable session state",
+      "Diff review with comments sent back to the agent",
+      "Local Git: stage, rebase, conflicts, terminal",
     ],
     featured: false,
   },
@@ -56,42 +41,25 @@ const tiers = [
       "For developers whose local agent work ends in GitHub pull request review and merge.",
     icon: GitPullRequestIcon,
     cta: "Download & start free trial",
-    featureGroups: [
-      {
-        title: "Everything in Free",
-        features: [
-          "Agent sessions, worktrees, review comments, and Git workflow",
-          "No account required until you connect GitHub",
-        ],
-      },
-      {
-        title: "GitHub in Reviu",
-        features: [
-          "Pull requests for your branch, in the dock",
-          "Create or publish a pull request from Reviu",
-          "Review and submit without leaving the app",
-          "Checks, merge readiness, merge methods, and inbox notifications",
-        ],
-      },
+    features: [
+      "Everything in Free",
+      "Pull request dock with checks and merge",
+      "GitHub review comments and submit review",
+      "Inbox notifications and browser extension",
     ],
     featured: true,
   },
 ];
 
 const comparisonRows = [
-  ["Agent sessions", true, true],
-  ["Parallel worktree sessions", true, true],
-  ["Inline review comments to the agent", true, true],
-  ["Turn receipts, checkpoints, and rollback", true, true],
-  ["Diff editor and hunk staging", true, true],
-  ["History, stash, conflicts, and interactive rebase", true, true],
-  ["Terminal and command palette", true, true],
-  ["Branch pull request in the dock", false, true],
-  ["Create or publish pull requests", false, true],
+  ["Agent sessions and parallel worktrees", true, true],
+  ["Local diff review with comments to the agent", true, true],
+  ["Local Git: staging, history, conflicts, rebase", true, true],
+  ["Pull request dock with checks and merge", false, true],
   ["GitHub review comments and submit review", false, true],
-  ["Checks, merge readiness, and merge actions", false, true],
-  ["GitHub notifications inbox", false, true],
-  ["Browser extension for pull requests", false, true],
+  ["GitHub inbox and pull request extension", false, true],
+  ["Mobile access", false, "planned"],
+  ["Remote over SSH to servers and VPS", false, "planned"],
 ] as const;
 ---
 
@@ -113,18 +81,16 @@ const comparisonRows = [
   </div>
 
   <div class="mx-auto max-w-7xl px-6 lg:px-8">
-    <div class="reviu-reveal mx-auto max-w-4xl text-center">
+    <div class="reviu-reveal mx-auto max-w-3xl text-center">
       <p class="text-base/7 font-semibold text-primary">Pricing</p>
       <h2
         class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl"
       >
-        Free while the work is local. Pro when GitHub joins the loop.
+        Local stays free. GitHub is Pro.
       </h2>
-      <p
-        class="mx-auto mt-6 max-w-2xl text-lg/8 text-muted-foreground"
-      >
-        Reviu does not meter your agent usage. Free gives you sessions, review,
-        and local Git. Pro connects the same workflow to GitHub pull requests.
+      <p class="mx-auto mt-6 max-w-2xl text-lg/8 text-muted-foreground">
+        Reviu does not meter your agent usage. Pay only when you want GitHub
+        pull requests, reviews, checks, merge, and notifications in the app.
       </p>
     </div>
 
@@ -142,8 +108,9 @@ const comparisonRows = [
               {tier.featured && (
                 <div class="absolute inset-x-0 top-0 h-1 bg-linear-to-r from-primary via-cyan-400 to-primary" />
               )}
+
               <div class="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
-                <div>
+                <div class="max-w-md">
                   <div class="flex items-center gap-3">
                     <div class="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
                       <Icon class="size-5" aria-hidden="true" />
@@ -155,7 +122,7 @@ const comparisonRows = [
                       </h3>
                     </div>
                   </div>
-                  <p class="mt-5 max-w-xl text-sm/7 text-muted-foreground">
+                  <p class="mt-5 text-sm/7 text-muted-foreground">
                     {tier.description}
                   </p>
                 </div>
@@ -205,21 +172,19 @@ const comparisonRows = [
                 {tier.cta}
               </a>
 
-              <div class="mt-8 grid gap-6 sm:grid-cols-2">
-                {tier.featureGroups.map((group) => (
-                  <div class="rounded-3xl border border-border bg-muted/30 p-5 dark:bg-white/[0.03]">
-                    <p class="font-semibold text-foreground">{group.title}</p>
-                    <ul role="list" class="mt-4 space-y-3 text-sm/6 text-muted-foreground">
-                      {group.features.map((feature) => (
-                        <li class="flex gap-3">
-                          <CheckIcon class="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-                          <span>{feature}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+              <ul
+                id={`tier-${tier.id}`}
+                role="list"
+                class="mt-8 grid gap-3 text-sm/6 text-muted-foreground sm:grid-cols-2"
+              >
+                {tier.features.map((feature) => (
+                  <li class="flex gap-3 rounded-2xl border border-border bg-muted/30 p-3 dark:bg-white/[0.03]">
+                    <CheckIcon class="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+                    <span>{feature}</span>
+                  </li>
                 ))}
-              </div>
+              </ul>
+
             </article>
           );
         })
@@ -227,21 +192,21 @@ const comparisonRows = [
     </div>
 
     <div
-      class="reviu-reveal mx-auto mt-16 max-w-5xl"
+      class="reviu-reveal mx-auto mt-14 max-w-5xl"
       style="--reveal-delay: 500ms;"
     >
-      <div class="grid gap-6 lg:grid-cols-[0.55fr_1fr] lg:items-start">
+      <div class="grid gap-6 lg:grid-cols-[0.48fr_1fr] lg:items-start">
         <div>
           <div class="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-sm font-semibold text-primary">
             <ShieldCheckIcon class="size-4" aria-hidden="true" />
             What changes with Pro
           </div>
           <h3 class="mt-5 text-3xl font-semibold tracking-tight text-foreground">
-            The local loop stays free. GitHub is the paid layer.
+            Free covers local work. Pro adds GitHub.
           </h3>
           <p class="mt-4 text-sm/7 text-muted-foreground">
-            Free is for agent sessions and local Git. Pro is for pull requests,
-            reviews, checks, merge, notifications, and the browser extension.
+            The core agent review loop stays free. Pro is the paid layer for pull
+            requests, GitHub reviews, checks, merge, and notifications.
           </p>
         </div>
 
@@ -258,20 +223,26 @@ const comparisonRows = [
                   <div class="font-medium text-foreground">{row[0]}</div>
                   {[row[1], row[2]].map((included) => (
                     <div class="flex justify-center">
-                      <span
-                        class:list={[
-                          "inline-flex size-7 items-center justify-center rounded-full ring-1 ring-inset",
-                          included
-                            ? "bg-primary/10 text-primary ring-primary/15"
-                            : "bg-muted text-muted-foreground ring-border dark:bg-white/[0.03]",
-                        ]}
-                      >
-                        {included ? (
-                          <CheckIcon class="size-4" aria-hidden="true" />
-                        ) : (
-                          <MinusIcon class="size-4" aria-hidden="true" />
-                        )}
-                      </span>
+                      {included === "planned" ? (
+                        <span class="rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                          Planned
+                        </span>
+                      ) : (
+                        <span
+                          class:list={[
+                            "inline-flex size-7 items-center justify-center rounded-full ring-1 ring-inset",
+                            included
+                              ? "bg-primary/10 text-primary ring-primary/15"
+                              : "bg-muted text-muted-foreground ring-border dark:bg-white/[0.03]",
+                          ]}
+                        >
+                          {included ? (
+                            <CheckIcon class="size-4" aria-hidden="true" />
+                          ) : (
+                            <MinusIcon class="size-4" aria-hidden="true" />
+                          )}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -283,15 +254,13 @@ const comparisonRows = [
     </div>
 
     <div
-      class="reviu-reveal mx-auto mt-10 flex max-w-3xl flex-col items-center justify-center gap-3 rounded-3xl border border-border bg-background p-5 text-center shadow-sm sm:flex-row sm:text-left dark:bg-gray-950/40"
+      class="reviu-reveal mx-auto mt-10 flex max-w-2xl flex-col items-center justify-center gap-2.5 rounded-2xl border border-border bg-background px-4 py-3 text-center shadow-sm sm:flex-row sm:text-left dark:bg-gray-950/40"
       style="--reveal-delay: 650ms;"
     >
-      <SparklesIcon class="size-5 text-primary" aria-hidden="true" />
+      <SparklesIcon class="size-4 text-primary" aria-hidden="true" />
       <p class="text-sm text-muted-foreground">
-        No API keys, no Reviu token meter. Your agent runs through the CLI you
-        already installed and signed into.
+        No agent meter. Use the CLI subscription you already have.
       </p>
-      <CircleIcon class="hidden size-1.5 shrink-0 fill-current text-border sm:block" aria-hidden="true" />
       <a href="#downloads" class="shrink-0 whitespace-nowrap text-sm font-semibold text-primary hover:text-primary/80">
         Download Reviu <span aria-hidden="true">→</span>
       </a>
