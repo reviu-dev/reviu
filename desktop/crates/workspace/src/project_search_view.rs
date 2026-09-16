@@ -2,29 +2,34 @@ use std::{
   collections::HashSet,
   ops::Range,
   path::{Path, PathBuf},
+  rc::Rc,
   sync::Arc,
+  time::Duration,
 };
 
 use editor::SearchOptions;
 use gpui::{
   AnyElement, App, Context, Entity, FocusHandle, Focusable, HighlightStyle, IntoElement,
-  ParentElement, Render, SharedString, Styled, StyledText, Subscription, Window, div, img,
-  prelude::*, px,
+  ParentElement, Render, SharedString, Styled, StyledText, Subscription, Task, Window, div, img,
+  prelude::*, px, size,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Selectable, Sizable as _,
+  ActiveTheme as _, Icon, IconName, Selectable, Sizable as _, VirtualListScrollHandle,
   button::{Button, ButtonVariants as _},
   h_flex,
   input::{Input, InputEvent, InputState},
   list::ListItem,
-  scroll::ScrollableElement,
+  scroll::Scrollbar,
   spinner::Spinner,
-  v_flex,
+  v_flex, v_virtual_list,
 };
 use ui::{FILE_ICON_SIZE_PX, file_icon_path_for_path_with_theme};
 
 const MAX_SEARCH_RESULTS: usize = 500;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
+const FILE_HEADER_ROW_HEIGHT: f32 = 40.0;
+const MATCH_ROW_HEIGHT: f32 = 32.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProjectSearchOpenRequest {
@@ -50,6 +55,26 @@ struct ProjectSearchFileResults {
   matches: Vec<ProjectSearchMatch>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectSearchRow {
+  File {
+    result_index: usize,
+  },
+  Match {
+    result_index: usize,
+    match_index: usize,
+  },
+}
+
+impl ProjectSearchRow {
+  fn height(self) -> f32 {
+    match self {
+      Self::File { .. } => FILE_HEADER_ROW_HEIGHT,
+      Self::Match { .. } => MATCH_ROW_HEIGHT,
+    }
+  }
+}
+
 pub(crate) struct ProjectSearchView {
   focus_handle: FocusHandle,
   checkout_root: PathBuf,
@@ -57,11 +82,16 @@ pub(crate) struct ProjectSearchView {
   query_input: Entity<InputState>,
   _query_subscription: Subscription,
   results: Vec<ProjectSearchFileResults>,
+  rows: Vec<ProjectSearchRow>,
   collapsed_files: HashSet<PathBuf>,
   options: SearchOptions,
   loading_files: bool,
+  searching: bool,
   error: Option<SharedString>,
   on_open: ProjectSearchHandler,
+  scroll_handle: VirtualListScrollHandle,
+  search_generation: u64,
+  _search_task: Task<()>,
 }
 
 impl ProjectSearchView {
@@ -82,14 +112,19 @@ impl ProjectSearchView {
       query_input,
       _query_subscription: query_subscription,
       results: Vec::new(),
+      rows: Vec::new(),
       collapsed_files: HashSet::new(),
       options: cx
         .try_global::<SearchOptions>()
         .copied()
         .unwrap_or_default(),
       loading_files,
+      searching: false,
       error: None,
       on_open,
+      scroll_handle: VirtualListScrollHandle::new(),
+      search_generation: 0,
+      _search_task: Task::ready(()),
     }
   }
 
@@ -182,20 +217,72 @@ impl ProjectSearchView {
 
   fn refresh_results(&mut self, cx: &mut Context<Self>) {
     let query = self.query_input.read(cx).value().to_string();
-    self.results = search_project_files(&self.checkout_root, &self.files, &query, self.options);
-    self.collapsed_files.retain(|path| {
-      self
-        .results
-        .iter()
-        .any(|result| result.path.as_path() == path.as_path())
+    self.search_generation = self.search_generation.wrapping_add(1);
+    let generation = self.search_generation;
+
+    if query.trim().is_empty() {
+      self.searching = false;
+      self.results.clear();
+      self.rows.clear();
+      self._search_task = Task::ready(());
+      cx.notify();
+      return;
+    }
+
+    self.searching = true;
+    self.error = None;
+    self.results.clear();
+    self.rows.clear();
+    let checkout_root = self.checkout_root.clone();
+    let files = self.files.clone();
+    let options = self.options;
+    self._search_task = cx.spawn(async move |this, cx| {
+      cx.background_executor().timer(SEARCH_DEBOUNCE).await;
+      let results = cx
+        .background_spawn(async move {
+          search_project_files(&checkout_root, files.as_ref(), &query, options)
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if this.search_generation != generation {
+          return;
+        }
+        this.searching = false;
+        this.results = results;
+        this.collapsed_files.retain(|path| {
+          this
+            .results
+            .iter()
+            .any(|result| result.path.as_path() == path.as_path())
+        });
+        this.sync_result_rows();
+        cx.notify();
+      });
     });
     cx.notify();
+  }
+
+  fn sync_result_rows(&mut self) {
+    self.rows.clear();
+    for (result_index, file) in self.results.iter().enumerate() {
+      self.rows.push(ProjectSearchRow::File { result_index });
+      if !self.collapsed_files.contains(&file.path) {
+        self.rows.extend(
+          (0..file.matches.len()).map(|match_index| ProjectSearchRow::Match {
+            result_index,
+            match_index,
+          }),
+        );
+      }
+    }
   }
 
   fn toggle_file_collapsed(&mut self, path: &Path, cx: &mut Context<Self>) {
     if !self.collapsed_files.remove(path) {
       self.collapsed_files.insert(path.to_path_buf());
     }
+    self.sync_result_rows();
     cx.notify();
   }
 
@@ -216,6 +303,99 @@ impl ProjectSearchView {
 
   fn result_count(&self) -> usize {
     self.results.iter().map(|file| file.matches.len()).sum()
+  }
+
+  fn render_result_row(&mut self, row_index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+    match *self.rows.get(row_index)? {
+      ProjectSearchRow::File { result_index } => {
+        let file = self.results.get(result_index)?;
+        Some(render_file_header(
+          file,
+          self.collapsed_files.contains(&file.path),
+          cx,
+        ))
+      }
+      ProjectSearchRow::Match {
+        result_index,
+        match_index,
+      } => {
+        let file = self.results.get(result_index)?;
+        let found = file.matches.get(match_index)?;
+        Some(render_match_row(file.path.clone(), found, cx))
+      }
+    }
+  }
+
+  fn render_results(&mut self, query_empty: bool, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let row_sizes = Rc::new(
+      self
+        .rows
+        .iter()
+        .map(|row| size(px(0.0), px(row.height())))
+        .collect::<Vec<_>>(),
+    );
+    let scroll_handle = self.scroll_handle.clone();
+    let scrollbar_handle = self.scroll_handle.clone();
+    let has_rows = !self.rows.is_empty();
+
+    div()
+      .flex_1()
+      .min_h_0()
+      .relative()
+      .overflow_hidden()
+      .when(self.loading_files, |this| {
+        this.child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_3()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(Spinner::new().small())
+            .child("Loading project files..."),
+        )
+      })
+      .when_some(self.error.clone(), |this, error| {
+        this.child(
+          div()
+            .px_4()
+            .py_3()
+            .text_sm()
+            .text_color(theme.red)
+            .child(error),
+        )
+      })
+      .when(!self.loading_files && query_empty, |this| {
+        this.child(empty_state("Search All Files", &theme))
+      })
+      .when(
+        !self.loading_files && !query_empty && self.searching && !has_rows,
+        |this| this.child(empty_state("Searching...", &theme)),
+      )
+      .when(
+        !self.loading_files && !query_empty && !self.searching && !has_rows,
+        |this| this.child(empty_state("No Results", &theme)),
+      )
+      .when(has_rows, |this| {
+        this
+          .child(
+            v_virtual_list(
+              cx.entity(),
+              "project-search-results",
+              row_sizes,
+              move |view, visible_range, _window, cx| {
+                visible_range
+                  .filter_map(|row_index| view.render_result_row(row_index, cx))
+                  .collect::<Vec<_>>()
+              },
+            )
+            .track_scroll(&scroll_handle),
+          )
+          .child(Scrollbar::vertical(&scrollbar_handle))
+      })
+      .into_any_element()
   }
 }
 
@@ -325,56 +505,18 @@ impl Render for ProjectSearchView {
                   ),
               )
               .child(
-                div()
+                h_flex()
                   .w(px(88.0))
+                  .gap_1()
+                  .items_center()
                   .text_xs()
                   .text_color(theme.muted_foreground)
+                  .when(self.searching, |this| this.child(Spinner::new().small()))
                   .child(format!("{}", result_count)),
               ),
           ),
       )
-      .child(
-        div()
-          .flex_1()
-          .min_h_0()
-          .overflow_y_scrollbar()
-          .when(self.loading_files, |this| {
-            this.child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .px_4()
-                .py_3()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(Spinner::new().small())
-                .child("Loading project files..."),
-            )
-          })
-          .when_some(self.error.clone(), |this, error| {
-            this.child(
-              div()
-                .px_4()
-                .py_3()
-                .text_sm()
-                .text_color(theme.red)
-                .child(error),
-            )
-          })
-          .when(!self.loading_files && query.trim().is_empty(), |this| {
-            this.child(empty_state("Search All Files", &theme))
-          })
-          .when(
-            !self.loading_files && !query.trim().is_empty() && self.results.is_empty(),
-            |this| this.child(empty_state("No Results", &theme)),
-          )
-          .children(
-            self
-              .results
-              .iter()
-              .map(|file| render_file_results(file, self.collapsed_files.contains(&file.path), cx)),
-          ),
-      )
+      .child(self.render_results(query.trim().is_empty(), cx))
   }
 }
 
@@ -390,7 +532,7 @@ fn empty_state(label: &'static str, theme: &gpui_component::Theme) -> AnyElement
     .into_any_element()
 }
 
-fn render_file_results(
+fn render_file_header(
   file: &ProjectSearchFileResults,
   collapsed: bool,
   cx: &mut Context<ProjectSearchView>,
@@ -424,78 +566,69 @@ fn render_file_results(
     column: None,
   };
 
-  v_flex()
+  h_flex()
+    .items_center()
+    .gap_2()
+    .px_2()
+    .py_2()
     .border_b_1()
     .border_color(theme.border)
+    .bg(theme.muted.opacity(0.35))
     .child(
-      h_flex()
-        .items_center()
-        .gap_2()
-        .px_2()
-        .py_2()
-        .bg(theme.muted.opacity(0.35))
-        .child(
-          Button::new(collapse_button_id)
-            .icon(if collapsed {
-              IconName::ChevronRight
-            } else {
-              IconName::ChevronDown
-            })
-            .ghost()
-            .xsmall()
-            .compact()
-            .tooltip(if collapsed {
-              "Expand file"
-            } else {
-              "Collapse file"
-            })
-            .on_click({
-              let entity = entity.clone();
-              move |_, _, cx| {
-                entity.update(cx, |view, cx| view.toggle_file_collapsed(&toggle_path, cx));
-              }
-            }),
-        )
-        .child(file_icon)
-        .child(
-          div()
-            .text_sm()
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .child(file_name),
-        )
-        .when(!directory.is_empty(), |this| {
-          this.child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(directory),
-          )
+      Button::new(collapse_button_id)
+        .icon(if collapsed {
+          IconName::ChevronRight
+        } else {
+          IconName::ChevronDown
         })
-        .child(div().flex_1())
-        .child(
-          div()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(file.matches.len().to_string()),
-        )
-        .child(
-          Button::new(open_button_id)
-            .label("Open File")
-            .ghost()
-            .xsmall()
-            .compact()
-            .on_click(move |_, window, cx| {
-              let request = open_request.clone();
-              entity.update(cx, |view, cx| view.open_result(request, window, cx));
-            }),
-        ),
+        .ghost()
+        .xsmall()
+        .compact()
+        .tooltip(if collapsed {
+          "Expand file"
+        } else {
+          "Collapse file"
+        })
+        .on_click({
+          let entity = entity.clone();
+          move |_, _, cx| {
+            entity.update(cx, |view, cx| view.toggle_file_collapsed(&toggle_path, cx));
+          }
+        }),
     )
-    .when(!collapsed, |this| {
-      this.children(file.matches.iter().map({
-        let file_path = path.clone();
-        move |found| render_match_row(file_path.clone(), found, cx)
-      }))
+    .child(file_icon)
+    .child(
+      div()
+        .text_sm()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .child(file_name),
+    )
+    .when(!directory.is_empty(), |this| {
+      this.child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(directory),
+      )
     })
+    .child(div().flex_1())
+    .child(
+      div()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(file.matches.len().to_string()),
+    )
+    .child(
+      Button::new(open_button_id)
+        .label("Open File")
+        .ghost()
+        .xsmall()
+        .compact()
+        .on_click(move |_, window, cx| {
+          let request = open_request.clone();
+          entity.update(cx, |view, cx| view.open_result(request, window, cx));
+        }),
+    )
     .into_any_element()
 }
 
