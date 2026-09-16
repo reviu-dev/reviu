@@ -941,8 +941,11 @@ pub struct Editor {
   collapsed_review_comments: HashSet<u64>,
   review_comment_scroll_epoch: usize,
   find_panel_open: bool,
+  replace_panel_open: bool,
   find_input: Option<Entity<InputState>>,
   find_input_subscription: Option<Subscription>,
+  replace_input: Option<Entity<InputState>>,
+  replace_input_subscription: Option<Subscription>,
   find: SearchState,
   find_scroll_epoch: usize,
   pub diff_task: Option<Task<()>>,
@@ -1448,8 +1451,11 @@ impl Editor {
       collapsed_review_comments: HashSet::new(),
       review_comment_scroll_epoch: 0,
       find_panel_open: false,
+      replace_panel_open: false,
       find_input: None,
       find_input_subscription: None,
+      replace_input: None,
+      replace_input_subscription: None,
       find: Self::initial_find_state(cx),
       find_scroll_epoch: 0,
       diff_task: None,
@@ -4043,12 +4049,51 @@ impl Editor {
     input
   }
 
+  fn ensure_replace_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.replace_input.clone() {
+      return input;
+    }
+
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder("Replace..."));
+    let subscription = cx.subscribe_in(&input, window, Self::on_replace_input_event);
+    self.replace_input = Some(input.clone());
+    self.replace_input_subscription = Some(subscription);
+    input
+  }
+
   fn focus_find_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if let Some(input) = self.find_input.clone() {
       input.update(cx, |state, cx| {
         state.focus(window, cx);
       });
     }
+  }
+
+  fn focus_replace_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(input) = self.replace_input.clone() {
+      input.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
+    }
+  }
+
+  fn toggle_replace_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.replace_panel_open = !self.replace_panel_open;
+    if self.replace_panel_open {
+      self.ensure_replace_input(window, cx);
+      cx.on_next_frame(window, |this, window, cx| {
+        this.focus_replace_input(window, cx);
+      });
+    } else {
+      cx.on_next_frame(window, |this, window, cx| {
+        this.focus_find_input(window, cx);
+      });
+    }
+    cx.notify();
   }
 
   fn is_find_input_focused(&self, window: &Window, cx: &App) -> bool {
@@ -4152,6 +4197,33 @@ impl Editor {
       }
       _ => {}
     }
+  }
+
+  fn on_replace_input_event(
+    &mut self,
+    _state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if let InputEvent::PressEnter {
+      secondary, shift, ..
+    } = event
+    {
+      if *secondary || *shift {
+        self.replace_all_find_matches(window, cx);
+      } else {
+        self.replace_current_find_match(window, cx);
+      }
+    }
+  }
+
+  fn replace_input_text(&self, cx: &App) -> String {
+    self
+      .replace_input
+      .as_ref()
+      .map(|input| input.read(cx).value().to_string())
+      .unwrap_or_default()
   }
 
   fn collect_find_matches(&self, cx: &App) -> Result<Vec<SearchMatch>, String> {
@@ -4370,6 +4442,101 @@ impl Editor {
     }
   }
 
+  fn replace_current_find_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.is_read_only || self.find.query().is_empty() {
+      return;
+    }
+
+    self.find.remember_current_query();
+    self.recompute_find_matches(true, cx);
+    let Some(range) = self.find.highlights().active_range else {
+      return;
+    };
+
+    let replacement = self.replace_input_text(cx);
+    self.selected_range = range;
+    self.replace_text_in_range(None, &replacement, window, cx);
+    self.find_next_match_with_line_height(self.measured_editor_line_height(), cx);
+  }
+
+  fn replace_all_find_matches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.is_read_only || self.find.query().is_empty() {
+      return;
+    }
+
+    self.find.remember_current_query();
+    self.recompute_find_matches(false, cx);
+    let ranges = self
+      .find
+      .matches()
+      .iter()
+      .map(|found| found.doc_range.clone())
+      .collect::<Vec<_>>();
+    if ranges.is_empty() {
+      return;
+    }
+
+    let replacement = self.replace_input_text(cx);
+    self.replace_ranges(&ranges, &replacement, window, cx);
+  }
+
+  fn replace_ranges(
+    &mut self,
+    ranges: &[Range<usize>],
+    replacement: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let selection_before = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
+    let ranges = ranges
+      .iter()
+      .cloned()
+      .map(|range| self.clamp_range_to_doc_len(range, cx))
+      .filter(|range| !range.is_empty())
+      .collect::<Vec<_>>();
+    if ranges.is_empty() {
+      return;
+    }
+
+    let first_range = ranges[0].clone();
+    let start_line = self.document.read(cx).char_to_line(first_range.start);
+    let end_line = self.document.read(cx).char_to_line(
+      ranges
+        .last()
+        .map(|range| range.end)
+        .unwrap_or(ranges[0].end),
+    );
+    self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
+
+    let transaction_id = self.document.update(cx, |doc, cx| {
+      let id = doc.buffer.transaction(Instant::now(), |buffer, tx| {
+        for range in ranges.iter().rev() {
+          buffer.replace(tx, range.clone(), replacement);
+        }
+      });
+      doc.schedule_recompute_highlights(cx);
+      cx.notify();
+      id
+    });
+    self.mark_conflict_cache_dirty();
+    self.invalidate_lines_from(start_line);
+
+    let doc_len_after = self.document.read(cx).len();
+    let new_cursor = (first_range.start + replacement.chars().count()).min(doc_len_after);
+    self.selected_range = new_cursor..new_cursor;
+    self.selection_reversed = false;
+    self.display_selection = None;
+    let selection_after = self.selected_range.clone();
+    self.record_transaction(transaction_id, selection_before, selection_after);
+
+    self.is_dirty = true;
+    let _ = window;
+    self.ensure_cursor_visible_when_hidden(cx);
+    self.refresh_find_matches_after_document_edit(cx);
+    cx.notify();
+    self.schedule_diff_recompute(cx);
+  }
+
   pub fn is_find_panel_open(&self) -> bool {
     self.find_panel_open
   }
@@ -4392,6 +4559,11 @@ impl Editor {
     self.find_scroll_epoch = self.find_scroll_epoch.saturating_add(1);
 
     if let Some(input) = self.find_input.clone() {
+      input.update(cx, |state, cx| {
+        state.set_value(String::new(), window, cx);
+      });
+    }
+    if let Some(input) = self.replace_input.clone() {
       input.update(cx, |state, cx| {
         state.set_value(String::new(), window, cx);
       });
@@ -4506,10 +4678,13 @@ impl Editor {
     }
 
     let input = self.ensure_find_input(window, cx);
+    let replace_panel_open = self.replace_panel_open;
+    let replace_input = replace_panel_open.then(|| self.ensure_replace_input(window, cx));
     let theme = cx.theme().clone();
     let total_matches = self.find.matches().len();
     let current_match = self.find.current_match_number();
     let has_matches = total_matches > 0;
+    let can_replace = has_matches && !self.is_read_only && self.find.error().is_none();
     let find_error = self.find.error().map(str::to_string);
     let has_find_error = find_error.is_some();
     let find_status = find_error
@@ -4532,6 +4707,9 @@ impl Editor {
     let next_editor = editor_entity.clone();
     let history_previous_editor = editor_entity.clone();
     let history_next_editor = editor_entity.clone();
+    let toggle_replace_editor = editor_entity.clone();
+    let replace_editor = editor_entity.clone();
+    let replace_all_editor = editor_entity.clone();
     let close_editor = editor_entity.clone();
     let mouse_down_editor = editor_entity.clone();
     let mouse_move_editor = editor_entity.clone();
@@ -4545,8 +4723,9 @@ impl Editor {
         .occlude()
         .cursor(CursorStyle::Arrow)
         .flex()
-        .items_center()
-        .gap_2()
+        .flex_col()
+        .items_stretch()
+        .gap_1()
         .bg(theme.background)
         .border_b_1()
         .border_color(theme.border)
@@ -4570,143 +4749,234 @@ impl Editor {
         })
         .child(
           div()
-            .flex_1()
-            .min_w(px(0.0))
-            .h(px(32.0))
             .flex()
             .items_center()
-            .gap_1()
-            .pl_1()
-            .pr_1()
-            .border_1()
-            .border_color(input_border)
-            .rounded_md()
-            .bg(theme.background)
+            .gap_2()
             .child(
               div()
                 .flex_1()
                 .min_w(px(0.0))
-                .capture_action(move |_: &InputMoveUp, window, cx| {
-                  history_previous_editor.update(cx, |editor, cx| {
-                    editor.find_previous_history_query(window, cx);
-                  });
-                  cx.stop_propagation();
-                })
-                .capture_action(move |_: &InputMoveDown, window, cx| {
-                  history_next_editor.update(cx, |editor, cx| {
-                    editor.find_next_history_query(window, cx);
-                  });
-                  cx.stop_propagation();
-                })
+                .h(px(32.0))
+                .flex()
+                .items_center()
+                .gap_1()
+                .pl_1()
+                .pr_1()
+                .border_1()
+                .border_color(input_border)
+                .rounded_md()
+                .bg(theme.background)
                 .child(
-                  Input::new(&input)
-                    .small()
-                    .appearance(false)
-                    .bordered(false)
-                    .focus_bordered(false),
+                  div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .capture_action(move |_: &InputMoveUp, window, cx| {
+                      history_previous_editor.update(cx, |editor, cx| {
+                        editor.find_previous_history_query(window, cx);
+                      });
+                      cx.stop_propagation();
+                    })
+                    .capture_action(move |_: &InputMoveDown, window, cx| {
+                      history_next_editor.update(cx, |editor, cx| {
+                        editor.find_next_history_query(window, cx);
+                      });
+                      cx.stop_propagation();
+                    })
+                    .child(
+                      Input::new(&input)
+                        .small()
+                        .appearance(false)
+                        .bordered(false)
+                        .focus_bordered(false),
+                    ),
+                )
+                .child(
+                  h_flex()
+                    .flex_none()
+                    .gap_1()
+                    .child(
+                      Button::new("editor-find-case")
+                        .label("Aa")
+                        .ghost()
+                        .xsmall()
+                        .compact()
+                        .selected(case_sensitive)
+                        .tooltip("Match case")
+                        .on_click(move |_, window, cx| {
+                          case_editor.update(cx, |editor, cx| {
+                            editor.toggle_find_case_sensitive(window, cx);
+                          });
+                        }),
+                    )
+                    .child(
+                      Button::new("editor-find-word")
+                        .label("wd")
+                        .ghost()
+                        .xsmall()
+                        .compact()
+                        .selected(whole_word)
+                        .tooltip("Whole word")
+                        .on_click(move |_, window, cx| {
+                          whole_word_editor.update(cx, |editor, cx| {
+                            editor.toggle_find_whole_word(window, cx);
+                          });
+                        }),
+                    )
+                    .child(
+                      Button::new("editor-find-regex")
+                        .label(".*")
+                        .ghost()
+                        .xsmall()
+                        .compact()
+                        .selected(regex)
+                        .tooltip("Use regex")
+                        .on_click(move |_, window, cx| {
+                          regex_editor.update(cx, |editor, cx| {
+                            editor.toggle_find_regex(window, cx);
+                          });
+                        }),
+                    ),
                 ),
             )
             .child(
-              h_flex()
-                .flex_none()
-                .gap_1()
+              div()
+                .w(px(224.0))
+                .flex()
+                .items_center()
+                .gap_2()
                 .child(
-                  Button::new("editor-find-case")
-                    .label("Aa")
+                  Button::new("editor-toggle-replace")
+                    .icon(UiIconName::Replace)
                     .ghost()
                     .xsmall()
                     .compact()
-                    .selected(case_sensitive)
-                    .tooltip("Match case")
+                    .selected(replace_panel_open)
+                    .tooltip("Toggle replace")
                     .on_click(move |_, window, cx| {
-                      case_editor.update(cx, |editor, cx| {
-                        editor.toggle_find_case_sensitive(window, cx);
+                      toggle_replace_editor.update(cx, |editor, cx| {
+                        editor.toggle_replace_panel(window, cx);
+                      });
+                    }),
+                )
+                .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border))
+                .child(
+                  Button::new("editor-find-prev")
+                    .icon(IconName::ChevronLeft)
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .tooltip("Previous match")
+                    .disabled(!has_matches)
+                    .on_click(move |_, window, cx| {
+                      previous_editor.update(cx, |editor, cx| {
+                        editor.find_previous_match(window, cx);
                       });
                     }),
                 )
                 .child(
-                  Button::new("editor-find-word")
-                    .label("wd")
+                  Button::new("editor-find-next")
+                    .icon(IconName::ChevronRight)
                     .ghost()
                     .xsmall()
                     .compact()
-                    .selected(whole_word)
-                    .tooltip("Whole word")
+                    .tooltip("Next match")
+                    .disabled(!has_matches)
                     .on_click(move |_, window, cx| {
-                      whole_word_editor.update(cx, |editor, cx| {
-                        editor.toggle_find_whole_word(window, cx);
+                      next_editor.update(cx, |editor, cx| {
+                        editor.find_next_match(window, cx);
                       });
                     }),
                 )
                 .child(
-                  Button::new("editor-find-regex")
-                    .label(".*")
+                  div()
+                    .w(px(88.0))
+                    .text_xs()
+                    .text_color(if has_find_error {
+                      theme.red
+                    } else {
+                      theme.muted_foreground
+                    })
+                    .child(find_status),
+                )
+                .child(
+                  Button::new("editor-find-close")
+                    .icon(IconName::Close)
                     .ghost()
                     .xsmall()
                     .compact()
-                    .selected(regex)
-                    .tooltip("Use regex")
+                    .tooltip("Close find")
                     .on_click(move |_, window, cx| {
-                      regex_editor.update(cx, |editor, cx| {
-                        editor.toggle_find_regex(window, cx);
+                      close_editor.update(cx, |editor, cx| {
+                        editor.close_find_panel(window, cx);
                       });
                     }),
                 ),
             ),
         )
-        .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border))
-        .child(
-          Button::new("editor-find-prev")
-            .icon(IconName::ChevronLeft)
-            .ghost()
-            .xsmall()
-            .compact()
-            .tooltip("Previous match")
-            .disabled(!has_matches)
-            .on_click(move |_, window, cx| {
-              previous_editor.update(cx, |editor, cx| {
-                editor.find_previous_match(window, cx);
-              });
-            }),
-        )
-        .child(
-          Button::new("editor-find-next")
-            .icon(IconName::ChevronRight)
-            .ghost()
-            .xsmall()
-            .compact()
-            .tooltip("Next match")
-            .disabled(!has_matches)
-            .on_click(move |_, window, cx| {
-              next_editor.update(cx, |editor, cx| {
-                editor.find_next_match(window, cx);
-              });
-            }),
-        )
-        .child(
-          div()
-            .w(px(88.0))
-            .text_xs()
-            .text_color(if has_find_error {
-              theme.red
-            } else {
-              theme.muted_foreground
-            })
-            .child(find_status),
-        )
-        .child(
-          Button::new("editor-find-close")
-            .icon(IconName::Close)
-            .ghost()
-            .xsmall()
-            .compact()
-            .tooltip("Close find")
-            .on_click(move |_, window, cx| {
-              close_editor.update(cx, |editor, cx| {
-                editor.close_find_panel(window, cx);
-              });
-            }),
-        )
+        .when_some(replace_input, |this, replace_input| {
+          this.child(
+            div()
+              .flex()
+              .items_center()
+              .gap_2()
+              .child(
+                div()
+                  .flex_1()
+                  .min_w(px(0.0))
+                  .h(px(32.0))
+                  .flex()
+                  .items_center()
+                  .pl_1()
+                  .pr_1()
+                  .border_1()
+                  .border_color(theme.border)
+                  .rounded_md()
+                  .bg(theme.background)
+                  .child(
+                    Input::new(&replace_input)
+                      .small()
+                      .appearance(false)
+                      .bordered(false)
+                      .focus_bordered(false),
+                  ),
+              )
+              .child(
+                div()
+                  .w(px(224.0))
+                  .flex()
+                  .items_center()
+                  .gap_2()
+                  .child(
+                    Button::new("editor-replace-current")
+                      .icon(UiIconName::Replace)
+                      .ghost()
+                      .xsmall()
+                      .compact()
+                      .tooltip("Replace current match")
+                      .disabled(!can_replace)
+                      .on_click(move |_, window, cx| {
+                        replace_editor.update(cx, |editor, cx| {
+                          editor.replace_current_find_match(window, cx);
+                        });
+                      }),
+                  )
+                  .child(
+                    Button::new("editor-replace-all")
+                      .icon(UiIconName::ReplaceAll)
+                      .ghost()
+                      .xsmall()
+                      .compact()
+                      .tooltip("Replace all matches")
+                      .disabled(!can_replace)
+                      .on_click(move |_, window, cx| {
+                        replace_all_editor.update(cx, |editor, cx| {
+                          editor.replace_all_find_matches(window, cx);
+                        });
+                      }),
+                  ),
+              ),
+          )
+        })
         .into_any_element(),
     )
   }
@@ -11802,8 +12072,11 @@ pub mod tests {
           collapsed_review_comments: HashSet::new(),
           review_comment_scroll_epoch: 0,
           find_panel_open: false,
+          replace_panel_open: false,
           find_input: None,
           find_input_subscription: None,
+          replace_input: None,
+          replace_input_subscription: None,
           find: Editor::initial_find_state(cx),
           find_scroll_epoch: 0,
           review_comments: Vec::new(),
@@ -15060,6 +15333,85 @@ pub mod tests {
         editor.scroll_handle.offset().x < px(0.0),
         "find should reveal matches outside the horizontal viewport"
       );
+    });
+  }
+
+  #[gpui::test]
+  fn test_replace_current_find_match(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar foo");
+    let editor = ctx.editor.clone();
+    let (_root, cx) = ctx
+      .cx
+      .add_window_view(|window, cx| gpui_component::Root::new(editor.clone(), window, cx));
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      editor.open_find_panel(window, cx);
+      let input = editor.ensure_replace_input(window, cx);
+      input.update(cx, |input, cx| input.set_value("qux", window, cx));
+      editor.find.set_query("foo".to_string());
+      editor.refresh_find_matches(px(20.0), false, cx);
+
+      editor.replace_current_find_match(window, cx);
+
+      let document = editor.document.read(cx);
+      assert_eq!(document.slice_to_string(0..document.len()), "qux bar foo");
+      assert_eq!(editor.find.matches().len(), 1);
+      assert_eq!(editor.find.highlights().active_range, Some(8..11));
+    });
+  }
+
+  #[gpui::test]
+  fn test_replace_all_find_matches_is_one_transaction(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar foo");
+    let editor = ctx.editor.clone();
+    let (_root, cx) = ctx
+      .cx
+      .add_window_view(|window, cx| gpui_component::Root::new(editor.clone(), window, cx));
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      editor.open_find_panel(window, cx);
+      let input = editor.ensure_replace_input(window, cx);
+      input.update(cx, |input, cx| input.set_value("qux", window, cx));
+      editor.find.set_query("foo".to_string());
+      editor.refresh_find_matches(px(20.0), false, cx);
+
+      editor.replace_all_find_matches(window, cx);
+
+      let document = editor.document.read(cx);
+      assert_eq!(document.slice_to_string(0..document.len()), "qux bar qux");
+      assert_eq!(editor.find.matches().len(), 0);
+      assert_eq!(editor.undo_stack.len(), 1);
+
+      crate::actions::undo(editor, &crate::actions::Undo, window, cx);
+      let document = editor.document.read(cx);
+      assert_eq!(document.slice_to_string(0..document.len()), "foo bar foo");
+    });
+  }
+
+  #[gpui::test]
+  fn test_replace_find_match_does_nothing_when_read_only(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar foo");
+    let editor = ctx.editor.clone();
+    let (_root, cx) = ctx
+      .cx
+      .add_window_view(|window, cx| gpui_component::Root::new(editor.clone(), window, cx));
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      editor.is_read_only = true;
+      editor.open_find_panel(window, cx);
+      let input = editor.ensure_replace_input(window, cx);
+      input.update(cx, |input, cx| input.set_value("qux", window, cx));
+      editor.find.set_query("foo".to_string());
+      editor.refresh_find_matches(px(20.0), false, cx);
+
+      editor.replace_all_find_matches(window, cx);
+
+      let document = editor.document.read(cx);
+      assert_eq!(document.slice_to_string(0..document.len()), "foo bar foo");
+      assert!(editor.undo_stack.is_empty());
     });
   }
 

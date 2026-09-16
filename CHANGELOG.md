@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.1
 
+### Editor Replace
+
+The editor find bar now includes replace controls for the current match or all matches, with replace-all grouped into one undo step.
+
 ### Editor Find History
 
 File search now remembers submitted queries in the current editor, so the search field can cycle through previous searches with Up and Down.
