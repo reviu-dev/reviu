@@ -2317,6 +2317,13 @@ impl SessionPage {
         );
     }
 
+    if active_editor
+      .as_ref()
+      .is_some_and(|editor| editor.read(cx).is_find_panel_open())
+    {
+      toolbar = toolbar.without_bottom_border();
+    }
+
     toolbar.render(cx)
   }
 

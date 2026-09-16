@@ -48,6 +48,7 @@ pub(crate) struct DiffToolbar {
   split: Option<SplitControl>,
   after_toggles: Vec<AnyElement>,
   filled: bool,
+  bottom_border: bool,
 }
 
 impl DiffToolbar {
@@ -60,6 +61,7 @@ impl DiffToolbar {
       split: None,
       after_toggles: Vec::new(),
       filled: false,
+      bottom_border: true,
     }
   }
 
@@ -86,6 +88,11 @@ impl DiffToolbar {
   /// A button of the host, after the shared toggles.
   pub(crate) fn after_toggles(mut self, element: AnyElement) -> Self {
     self.after_toggles.push(element);
+    self
+  }
+
+  pub(crate) fn without_bottom_border(mut self) -> Self {
+    self.bottom_border = false;
     self
   }
 
@@ -117,8 +124,9 @@ impl DiffToolbar {
       .gap_3()
       .text_xs()
       .px_3()
-      .border_b_1()
-      .border_color(theme.border);
+      .when(self.bottom_border, |row| {
+        row.border_b_1().border_color(theme.border)
+      });
     if self.filled {
       row = row.bg(theme.sidebar);
     }

@@ -4021,7 +4021,7 @@ impl Editor {
       return input;
     }
 
-    let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in file..."));
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
     let subscription = cx.subscribe_in(&input, window, Self::on_find_input_event);
     self.find_input = Some(input.clone());
     self.find_input_subscription = Some(subscription);
@@ -4445,6 +4445,15 @@ impl Editor {
     let current_match = self.find.current_match_number();
     let has_matches = total_matches > 0;
     let find_error = self.find.error().map(str::to_string);
+    let has_find_error = find_error.is_some();
+    let find_status = find_error
+      .map(|error| format!("Invalid: {error}"))
+      .unwrap_or_else(|| format!("{}/{}", current_match, total_matches));
+    let input_border = if has_find_error {
+      theme.red
+    } else {
+      theme.border
+    };
     let options = self.find.options();
     let case_sensitive = options.case_sensitive;
     let whole_word = options.whole_word;
@@ -4462,19 +4471,17 @@ impl Editor {
 
     Some(
       div()
-        .absolute()
-        .top(px(8.0))
-        .right(px(12.0))
-        .w(px(520.0))
-        .p_2()
+        .w_full()
+        .px_2()
+        .py_1p5()
         .occlude()
+        .cursor(CursorStyle::Arrow)
         .flex()
         .items_center()
         .gap_2()
         .bg(theme.background)
-        .border_1()
+        .border_b_1()
         .border_color(theme.border)
-        .rounded(theme.radius)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
           mouse_down_editor.update(cx, |editor, cx| {
             editor.clear_hovered_hunk_for_overlay(cx);
@@ -4497,64 +4504,77 @@ impl Editor {
           div()
             .flex_1()
             .min_w(px(0.0))
-            .child(Input::new(&input).small().border_color(theme.border)),
-        )
-        .child(
-          div()
-            .w(px(88.0))
-            .text_xs()
-            .text_color(theme.muted_foreground)
+            .h(px(32.0))
+            .flex()
+            .items_center()
+            .gap_1()
+            .pl_1()
+            .pr_1()
+            .border_1()
+            .border_color(input_border)
+            .rounded_md()
+            .bg(theme.background)
             .child(
-              find_error
-                .map(|error| format!("Invalid: {error}"))
-                .unwrap_or_else(|| format!("{}/{}", current_match, total_matches)),
+              div().flex_1().min_w(px(0.0)).child(
+                Input::new(&input)
+                  .small()
+                  .appearance(false)
+                  .bordered(false)
+                  .focus_bordered(false),
+              ),
+            )
+            .child(
+              h_flex()
+                .flex_none()
+                .gap_1()
+                .child(
+                  Button::new("editor-find-case")
+                    .label("Aa")
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .selected(case_sensitive)
+                    .tooltip("Match case")
+                    .on_click(move |_, window, cx| {
+                      case_editor.update(cx, |editor, cx| {
+                        editor.toggle_find_case_sensitive(window, cx);
+                      });
+                    }),
+                )
+                .child(
+                  Button::new("editor-find-word")
+                    .label("wd")
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .selected(whole_word)
+                    .tooltip("Whole word")
+                    .on_click(move |_, window, cx| {
+                      whole_word_editor.update(cx, |editor, cx| {
+                        editor.toggle_find_whole_word(window, cx);
+                      });
+                    }),
+                )
+                .child(
+                  Button::new("editor-find-regex")
+                    .label(".*")
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .selected(regex)
+                    .tooltip("Use regex")
+                    .on_click(move |_, window, cx| {
+                      regex_editor.update(cx, |editor, cx| {
+                        editor.toggle_find_regex(window, cx);
+                      });
+                    }),
+                ),
             ),
         )
-        .child(
-          Button::new("editor-find-case")
-            .label("Aa")
-            .ghost()
-            .xsmall()
-            .compact()
-            .selected(case_sensitive)
-            .tooltip("Match case")
-            .on_click(move |_, window, cx| {
-              case_editor.update(cx, |editor, cx| {
-                editor.toggle_find_case_sensitive(window, cx);
-              });
-            }),
-        )
-        .child(
-          Button::new("editor-find-word")
-            .label("ab")
-            .ghost()
-            .xsmall()
-            .compact()
-            .selected(whole_word)
-            .tooltip("Whole word")
-            .on_click(move |_, window, cx| {
-              whole_word_editor.update(cx, |editor, cx| {
-                editor.toggle_find_whole_word(window, cx);
-              });
-            }),
-        )
-        .child(
-          Button::new("editor-find-regex")
-            .label(".*")
-            .ghost()
-            .xsmall()
-            .compact()
-            .selected(regex)
-            .tooltip("Use regex")
-            .on_click(move |_, window, cx| {
-              regex_editor.update(cx, |editor, cx| {
-                editor.toggle_find_regex(window, cx);
-              });
-            }),
-        )
+        .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border))
         .child(
           Button::new("editor-find-prev")
-            .icon(IconName::ArrowUp)
+            .icon(IconName::ChevronLeft)
             .ghost()
             .xsmall()
             .compact()
@@ -4568,7 +4588,7 @@ impl Editor {
         )
         .child(
           Button::new("editor-find-next")
-            .icon(IconName::ArrowDown)
+            .icon(IconName::ChevronRight)
             .ghost()
             .xsmall()
             .compact()
@@ -4579,6 +4599,17 @@ impl Editor {
                 editor.find_next_match(window, cx);
               });
             }),
+        )
+        .child(
+          div()
+            .w(px(88.0))
+            .text_xs()
+            .text_color(if has_find_error {
+              theme.red
+            } else {
+              theme.muted_foreground
+            })
+            .child(find_status),
         )
         .child(
           Button::new("editor-find-close")
@@ -10347,8 +10378,8 @@ impl Render for Editor {
       )
       .flex()
       .flex_col()
-      .child(content)
       .when_some(find_panel, |el, panel| el.child(panel))
+      .child(content)
   }
 }
 
