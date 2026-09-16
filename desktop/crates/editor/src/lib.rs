@@ -7,6 +7,7 @@ mod editor_element;
 mod gutter_element;
 mod projection;
 mod scrollbar_element;
+mod search;
 mod settings;
 mod text_offsets;
 
