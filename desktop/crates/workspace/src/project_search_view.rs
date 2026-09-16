@@ -29,7 +29,7 @@ const MAX_SEARCH_RESULTS: usize = 500;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
 const FILE_HEADER_ROW_HEIGHT: f32 = 40.0;
-const MATCH_ROW_HEIGHT: f32 = 32.0;
+const MATCH_ROW_HEIGHT: f32 = 36.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProjectSearchOpenRequest {
@@ -568,6 +568,7 @@ fn render_file_header(
 
   h_flex()
     .w_full()
+    .h(px(FILE_HEADER_ROW_HEIGHT))
     .items_center()
     .gap_2()
     .px_2()
@@ -655,6 +656,7 @@ fn render_match_row(
     column
   ))
   .w_full()
+  .h(px(MATCH_ROW_HEIGHT))
   .py_1p5()
   .on_click(move |_, window, cx| {
     let request = request.clone();
