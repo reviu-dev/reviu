@@ -894,6 +894,8 @@ pub enum AgentChatPanelEvent {
   OpenConversationRequested { conversation_id: String },
   /// User asked to move the blocked draft to an isolated worktree session.
   NewWorktreeSessionRequested { draft: String },
+  /// User asked the host to replace this pane with a fresh chat.
+  NewSessionInPaneRequested,
   /// User asked the host to hide the chat pane.
   CloseRequested,
   /// User asked the host to rearrange the split pane holding this chat.

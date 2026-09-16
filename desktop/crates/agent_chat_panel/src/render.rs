@@ -2093,6 +2093,17 @@ impl Render for AgentChatPanel {
                   let panel = cx.entity().clone();
                   this
                     .child(
+                      Button::new("agent-chat-new-in-pane")
+                        .debug_selector(|| "agent-chat-new-in-pane".to_string())
+                        .icon(IconName::Plus)
+                        .xsmall()
+                        .ghost()
+                        .tooltip("New chat in this pane")
+                        .on_click(cx.listener(|_, _, _, cx| {
+                          cx.emit(AgentChatPanelEvent::NewSessionInPaneRequested)
+                        })),
+                    )
+                    .child(
                       Button::new("agent-chat-pane-actions")
                         .debug_selector(|| "agent-chat-pane-actions".to_string())
                         .icon(IconName::Ellipsis)

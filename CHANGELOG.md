@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.1
 
+### New Chat In Split Panes
+
+Split chat panes now include a new chat button that replaces only that conversation pane, keeping adjacent terminals, files or diffs in place for the next task.
+
 ### Terminal File Drops
 
 Dropping files or folders onto the integrated terminal now inserts their shell-escaped paths without running the command, so paths can be used as arguments just like in native terminals.

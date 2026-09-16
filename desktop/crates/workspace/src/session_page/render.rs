@@ -7090,6 +7090,88 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn split_chat_header_new_chat_replaces_only_the_chat_pane(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-chat-pane-new");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let first_panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    first_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    let first_id = first_panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    let first_tab = CenterTab::chat_for(first_id.clone());
+
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(first_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(CenterTab::terminal(1));
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let new_chat = cx
+      .debug_bounds("agent-chat-new-in-pane")
+      .expect("new chat button");
+    cx.simulate_click(new_chat.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let second_id = page.read_with(cx, |page, cx| {
+      page
+        .agent_chat_view
+        .as_ref()
+        .expect("new active panel")
+        .read(cx)
+        .current_conversation()
+        .id
+        .clone()
+    });
+    assert_ne!(second_id, first_id);
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.center_layout.surface_count(), 2);
+      assert!(!page.center_layout.contains_tab(&first_tab));
+      assert!(
+        page
+          .center_layout
+          .contains_tab(&CenterTab::chat_for(second_id.clone()))
+      );
+      assert!(page.center_layout.contains_tab(&CenterTab::terminal(1)));
+      assert!(
+        page
+          .background_chat_panels
+          .iter()
+          .any(|(id, panel)| id == &first_id && panel.entity_id() == first_panel.entity_id()),
+        "the replaced chat stays available in the background"
+      );
+      assert_eq!(
+        page
+          .agent_chat_view
+          .as_ref()
+          .unwrap()
+          .read(cx)
+          .project_root(),
+        repo.path.as_path()
+      );
+    });
+    assert!(cx.debug_bounds("session-center-terminal").is_some());
+    assert!(cx.debug_bounds("session-conversation-pane").is_some());
+  }
+
+  #[gpui::test]
   async fn split_diff_header_close_closes_only_the_file_pane(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-center-file-pane-close");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");

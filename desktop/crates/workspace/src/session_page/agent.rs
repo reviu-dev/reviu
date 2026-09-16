@@ -415,6 +415,10 @@ impl SessionPage {
           let repo_root = panel.read(cx).project_root().to_path_buf();
           this.new_worktree_session_in_with_draft(repo_root, None, Some(draft.clone()), window, cx);
         }
+        AgentChatPanelEvent::NewSessionInPaneRequested => {
+          let tab = Self::chat_tab_for_panel(panel, cx);
+          this.new_session_in_chat_pane(panel.clone(), tab, window, cx);
+        }
         AgentChatPanelEvent::CloseRequested => {
           let tab = Self::chat_tab_for_panel(panel, cx);
           this.close_center_surface(tab, window, cx);
@@ -1341,6 +1345,173 @@ impl SessionPage {
     self.sync_active_checkout(window, cx);
     self.reveal_active_session_chat(window, cx);
     cx.notify();
+  }
+
+  fn new_session_in_chat_pane(
+    &mut self,
+    old_panel: Entity<AgentChatPanel>,
+    old_tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let (project_root, store, agent_id) = old_panel.read_with(cx, |panel, _| {
+      (
+        panel.project_root().to_path_buf(),
+        panel.store(),
+        panel.backend_kind().clone(),
+      )
+    });
+    if self.fallback_repo.is_none()
+      && self.project_root(cx).as_deref() == Some(project_root.as_path())
+    {
+      self.chat_store = store.clone();
+    }
+
+    let old_panel_id = old_panel.entity_id();
+    let old_was_active = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.entity_id() == old_panel_id);
+    self.park_replaced_chat_panel(old_panel, cx);
+    if !old_was_active {
+      self.park_visible_active_chat_panel(cx);
+    }
+
+    let view =
+      self.build_chat_panel_with_agent(project_root, store, None, Some(agent_id), window, cx);
+    view.update(cx, |panel, _| panel.set_active_conversation(true));
+    self.agent_chat_view = Some(view.clone());
+
+    let new_tab = Self::chat_tab_for_panel(&view, cx);
+    let replaced_in_layout = self.center_layout.contains_tab(&old_tab);
+    self.replace_center_tab_references(&old_tab, &new_tab);
+    if replaced_in_layout {
+      self.center_layout.replace_tab(&old_tab, &new_tab);
+      self
+        .center_layout
+        .set_active_surface(CenterSurface::from_tab(new_tab.clone()));
+    } else {
+      self.center_layout = CenterLayout::single(CenterSurface::from_tab(new_tab.clone()));
+    }
+
+    if self.center_layout.surface_count() > 1 {
+      let representative = self
+        .active_center_tab
+        .clone()
+        .filter(|tab| tab != &old_tab && self.center_layout.contains_tab(tab))
+        .unwrap_or_else(|| new_tab.clone());
+      self.remember_center_layout_tab(representative);
+    } else {
+      self.remember_center_tab(new_tab, cx);
+    }
+
+    self.center = CenterView::Conversation;
+    self.evict_parked_chat_panels(cx);
+    self.sync_agent_chat_close_control(cx);
+    self.refresh_session_list(cx);
+    self.sync_active_checkout(window, cx);
+    self.focus_agent_input_on_next_frame(window, cx);
+    self.persist_current_center_workspace(cx);
+    cx.notify();
+  }
+
+  fn park_replaced_chat_panel(&mut self, panel: Entity<AgentChatPanel>, cx: &mut Context<Self>) {
+    let panel_id = panel.entity_id();
+    let conversation_id = panel.read(cx).current_conversation().id.clone();
+    let was_active = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|active| active.entity_id() == panel_id);
+    if was_active {
+      self.agent_chat_view = None;
+    }
+    self
+      .background_chat_panels
+      .retain(|(_, parked)| parked.entity_id() != panel_id);
+
+    let keep = {
+      let panel = panel.read(cx);
+      panel.has_persistable_content() || panel.has_unsent_prompt(cx) || !panel.is_parked()
+    };
+    if !keep {
+      let repo_root = panel.read(cx).project_root().to_path_buf();
+      let store = panel.read(cx).store();
+      if let Some(store) = store {
+        self.cleanup_session_worktree(repo_root, store, &conversation_id, cx);
+      }
+      return;
+    }
+
+    panel.update(cx, |panel, cx| {
+      panel.set_active_conversation(false);
+      panel.persist_now(cx);
+    });
+    self
+      .background_chat_panels
+      .insert(0, (conversation_id, panel));
+  }
+
+  fn park_visible_active_chat_panel(&mut self, cx: &mut Context<Self>) {
+    let Some(panel) = self.agent_chat_view.take() else {
+      return;
+    };
+    let conversation_id = panel.read(cx).current_conversation().id.clone();
+    self
+      .background_chat_panels
+      .retain(|(_, parked)| parked.entity_id() != panel.entity_id());
+    panel.update(cx, |panel, cx| {
+      panel.set_active_conversation(false);
+      panel.persist_now(cx);
+    });
+    self
+      .background_chat_panels
+      .insert(0, (conversation_id, panel));
+  }
+
+  fn replace_center_tab_references(&mut self, old_tab: &CenterTab, new_tab: &CenterTab) {
+    fn replace_in_tabs(tabs: &mut Vec<CenterTab>, old_tab: &CenterTab, new_tab: &CenterTab) {
+      for tab in tabs.iter_mut() {
+        if tab == old_tab {
+          *tab = new_tab.clone();
+        }
+      }
+      let mut seen = Vec::new();
+      tabs.retain(|tab| {
+        if seen.iter().any(|seen_tab| seen_tab == tab) {
+          false
+        } else {
+          seen.push(tab.clone());
+          true
+        }
+      });
+    }
+
+    replace_in_tabs(&mut self.center_tabs, old_tab, new_tab);
+    replace_in_tabs(&mut self.center_tab_history, old_tab, new_tab);
+    for tabs in self.center_tabs_by_checkout.values_mut() {
+      replace_in_tabs(tabs, old_tab, new_tab);
+    }
+    for tab in self.center_active_tab_by_checkout.values_mut() {
+      if tab == old_tab {
+        *tab = new_tab.clone();
+      }
+    }
+    if self.active_center_tab.as_ref() == Some(old_tab) {
+      self.active_center_tab = Some(new_tab.clone());
+    }
+
+    let layouts = std::mem::take(&mut self.center_layouts_by_tab);
+    for (key, mut layout) in layouts {
+      if layout.contains_tab(old_tab) {
+        layout.replace_tab(old_tab, new_tab);
+      }
+      let key = if key == *old_tab {
+        new_tab.clone()
+      } else {
+        key
+      };
+      self.center_layouts_by_tab.insert(key, layout);
+    }
   }
 
   /// A session in its own worktree that never went anywhere: no reason to
