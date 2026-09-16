@@ -6,6 +6,7 @@ pub(super) enum CenterTabKind {
   File,
   Diff,
   InteractiveRebase,
+  ProjectSearch,
   Terminal,
 }
 
@@ -145,6 +146,17 @@ impl CenterTab {
     }
   }
 
+  pub(super) fn project_search() -> Self {
+    Self {
+      kind: CenterTabKind::ProjectSearch,
+      path: None,
+      conversation_id: None,
+      snapshot: None,
+      terminal_id: None,
+      untitled_id: None,
+    }
+  }
+
   pub(super) fn terminal(id: u64) -> Self {
     Self {
       kind: CenterTabKind::Terminal,
@@ -183,7 +195,10 @@ impl CenterTab {
   pub(super) fn is_closeable(&self) -> bool {
     match self.kind {
       CenterTabKind::Chat => self.conversation_id.is_some(),
-      CenterTabKind::File | CenterTabKind::Diff | CenterTabKind::Terminal => true,
+      CenterTabKind::File
+      | CenterTabKind::Diff
+      | CenterTabKind::ProjectSearch
+      | CenterTabKind::Terminal => true,
       CenterTabKind::InteractiveRebase => false,
     }
   }

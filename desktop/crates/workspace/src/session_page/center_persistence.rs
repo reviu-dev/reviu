@@ -81,6 +81,7 @@ impl SessionPage {
         terminal_id: None,
         untitled_id: None,
       }),
+      PersistedCenterTab::ProjectSearch => Some(CenterTab::project_search()),
       PersistedCenterTab::Terminal { key } => terminals.get(key).cloned(),
     }
   }

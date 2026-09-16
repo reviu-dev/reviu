@@ -17,6 +17,7 @@ pub(super) enum PersistedCenterTab {
     path: std::path::PathBuf,
     snapshot: Option<CenterTabSnapshot>,
   },
+  ProjectSearch,
   Terminal {
     key: u64,
   },
@@ -56,6 +57,7 @@ pub(super) enum CenterSurface {
   Chat(CenterTab),
   Editor(CenterTab),
   InteractiveRebase(CenterTab),
+  ProjectSearch(CenterTab),
   Terminal(CenterTab),
 }
 
@@ -65,15 +67,18 @@ impl CenterSurface {
       CenterTabKind::Chat => Self::Chat(tab),
       CenterTabKind::File | CenterTabKind::Diff => Self::Editor(tab),
       CenterTabKind::InteractiveRebase => Self::InteractiveRebase(tab),
+      CenterTabKind::ProjectSearch => Self::ProjectSearch(tab),
       CenterTabKind::Terminal => Self::Terminal(tab),
     }
   }
 
   pub(super) fn tab(&self) -> &CenterTab {
     match self {
-      Self::Chat(tab) | Self::Editor(tab) | Self::InteractiveRebase(tab) | Self::Terminal(tab) => {
-        tab
-      }
+      Self::Chat(tab)
+      | Self::Editor(tab)
+      | Self::InteractiveRebase(tab)
+      | Self::ProjectSearch(tab)
+      | Self::Terminal(tab) => tab,
     }
   }
 }
@@ -572,6 +577,7 @@ pub(super) fn persisted_center_tab(
       path: tab.path.clone()?,
       snapshot: tab.snapshot.clone(),
     }),
+    CenterTabKind::ProjectSearch => Some(PersistedCenterTab::ProjectSearch),
     CenterTabKind::Terminal => Some(PersistedCenterTab::Terminal {
       key: terminal_keys.get(&tab.terminal_id()?).copied()?,
     }),

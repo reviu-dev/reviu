@@ -33,6 +33,7 @@ sha2 = { workspace = true }
 sentry = { workspace = true }
 log = { workspace = true }
 uuid = { workspace = true }
+regex = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

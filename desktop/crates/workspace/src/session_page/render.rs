@@ -442,6 +442,7 @@ impl SessionPage {
       CenterTabKind::File => format!("session-center-tab-file-{}", path_name()),
       CenterTabKind::Diff => format!("session-center-tab-diff-{}", path_name()),
       CenterTabKind::InteractiveRebase => "session-center-tab-rebase".to_string(),
+      CenterTabKind::ProjectSearch => "session-center-tab-project-search".to_string(),
       CenterTabKind::Terminal => format!(
         "session-center-tab-terminal-{}",
         tab.terminal_id().unwrap_or_default()
@@ -594,6 +595,7 @@ impl SessionPage {
         Some(format!("{prefix}{name}"))
       }
       CenterTabKind::InteractiveRebase => Some("Interactive rebase".to_string()),
+      CenterTabKind::ProjectSearch => Some("Project Search".to_string()),
       CenterTabKind::Terminal => Some(self.terminal_label(tab, cx)),
     }
   }
@@ -617,6 +619,10 @@ impl SessionPage {
         .size_3()
         .text_color(theme.muted_foreground)
         .into_any_element(),
+      CenterTabKind::ProjectSearch => gpui_component::Icon::new(UiIconName::Search)
+        .size_3()
+        .text_color(theme.muted_foreground)
+        .into_any_element(),
       CenterTabKind::Terminal => gpui_component::Icon::new(UiIconName::Terminal)
         .size_3()
         .text_color(theme.muted_foreground)
@@ -629,6 +635,7 @@ impl SessionPage {
       CenterTabKind::Chat => "session-center-tab-agent-icon",
       CenterTabKind::File | CenterTabKind::Diff => "session-center-tab-file-icon",
       CenterTabKind::InteractiveRebase => "session-center-tab-rebase-icon",
+      CenterTabKind::ProjectSearch => "session-center-tab-project-search-icon",
       CenterTabKind::Terminal => "session-center-tab-terminal-icon",
     }
   }
@@ -1464,6 +1471,7 @@ impl SessionPage {
       CenterSurface::InteractiveRebase(_) => {
         SharedString::from("session-center-interactive-rebase")
       }
+      CenterSurface::ProjectSearch(_) => SharedString::from("session-center-project-search"),
       CenterSurface::Terminal(tab) => SharedString::from(format!(
         "session-center-terminal-{}",
         tab.terminal_id().unwrap_or_default()
@@ -1689,6 +1697,7 @@ impl SessionPage {
     match surface {
       CenterSurface::Chat(tab) => self.render_conversation(Some(tab), cx),
       CenterSurface::InteractiveRebase(_) => self.render_interactive_rebase(cx),
+      CenterSurface::ProjectSearch(_) => self.render_project_search(cx),
       CenterSurface::Terminal(tab) => self.render_terminal_surface(tab.clone(), cx),
       CenterSurface::Editor(tab) => {
         let previous_center = self.center;
@@ -1701,6 +1710,14 @@ impl SessionPage {
         view
       }
     }
+  }
+
+  fn render_project_search(&self, cx: &mut Context<Self>) -> AnyElement {
+    self
+      .project_search_view
+      .as_ref()
+      .map(|view| view.clone().into_any_element())
+      .unwrap_or_else(|| self.render_center_empty_state(cx))
   }
 
   fn render_center_drop_overlay(
@@ -1753,6 +1770,7 @@ impl SessionPage {
       CenterTabKind::Chat => CenterView::Conversation,
       CenterTabKind::File | CenterTabKind::Diff => CenterView::Diff,
       CenterTabKind::InteractiveRebase => CenterView::InteractiveRebase,
+      CenterTabKind::ProjectSearch => CenterView::ProjectSearch,
       CenterTabKind::Terminal => CenterView::Terminal,
     }
   }
@@ -4727,6 +4745,163 @@ mod tests {
       cx.update(|window, cx| window.has_active_dialog(cx)),
       "the palette opens on the branch screen"
     );
+  }
+
+  #[gpui::test]
+  async fn global_search_opens_as_a_center_tab(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-project-search-tab");
+    commit_text_file(&repo.path, Path::new("README.md"), "needle\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.show_global_search_action(&crate::ShowGlobalSearch, window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::ProjectSearch);
+      assert!(page.center_tabs.contains(&CenterTab::project_search()));
+      assert!(page.project_search_view.is_some());
+    });
+  }
+
+  #[gpui::test]
+  async fn activating_project_search_preserves_tab_order(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-project-search-order");
+    commit_text_file(&repo.path, Path::new("README.md"), "needle\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.show_global_search_action(&crate::ShowGlobalSearch, window, cx)
+    });
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        Some(1),
+        Some(1),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    let order_before = page.read_with(cx, |page, _| page.center_tabs.clone());
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(CenterTab::project_search(), OpenIntent::Open, window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::ProjectSearch);
+      assert_eq!(page.center_tabs, order_before);
+    });
+  }
+
+  #[gpui::test]
+  async fn opening_project_search_result_detaches_stale_search_layout(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-project-search-result-layout");
+    commit_text_file(&repo.path, Path::new("README.md"), "one\ntwo\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    let file_tab = CenterTab::file(PathBuf::from("README.md"));
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.update(cx, |page, cx| {
+      assert!(page.center_layout.split_active(
+        CenterSurface::from_tab(CenterTab::project_search()),
+        CenterSplitDirection::Right,
+      ));
+      page.remember_center_layout_tab(file_tab.clone());
+      cx.notify();
+    });
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(CenterTab::project_search(), OpenIntent::Open, window, cx)
+    });
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.detach_project_search_from_layouts();
+      page.open_file(
+        PathBuf::from("README.md"),
+        Some(2),
+        Some(1),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.active_center_tab.as_ref(), Some(&file_tab));
+      assert_eq!(page.center_layout.surface_count(), 1);
+      assert!(
+        page
+          .center_layouts_by_tab
+          .values()
+          .all(|layout| !layout.contains_tab(&CenterTab::project_search()))
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn closing_project_search_resets_the_next_search(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-project-search-reset");
+    commit_text_file(&repo.path, Path::new("README.md"), "needle\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.show_global_search_action(&crate::ShowGlobalSearch, window, cx)
+    });
+    cx.run_until_parked();
+
+    let old_view = page.read_with(cx, |page, _| {
+      page
+        .project_search_view
+        .clone()
+        .expect("project search view")
+    });
+    old_view.update_in(cx, |view, window, cx| {
+      view.set_query_for_test("needle", window, cx)
+    });
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(CenterTab::project_search(), window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(page.project_search_view.is_none()));
+    page.update_in(cx, |page, window, cx| {
+      page.show_global_search_action(&crate::ShowGlobalSearch, window, cx)
+    });
+    cx.run_until_parked();
+
+    let new_view = page.read_with(cx, |page, _| {
+      page
+        .project_search_view
+        .clone()
+        .expect("new project search view")
+    });
+    assert_ne!(old_view.entity_id(), new_view.entity_id());
+    new_view.read_with(cx, |view, cx| assert_eq!(view.query_for_test(cx), ""));
   }
 
   #[gpui::test]

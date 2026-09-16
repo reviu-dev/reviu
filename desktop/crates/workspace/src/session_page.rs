@@ -81,9 +81,11 @@ use sentry::protocol::Map;
 use crate::annotations::{AnnotationDirection, navigate_annotation};
 #[cfg(test)]
 use crate::annotations::{AnnotationNavigationState, annotation_navigation_state_for};
-use crate::global_search_palette::{GlobalSearchHandler, open_global_search_palette};
 use crate::palette_branches::{
   delete_branch_candidates, palette_branch, palette_stashes, rebase_branch_candidates,
+};
+use crate::project_search_view::{
+  ProjectSearchHandler, ProjectSearchOpenRequest, ProjectSearchView,
 };
 use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_dialog};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
@@ -148,6 +150,7 @@ enum CenterView {
   Diff,
   /// The todo of an interactive rebase, waiting to be applied.
   InteractiveRebase,
+  ProjectSearch,
   Terminal,
 }
 
@@ -315,6 +318,7 @@ pub struct SessionPage {
   next_terminal_id: u64,
   next_untitled_id: u64,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
+  project_search_view: Option<Entity<ProjectSearchView>>,
   _interactive_rebase_task: Option<Task<()>>,
   pub(crate) _merge_base_task: Option<Task<()>>,
   /// Mounting a real agent panel in a test would spawn an agent process.
@@ -670,6 +674,7 @@ impl SessionPage {
       next_terminal_id: 1,
       next_untitled_id: 1,
       interactive_rebase_todo_view: None,
+      project_search_view: None,
       _interactive_rebase_task: None,
       _merge_base_task: None,
       #[cfg(test)]
@@ -1432,7 +1437,7 @@ impl SessionPage {
         .conversation_id()
         .and_then(|id| self.session_checkout_for_id(id, cx))
         .is_none_or(|path| path == checkout),
-      CenterTabKind::File | CenterTabKind::Diff => true,
+      CenterTabKind::File | CenterTabKind::Diff | CenterTabKind::ProjectSearch => true,
       CenterTabKind::InteractiveRebase => false,
       CenterTabKind::Terminal => tab
         .terminal_id()
@@ -1480,6 +1485,9 @@ impl SessionPage {
     let Some(tab) = self.active_center_tab.clone() else {
       return;
     };
+    if tab.kind == CenterTabKind::ProjectSearch {
+      return;
+    }
     self
       .center_layouts_by_tab
       .insert(tab, self.center_layout.clone());
@@ -1491,6 +1499,35 @@ impl SessionPage {
       .get(tab)
       .cloned()
       .unwrap_or_else(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())));
+  }
+
+  fn detach_project_search_from_layouts(&mut self) {
+    let tab = CenterTab::project_search();
+    self.center_layouts_by_tab.retain(|representative, layout| {
+      if representative == &tab {
+        return false;
+      }
+      if layout.contains_tab(&tab) {
+        layout.surface_count() > 1 && layout.close_surface(&tab)
+      } else {
+        true
+      }
+    });
+    if self.center_layout.contains_tab(&tab) && self.center_layout.surface_count() > 1 {
+      self.center_layout.close_surface(&tab);
+    }
+  }
+
+  fn forget_project_search_tab(&mut self, reset_view: bool) {
+    let tab = CenterTab::project_search();
+    self.detach_project_search_from_layouts();
+    self.center_tabs.retain(|candidate| candidate != &tab);
+    self
+      .center_tab_history
+      .retain(|candidate| candidate != &tab);
+    if reset_view {
+      self.project_search_view = None;
+    }
   }
 
   fn remember_center_layout_tab(&mut self, representative: CenterTab) {
@@ -1666,6 +1703,7 @@ impl SessionPage {
           .cloned()
           .unwrap_or_else(CenterTab::chat),
         CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
+        CenterView::ProjectSearch => CenterTab::project_search(),
         CenterView::Terminal => tabs
           .iter()
           .rev()
@@ -1761,6 +1799,11 @@ impl SessionPage {
     } else {
       tab
     };
+    if requested_tab.kind == CenterTabKind::ProjectSearch {
+      self.activate_project_search_tab(window, cx);
+      return;
+    }
+
     let tab = self
       .center_layout_representative_for_tab(&requested_tab)
       .unwrap_or_else(|| requested_tab.clone());
@@ -1794,13 +1837,20 @@ impl SessionPage {
         CenterTabKind::Chat => CenterView::Conversation,
         CenterTabKind::File | CenterTabKind::Diff => CenterView::Diff,
         CenterTabKind::InteractiveRebase => CenterView::InteractiveRebase,
+        CenterTabKind::ProjectSearch => CenterView::ProjectSearch,
         CenterTabKind::Terminal => CenterView::Terminal,
       };
+      if focused_tab.kind == CenterTabKind::ProjectSearch
+        && let Some(repo_root) = self.checkout_root(cx)
+      {
+        self.ensure_project_search_view(repo_root, window, cx);
+      }
       self.sync_agent_chat_close_control(cx);
       match self.center {
         CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
         CenterView::Diff if intent.takes_focus() => self.focus_editor_on_next_frame(window, cx),
         CenterView::Diff | CenterView::InteractiveRebase => {}
+        CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
         CenterView::Terminal => self.focus_terminal_tab(&focused_tab, window, cx),
       }
       self.restore_visible_center_editors(cx);
@@ -1848,6 +1898,9 @@ impl SessionPage {
         self.set_active_center_tab_and_reveal(CenterTab::interactive_rebase(), cx);
         self.center_tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
         cx.notify();
+      }
+      CenterTabKind::ProjectSearch => {
+        self.open_project_search_tab(window, cx);
       }
       CenterTabKind::Terminal => {
         self.center = CenterView::Terminal;
@@ -2028,6 +2081,7 @@ impl SessionPage {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
       CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
       CenterView::InteractiveRebase => {}
+      CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
       CenterView::Terminal => self.focus_terminal_tab(&active_tab, window, cx),
     }
     cx.notify();
@@ -2072,6 +2126,7 @@ impl SessionPage {
         CenterTabKind::File => "file",
         CenterTabKind::Diff => "diff",
         CenterTabKind::InteractiveRebase => "interactive_rebase",
+        CenterTabKind::ProjectSearch => "project_search",
         CenterTabKind::Terminal => "terminal",
       })
       .map(str::to_string)
@@ -2785,10 +2840,49 @@ impl SessionPage {
   }
 
   fn open_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.open_project_search_tab(window, cx);
+  }
+
+  fn focus_project_search_on_next_frame(&self, window: &mut Window, _cx: &mut Context<Self>) {
+    let view = self.project_search_view.as_ref().map(Entity::downgrade);
+    window.on_next_frame(move |window, cx| {
+      if let Some(view) = view.as_ref() {
+        let _ = view.update(cx, |view, cx| view.focus_search(window, cx));
+      }
+    });
+  }
+
+  fn open_project_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.activate_project_search_tab(window, cx);
+  }
+
+  fn activate_project_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
+    self.detach_project_search_from_layouts();
+    self.save_active_center_layout();
+    self.ensure_project_search_view(repo_root, window, cx);
+    let tab = CenterTab::project_search();
+    self.center_layouts_by_tab.remove(&tab);
+    self.center = CenterView::ProjectSearch;
+    self.center_layout = CenterLayout::single(CenterSurface::from_tab(tab.clone()));
+    self.set_active_center_tab(tab.clone());
+    if !self.center_tabs.contains(&tab) {
+      self.center_tabs.push(tab.clone());
+    }
+    self.remember_center_tab_visit(tab);
+    self.persist_current_center_workspace(cx);
+    self.focus_project_search_on_next_frame(window, cx);
+    cx.notify();
+  }
 
+  fn ensure_project_search_view(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     let cached_paths = self
       .file_search_cache
       .as_ref()
@@ -2801,35 +2895,45 @@ impl SessionPage {
       .as_deref()
       .map_or_else(Vec::new, |paths| paths.to_vec());
 
-    let view = cx.entity();
-    let handler: GlobalSearchHandler = Arc::new(move |request, window, cx| {
-      view.update(cx, |view, cx| {
-        view.open_file(
-          request.path,
-          request.line,
-          request.column,
-          OpenIntent::Open,
+    let needs_new_view = self
+      .project_search_view
+      .as_ref()
+      .is_none_or(|view| view.read(cx).checkout_root() != repo_root.as_path());
+    if needs_new_view {
+      let page = cx.entity();
+      let handler: ProjectSearchHandler =
+        Arc::new(move |request: ProjectSearchOpenRequest, window, cx| {
+          page.update(cx, |page, cx| {
+            page.detach_project_search_from_layouts();
+            page.open_file(
+              request.path,
+              request.line,
+              request.column,
+              OpenIntent::Open,
+              window,
+              cx,
+            );
+          });
+          Ok(())
+        });
+      self.project_search_view = Some(cx.new(|cx| {
+        ProjectSearchView::new(
           window,
           cx,
-        );
-      });
-      Ok(())
-    });
-    let palette = open_global_search_palette(
-      window,
-      cx,
-      repo_root.clone(),
-      repository_paths,
-      handler,
-      !cache_is_fresh,
-    );
+          repo_root.clone(),
+          repository_paths.clone(),
+          !cache_is_fresh,
+          handler,
+        )
+      }));
+    }
 
     if cache_is_fresh {
       return;
     }
 
     let load_repo_root = repo_root.clone();
-    let palette = palette.downgrade();
+    let search_view = self.project_search_view.as_ref().map(Entity::downgrade);
     self._file_search_task = Some(cx.spawn_in(window, async move |this, cx| {
       let result = cx
         .background_spawn({
@@ -2838,7 +2942,7 @@ impl SessionPage {
         })
         .await;
 
-      let _ = this.update_in(cx, |this, window, cx| match result {
+      let _ = this.update_in(cx, |this, _window, cx| match result {
         Ok(paths) => {
           if this.checkout_root(cx).as_deref() != Some(load_repo_root.as_path()) {
             return;
@@ -2849,15 +2953,19 @@ impl SessionPage {
             paths: paths.clone(),
             loaded_at: Instant::now(),
           });
-          let _ = palette.update(cx, |palette, cx| {
-            palette.replace_files(paths.as_ref().clone(), window, cx);
-          });
+          if let Some(search_view) = search_view.as_ref() {
+            let _ = search_view.update(cx, |search, cx| {
+              search.replace_files(paths.as_ref().clone(), cx);
+            });
+          }
         }
         Err(error) => {
-          log::error!("load files for global search: {error:#}");
-          let _ = palette.update(cx, |palette, cx| {
-            palette.set_loading_error("Could not load project files", cx);
-          });
+          log::error!("load files for project search: {error:#}");
+          if let Some(search_view) = search_view.as_ref() {
+            let _ = search_view.update(cx, |search, cx| {
+              search.set_loading_error("Could not load project files", cx);
+            });
+          }
         }
       });
     }));

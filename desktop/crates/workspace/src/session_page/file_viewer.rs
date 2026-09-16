@@ -2115,6 +2115,7 @@ impl SessionPage {
         .cloned()
         .unwrap_or_else(CenterTab::chat),
       CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
+      CenterView::ProjectSearch => CenterTab::project_search(),
       CenterView::Terminal => self.center_layout.active_tab().clone(),
     };
     if !tab.is_closeable() {
@@ -2166,6 +2167,9 @@ impl SessionPage {
     if tab.kind == CenterTabKind::Terminal {
       self.clear_terminal_tab(&tab);
     }
+    if tab.kind == CenterTabKind::ProjectSearch {
+      self.forget_project_search_tab(true);
+    }
 
     self.center_tabs.retain(|candidate| candidate != &tab);
     self
@@ -2205,6 +2209,7 @@ impl SessionPage {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
       CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
       CenterView::InteractiveRebase => {}
+      CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
       CenterView::Terminal => self.focus_terminal_tab(&remaining_tab, window, cx),
     }
     self.persist_current_center_workspace(cx);
@@ -2234,6 +2239,7 @@ impl SessionPage {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
       CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
       CenterView::InteractiveRebase => {}
+      CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
       CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
     }
     self.persist_current_center_workspace(cx);
@@ -2292,6 +2298,7 @@ impl SessionPage {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
       CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
       CenterView::InteractiveRebase => {}
+      CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
       CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
     }
     self.persist_current_center_workspace(cx);
@@ -2324,7 +2331,7 @@ impl SessionPage {
         self.close_interactive_rebase_todo(window, cx);
         return;
       }
-      CenterTabKind::Terminal => {}
+      CenterTabKind::Terminal | CenterTabKind::ProjectSearch => {}
       CenterTabKind::File | CenterTabKind::Diff => {}
     }
     if self.editor_tab_is_dirty(&tab, cx) {
@@ -2436,6 +2443,9 @@ impl SessionPage {
       if layout_tab.kind == CenterTabKind::Terminal {
         self.clear_terminal_tab(&layout_tab);
       }
+      if layout_tab.kind == CenterTabKind::ProjectSearch {
+        self.forget_project_search_tab(true);
+      }
     }
     self.persist_current_center_workspace(cx);
 
@@ -2470,6 +2480,9 @@ impl SessionPage {
     self.clear_editor_tab(&tab);
     if tab.kind == CenterTabKind::Terminal {
       self.clear_terminal_tab(&tab);
+    }
+    if tab.kind == CenterTabKind::ProjectSearch {
+      self.forget_project_search_tab(true);
     }
     self.persist_current_center_workspace(cx);
     if editor_closed {
