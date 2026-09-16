@@ -32,6 +32,7 @@ use ui::{FILE_ICON_SIZE_PX, file_icon_path_for_path_with_theme};
 
 const MAX_SEARCH_RESULTS: usize = 500;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const SEARCH_RESULT_BATCH_SIZE: usize = 32;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
 const FILE_HEADER_ROW_HEIGHT: f32 = 40.0;
 const MATCH_ROW_HEIGHT: f32 = 36.0;
@@ -249,34 +250,46 @@ impl ProjectSearchView {
     let latest_generation = self.latest_search_generation.clone();
     self._search_task = cx.spawn(async move |this, cx| {
       cx.background_executor().timer(SEARCH_DEBOUNCE).await;
-      let results = cx
-        .background_spawn(async move {
-          search_project_files(
-            &checkout_root,
-            files.as_ref(),
-            &query,
-            options,
-            Some(SearchCancellation {
-              generation,
-              latest_generation,
-            }),
-          )
-        })
-        .await;
+
+      let (batch_sender, batch_receiver) = async_channel::bounded(8);
+      let search = cx.background_spawn(async move {
+        search_project_files_streaming(
+          &checkout_root,
+          files.as_ref(),
+          &query,
+          options,
+          SearchCancellation {
+            generation,
+            latest_generation,
+          },
+          batch_sender,
+        );
+      });
+
+      while let Ok(batch) = batch_receiver.recv().await {
+        let _ = this.update(cx, |this, cx| {
+          if this.search_generation != generation {
+            return;
+          }
+          this.results.extend(batch);
+          this.collapsed_files.retain(|path| {
+            this
+              .results
+              .iter()
+              .any(|result| result.path.as_path() == path.as_path())
+          });
+          this.sync_result_rows();
+          cx.notify();
+        });
+      }
+
+      search.await;
 
       let _ = this.update(cx, |this, cx| {
         if this.search_generation != generation {
           return;
         }
         this.searching = false;
-        this.results = results;
-        this.collapsed_files.retain(|path| {
-          this
-            .results
-            .iter()
-            .any(|result| result.path.as_path() == path.as_path())
-        });
-        this.sync_result_rows();
         cx.notify();
       });
     });
@@ -745,30 +758,63 @@ impl SearchCancellation {
   }
 }
 
+#[cfg(test)]
 fn search_project_files(
   checkout_root: &Path,
   files: &[PathBuf],
   query: &str,
   options: SearchOptions,
-  cancellation: Option<SearchCancellation>,
 ) -> Vec<ProjectSearchFileResults> {
+  let mut results = Vec::new();
+  search_project_files_batched(checkout_root, files, query, options, None, |batch| {
+    results.extend(batch);
+    true
+  });
+  results
+}
+
+fn search_project_files_streaming(
+  checkout_root: &Path,
+  files: &[PathBuf],
+  query: &str,
+  options: SearchOptions,
+  cancellation: SearchCancellation,
+  batch_sender: async_channel::Sender<Vec<ProjectSearchFileResults>>,
+) {
+  search_project_files_batched(
+    checkout_root,
+    files,
+    query,
+    options,
+    Some(&cancellation),
+    |batch| batch_sender.send_blocking(batch).is_ok(),
+  );
+}
+
+fn search_project_files_batched(
+  checkout_root: &Path,
+  files: &[PathBuf],
+  query: &str,
+  options: SearchOptions,
+  cancellation: Option<&SearchCancellation>,
+  mut on_batch: impl FnMut(Vec<ProjectSearchFileResults>) -> bool,
+) {
   let query = query.trim();
   if query.is_empty() {
-    return Vec::new();
+    return;
   }
 
   let matcher = match SearchMatcher::new(query, options) {
     Ok(matcher) => matcher,
-    Err(_) => return Vec::new(),
+    Err(_) => return,
   };
-  let mut grouped = Vec::new();
   let mut total_results = 0;
+  let mut batch_results = 0;
+  let mut batch = Vec::new();
 
   for path in files {
     if total_results >= MAX_SEARCH_RESULTS
-      || cancellation
-        .as_ref()
-        .is_some_and(|cancel| cancel.is_cancelled())
+      || cancellation.is_some_and(SearchCancellation::is_cancelled)
     {
       break;
     }
@@ -790,9 +836,7 @@ fn search_project_files(
     let mut line_number = 0u32;
     loop {
       if total_results >= MAX_SEARCH_RESULTS
-        || cancellation
-          .as_ref()
-          .is_some_and(|cancel| cancel.is_cancelled())
+        || cancellation.is_some_and(SearchCancellation::is_cancelled)
       {
         break;
       }
@@ -833,14 +877,23 @@ fn search_project_files(
     }
 
     if !matches.is_empty() {
-      grouped.push(ProjectSearchFileResults {
+      batch_results += matches.len();
+      batch.push(ProjectSearchFileResults {
         path: path.clone(),
         matches,
       });
+      if batch_results >= SEARCH_RESULT_BATCH_SIZE {
+        if !on_batch(std::mem::take(&mut batch)) {
+          return;
+        }
+        batch_results = 0;
+      }
     }
   }
 
-  grouped
+  if !batch.is_empty() {
+    let _ = on_batch(batch);
+  }
 }
 
 struct SearchMatcher {
@@ -910,7 +963,6 @@ mod tests {
       &[PathBuf::from("src/lib.rs"), PathBuf::from("README.md")],
       "needle",
       SearchOptions::default(),
-      None,
     );
 
     assert_eq!(results.len(), 2);
@@ -918,5 +970,32 @@ mod tests {
     assert_eq!(results[0].matches[0].line_number, 2);
     assert_eq!(results[0].matches[0].column, 5);
     assert_eq!(results[1].path, PathBuf::from("README.md"));
+  }
+
+  #[test]
+  fn project_search_batches_results_progressively() {
+    let temp = TempDir::new("project-search-batches");
+    let files = (0..(SEARCH_RESULT_BATCH_SIZE + 1))
+      .map(|index| {
+        let path = PathBuf::from(format!("file-{index}.txt"));
+        std::fs::write(temp.path.join(&path), "needle\n").expect("write file");
+        path
+      })
+      .collect::<Vec<_>>();
+    let mut batch_sizes = Vec::new();
+
+    search_project_files_batched(
+      &temp.path,
+      &files,
+      "needle",
+      SearchOptions::default(),
+      None,
+      |batch| {
+        batch_sizes.push(batch.len());
+        true
+      },
+    );
+
+    assert_eq!(batch_sizes, vec![SEARCH_RESULT_BATCH_SIZE, 1]);
   }
 }

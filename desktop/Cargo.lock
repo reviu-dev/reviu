@@ -11674,6 +11674,7 @@ dependencies = [
  "agent_registry",
  "anyhow",
  "app_log",
+ "async-channel",
  "base64 0.23.1",
  "dirs 7.0.0",
  "editor",
