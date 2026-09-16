@@ -12,14 +12,15 @@ use std::{
   time::Duration,
 };
 
-use editor::SearchOptions;
+use editor::{FindNext, FindPrevious, SearchOptions};
 use gpui::{
   AnyElement, App, Context, Entity, FocusHandle, Focusable, HighlightStyle, IntoElement,
-  ParentElement, Render, SharedString, Styled, StyledText, Subscription, Task, Window, div, img,
-  prelude::*, px, size,
+  ParentElement, Render, ScrollStrategy, SharedString, Styled, StyledText, Subscription, Task,
+  Window, div, img, prelude::*, px, size,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Selectable, Sizable as _, VirtualListScrollHandle,
+  ActiveTheme as _, Disableable as _, Icon, IconName, Selectable, Sizable as _,
+  VirtualListScrollHandle,
   button::{Button, ButtonVariants as _},
   h_flex,
   input::{Input, InputEvent, InputState},
@@ -38,6 +39,7 @@ const SEARCH_RESULT_BATCH_SIZE: usize = 32;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
 const FILE_HEADER_ROW_HEIGHT: f32 = 40.0;
 const MATCH_ROW_HEIGHT: f32 = 36.0;
+pub(crate) const PROJECT_SEARCH_CONTEXT: &str = "ProjectSearch";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProjectSearchOpenRequest {
@@ -106,6 +108,7 @@ pub(crate) struct ProjectSearchView {
   searching: bool,
   limit_reached: bool,
   filters_open: bool,
+  active_match_index: Option<usize>,
   include_ignored: bool,
   include_hidden: bool,
   error: Option<SharedString>,
@@ -155,6 +158,7 @@ impl ProjectSearchView {
       searching: false,
       limit_reached: false,
       filters_open: false,
+      active_match_index: None,
       include_ignored: false,
       include_hidden: false,
       error: None,
@@ -221,7 +225,10 @@ impl ProjectSearchView {
     match event {
       InputEvent::Change => self.refresh_results(cx),
       InputEvent::PressEnter { .. } => {
-        if let Some(request) = self.first_open_request() {
+        if let Some(request) = self
+          .active_open_request()
+          .or_else(|| self.first_open_request())
+        {
           self.open_result(request, window, cx);
         }
       }
@@ -298,6 +305,7 @@ impl ProjectSearchView {
     self.limit_reached = false;
     self.results.clear();
     self.rows.clear();
+    self.active_match_index = None;
     self.error = None;
 
     let checkout_root = self.checkout_root.clone();
@@ -340,6 +348,7 @@ impl ProjectSearchView {
       self.limit_reached = false;
       self.results.clear();
       self.rows.clear();
+      self.active_match_index = None;
       self._search_task = Task::ready(());
       cx.notify();
       return;
@@ -350,6 +359,7 @@ impl ProjectSearchView {
     self.error = None;
     self.results.clear();
     self.rows.clear();
+    self.active_match_index = None;
     let checkout_root = self.checkout_root.clone();
     let files = self.files.clone();
     let options = self.options;
@@ -390,6 +400,7 @@ impl ProjectSearchView {
                   .any(|result| result.path.as_path() == path.as_path())
               });
               this.sync_result_rows();
+              this.ensure_active_match();
             }
             ProjectSearchUpdate::Finished { limit_reached } => {
               this.searching = false;
@@ -428,6 +439,123 @@ impl ProjectSearchView {
     cx.notify();
   }
 
+  fn ensure_active_match(&mut self) {
+    let result_count = self.result_count();
+    self.active_match_index = match (self.active_match_index, result_count) {
+      (_, 0) => None,
+      (Some(index), count) => Some(index.min(count.saturating_sub(1))),
+      (None, _) => Some(0),
+    };
+  }
+
+  fn active_open_request(&self) -> Option<ProjectSearchOpenRequest> {
+    let (result_index, match_index) =
+      match_indices_for_flat_index(&self.results, self.active_match_index?)?;
+    let file = self.results.get(result_index)?;
+    let found = file.matches.get(match_index)?;
+    Some(ProjectSearchOpenRequest {
+      path: file.path.clone(),
+      line: Some(found.line_number),
+      column: Some(found.column),
+    })
+  }
+
+  fn select_match(&mut self, index: usize, cx: &mut Context<Self>) {
+    let result_count = self.result_count();
+    if result_count == 0 {
+      self.active_match_index = None;
+      cx.notify();
+      return;
+    }
+
+    let index = index.min(result_count.saturating_sub(1));
+    let Some((result_index, match_index)) = match_indices_for_flat_index(&self.results, index)
+    else {
+      self.active_match_index = None;
+      cx.notify();
+      return;
+    };
+
+    if let Some(file) = self.results.get(result_index) {
+      let path = file.path.clone();
+      if self.collapsed_files.remove(&path) {
+        self.sync_result_rows();
+      }
+    }
+
+    self.active_match_index = Some(index);
+    if let Some(row_index) = self.row_index_for_match(result_index, match_index) {
+      self
+        .scroll_handle
+        .scroll_to_item(row_index, ScrollStrategy::Center);
+    }
+    cx.notify();
+  }
+
+  fn select_next_match(&mut self, cx: &mut Context<Self>) {
+    let result_count = self.result_count();
+    if result_count == 0 {
+      self.active_match_index = None;
+      cx.notify();
+      return;
+    }
+
+    let next = self
+      .active_match_index
+      .map(|index| (index + 1) % result_count)
+      .unwrap_or(0);
+    self.select_match(next, cx);
+  }
+
+  fn select_previous_match(&mut self, cx: &mut Context<Self>) {
+    let result_count = self.result_count();
+    if result_count == 0 {
+      self.active_match_index = None;
+      cx.notify();
+      return;
+    }
+
+    let previous = self
+      .active_match_index
+      .map(|index| {
+        if index == 0 {
+          result_count.saturating_sub(1)
+        } else {
+          index.saturating_sub(1)
+        }
+      })
+      .unwrap_or_else(|| result_count.saturating_sub(1));
+    self.select_match(previous, cx);
+  }
+
+  fn row_index_for_match(&self, result_index: usize, match_index: usize) -> Option<usize> {
+    self.rows.iter().position(|row| {
+      matches!(
+        row,
+        ProjectSearchRow::Match {
+          result_index: row_result_index,
+          match_index: row_match_index,
+        } if *row_result_index == result_index && *row_match_index == match_index
+      )
+    })
+  }
+
+  fn active_match_number(&self) -> usize {
+    self
+      .active_match_index
+      .filter(|index| *index < self.result_count())
+      .map(|index| index + 1)
+      .unwrap_or(0)
+  }
+
+  fn find_next_action(&mut self, _: &FindNext, _: &mut Window, cx: &mut Context<Self>) {
+    self.select_next_match(cx);
+  }
+
+  fn find_previous_action(&mut self, _: &FindPrevious, _: &mut Window, cx: &mut Context<Self>) {
+    self.select_previous_match(cx);
+  }
+
   fn toggle_case_sensitive(&mut self, cx: &mut Context<Self>) {
     self.options.case_sensitive = !self.options.case_sensitive;
     self.refresh_results(cx);
@@ -448,12 +576,21 @@ impl ProjectSearchView {
   }
 
   fn result_count_label(&self, result_count: usize) -> String {
-    if self.limit_reached {
-      format!("Showing first {MAX_SEARCH_RESULTS}")
-    } else if self.searching && result_count > 0 {
-      format!("{result_count} found...")
+    if result_count == 0 {
+      if self.searching {
+        "...".to_string()
+      } else {
+        "0/0".to_string()
+      }
     } else {
-      result_count.to_string()
+      let suffix = if self.limit_reached {
+        "+"
+      } else if self.searching {
+        "..."
+      } else {
+        ""
+      };
+      format!("{}/{}{}", self.active_match_number(), result_count, suffix)
     }
   }
 
@@ -473,7 +610,16 @@ impl ProjectSearchView {
       } => {
         let file = self.results.get(result_index)?;
         let found = file.matches.get(match_index)?;
-        Some(render_match_row(file.path.clone(), found, cx))
+        let active =
+          self.active_match_index == flat_index_for_match(&self.results, result_index, match_index);
+        let flat_index = flat_index_for_match(&self.results, result_index, match_index);
+        Some(render_match_row(
+          file.path.clone(),
+          found,
+          flat_index,
+          active,
+          cx,
+        ))
       }
     }
   }
@@ -579,6 +725,9 @@ impl Render for ProjectSearchView {
       .min_w(px(0.0))
       .min_h_0()
       .track_focus(&self.focus_handle)
+      .key_context(PROJECT_SEARCH_CONTEXT)
+      .on_action(cx.listener(Self::find_next_action))
+      .on_action(cx.listener(Self::find_previous_action))
       .bg(theme.background)
       .child(
         v_flex()
@@ -667,7 +816,7 @@ impl Render for ProjectSearchView {
               )
               .child(
                 h_flex()
-                  .w(px(176.0))
+                  .w(px(224.0))
                   .gap_2()
                   .items_center()
                   .child(
@@ -678,16 +827,49 @@ impl Render for ProjectSearchView {
                       .compact()
                       .selected(filters_open)
                       .tooltip("Search filters")
-                      .on_click(move |_, _, cx| {
-                        entity.update(cx, |view, cx| view.toggle_filters(cx));
+                      .on_click({
+                        let entity = entity.clone();
+                        move |_, _, cx| {
+                          entity.update(cx, |view, cx| view.toggle_filters(cx));
+                        }
+                      }),
+                  )
+                  .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border))
+                  .child(
+                    Button::new("project-search-prev")
+                      .icon(IconName::ChevronLeft)
+                      .ghost()
+                      .xsmall()
+                      .compact()
+                      .tooltip("Previous match")
+                      .disabled(result_count == 0)
+                      .on_click({
+                        let entity = entity.clone();
+                        move |_, _, cx| {
+                          entity.update(cx, |view, cx| view.select_previous_match(cx));
+                        }
+                      }),
+                  )
+                  .child(
+                    Button::new("project-search-next")
+                      .icon(IconName::ChevronRight)
+                      .ghost()
+                      .xsmall()
+                      .compact()
+                      .tooltip("Next match")
+                      .disabled(result_count == 0)
+                      .on_click({
+                        let entity = entity.clone();
+                        move |_, _, cx| {
+                          entity.update(cx, |view, cx| view.select_next_match(cx));
+                        }
                       }),
                   )
                   .child(
                     h_flex()
-                      .flex_1()
+                      .w(px(88.0))
                       .gap_1()
                       .items_center()
-                      .justify_end()
                       .text_xs()
                       .text_color(theme.muted_foreground)
                       .when(self.searching, |this| this.child(Spinner::new().small()))
@@ -744,7 +926,7 @@ impl Render for ProjectSearchView {
                 )
                 .child(
                   h_flex()
-                    .w(px(176.0))
+                    .w(px(224.0))
                     .gap_2()
                     .items_center()
                     .child(
@@ -902,6 +1084,8 @@ fn render_file_header(
 fn render_match_row(
   path: PathBuf,
   found: &ProjectSearchMatch,
+  flat_index: Option<usize>,
+  active: bool,
   cx: &mut Context<ProjectSearchView>,
 ) -> AnyElement {
   let theme = cx.theme().clone();
@@ -923,9 +1107,13 @@ fn render_match_row(
   .w_full()
   .h(px(MATCH_ROW_HEIGHT))
   .py_1p5()
+  .selected(active)
   .on_click(move |_, window, cx| {
     let request = request.clone();
-    entity.update(cx, |view, cx| view.open_result(request, window, cx));
+    entity.update(cx, |view, cx| {
+      view.active_match_index = flat_index;
+      view.open_result(request, window, cx);
+    });
   })
   .child(
     h_flex()
@@ -960,6 +1148,41 @@ fn render_match_row(
       ),
   )
   .into_any_element()
+}
+
+fn match_indices_for_flat_index(
+  results: &[ProjectSearchFileResults],
+  target_index: usize,
+) -> Option<(usize, usize)> {
+  let mut offset = 0;
+  for (result_index, file) in results.iter().enumerate() {
+    let next_offset = offset + file.matches.len();
+    if target_index < next_offset {
+      return Some((result_index, target_index - offset));
+    }
+    offset = next_offset;
+  }
+  None
+}
+
+fn flat_index_for_match(
+  results: &[ProjectSearchFileResults],
+  result_index: usize,
+  match_index: usize,
+) -> Option<usize> {
+  let file = results.get(result_index)?;
+  if match_index >= file.matches.len() {
+    return None;
+  }
+
+  Some(
+    results
+      .iter()
+      .take(result_index)
+      .map(|file| file.matches.len())
+      .sum::<usize>()
+      + match_index,
+  )
 }
 
 fn highlighted_preview(found: &ProjectSearchMatch, color: gpui::Hsla) -> StyledText {
@@ -1362,6 +1585,45 @@ mod tests {
 
     assert_eq!(paths, vec![PathBuf::from("src/lib.rs")]);
     assert!(!completion.limit_reached);
+  }
+
+  #[test]
+  fn project_search_maps_flat_match_indices() {
+    let results = vec![
+      ProjectSearchFileResults {
+        path: PathBuf::from("src/lib.rs"),
+        matches: vec![
+          ProjectSearchMatch {
+            line_number: 1,
+            column: 1,
+            preview: "needle".into(),
+            match_range: Some(0..6),
+          },
+          ProjectSearchMatch {
+            line_number: 2,
+            column: 3,
+            preview: "needle".into(),
+            match_range: Some(0..6),
+          },
+        ],
+      },
+      ProjectSearchFileResults {
+        path: PathBuf::from("README.md"),
+        matches: vec![ProjectSearchMatch {
+          line_number: 1,
+          column: 1,
+          preview: "needle".into(),
+          match_range: Some(0..6),
+        }],
+      },
+    ];
+
+    assert_eq!(match_indices_for_flat_index(&results, 0), Some((0, 0)));
+    assert_eq!(match_indices_for_flat_index(&results, 1), Some((0, 1)));
+    assert_eq!(match_indices_for_flat_index(&results, 2), Some((1, 0)));
+    assert_eq!(match_indices_for_flat_index(&results, 3), None);
+    assert_eq!(flat_index_for_match(&results, 1, 0), Some(2));
+    assert_eq!(flat_index_for_match(&results, 1, 1), None);
   }
 
   #[test]

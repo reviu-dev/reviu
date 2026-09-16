@@ -17,6 +17,7 @@ use gpui::Keymap;
 use std::collections::HashSet;
 
 use crate::config::ConfigStore;
+use crate::project_search_view::PROJECT_SEARCH_CONTEXT;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CloseCenterTab, CommentHunk,
   CommitChanges, DeleteSelectedFileItem, ForcePushChanges, JumpToLatestMessage, NewAgentSession,
@@ -1290,6 +1291,8 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("cmd-f", Find, None),
     KeyBinding::new("cmd-g", FindNext, Some("Editor")),
     KeyBinding::new("cmd-shift-g", FindPrevious, Some("Editor")),
+    KeyBinding::new("cmd-g", FindNext, Some(PROJECT_SEARCH_CONTEXT)),
+    KeyBinding::new("cmd-shift-g", FindPrevious, Some(PROJECT_SEARCH_CONTEXT)),
     KeyBinding::new("alt-cmd-c", ToggleFindCaseSensitive, Some("Editor")),
     KeyBinding::new("alt-cmd-w", ToggleFindWholeWord, Some("Editor")),
     KeyBinding::new("alt-cmd-x", ToggleFindRegex, Some("Editor")),
