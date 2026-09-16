@@ -106,7 +106,9 @@ impl SubmitReviewDialog {
     let repo = self.target.repo.clone();
     let number = self.target.number;
     let pending_review_id = self.target.pending_review_id.clone();
+    let pending_comment_count = self.target.pending_comment_count;
     let event = self.decision.api_event();
+    let decision = self.decision.analytics_key();
     let on_submitted = self.on_submitted.clone();
     let window_handle = self.window_handle;
 
@@ -134,6 +136,14 @@ impl SubmitReviewDialog {
 
         match result {
           Ok(review) => {
+            crate::analytics::track_with(
+              cx,
+              "pull_request_review_submitted",
+              Some(serde_json::json!({
+                "decision": decision,
+                "pending_comment_count": pending_comment_count,
+              })),
+            );
             on_submitted(&review, cx);
             window.close_dialog(cx);
             window.push_notification(

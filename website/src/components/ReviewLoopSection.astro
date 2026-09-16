@@ -267,13 +267,18 @@ const reviewBatch = [
           comparisons.map((comparison) => (
             <a
               href={getComparisonUrl(comparison.slug)}
+              data-umami-event={`comparison-review-loop-${comparison.slug}`}
               class="text-primary hover:text-primary/80"
             >
               vs {comparison.name}
             </a>
           ))
         }
-        <a href="/vs" class="text-muted-foreground hover:text-foreground">
+        <a
+          href="/vs"
+          data-umami-event="compare-all-review-loop"
+          class="text-muted-foreground hover:text-foreground"
+        >
           Compare all <span aria-hidden="true">→</span>
         </a>
       </div>

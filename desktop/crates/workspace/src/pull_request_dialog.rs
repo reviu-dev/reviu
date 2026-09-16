@@ -353,6 +353,11 @@ impl CreatePullRequestDialog {
 
         match result {
           Ok(pull_request) => {
+            crate::analytics::track_with(
+              cx,
+              "pull_request_created",
+              Some(serde_json::json!({ "draft": draft })),
+            );
             // The dock panel picks the new pull request up: it is the branch's.
             on_created(&branch_context, &pull_request, cx);
             window.close_dialog(cx);

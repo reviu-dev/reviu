@@ -5211,6 +5211,7 @@ impl DockPanel {
     let api = WorkspaceApi::global(cx).api.clone();
     let window_handle = self.window_handle;
     let number = request.number;
+    let method = request.method;
 
     // GitHub remembers the last method used per repository; so do we.
     if let Some(key) = self.merge_method_store_key() {
@@ -5237,6 +5238,11 @@ impl DockPanel {
         this.pr_merging = false;
         match result {
           Ok(_) => {
+            crate::analytics::track_with(
+              cx,
+              "pull_request_merged",
+              Some(serde_json::json!({ "method": method })),
+            );
             let _ = cx.update_window(window_handle, |_, window, cx| {
               window.push_notification(Notification::info(format!("Merged #{number}")), cx);
             });

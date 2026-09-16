@@ -77,7 +77,18 @@ fn build_payload(device_id: &str, name: &str, data: Option<Value>) -> Value {
     "os": std::env::consts::OS,
   });
   if let (Some(extra), Some(obj)) = (data, event_data.as_object_mut()) {
-    obj.insert("extra".to_string(), extra);
+    match extra {
+      Value::Object(extra) => {
+        for (key, value) in extra {
+          if !matches!(key.as_str(), "device_id" | "version" | "os") {
+            obj.insert(key, value);
+          }
+        }
+      }
+      extra => {
+        obj.insert("extra".to_string(), extra);
+      }
+    }
   }
 
   json!({
@@ -90,4 +101,31 @@ fn build_payload(device_id: &str, name: &str, data: Option<Value>) -> Value {
       "data": event_data,
     }
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn payload_includes_app_context_for_every_event() {
+    let payload = build_payload("device-1", "app_started", None);
+    let data = &payload["payload"]["data"];
+
+    assert_eq!(data["device_id"], "device-1");
+    assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(data["os"], std::env::consts::OS);
+  }
+
+  #[test]
+  fn object_event_data_is_queryable_at_the_top_level() {
+    let payload = build_payload(
+      "device-1",
+      "pro_teaser_clicked",
+      Some(json!({ "source": "inbox" })),
+    );
+
+    assert_eq!(payload["payload"]["data"]["source"], "inbox");
+    assert!(payload["payload"]["data"].get("extra").is_none());
+  }
 }

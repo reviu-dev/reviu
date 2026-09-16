@@ -60,6 +60,14 @@ impl ReviewDecision {
     }
   }
 
+  pub(crate) fn analytics_key(self) -> &'static str {
+    match self {
+      Self::Comment => "comment",
+      Self::Approve => "approve",
+      Self::RequestChanges => "request_changes",
+    }
+  }
+
   /// GitHub takes an approval without a word. The other two are the word.
   fn requires_body(self) -> bool {
     match self {
@@ -188,6 +196,14 @@ mod tests {
         GithubPullRequestReviewEvent::Approve,
         GithubPullRequestReviewEvent::RequestChanges,
       ]
+    );
+  }
+
+  #[test]
+  fn every_decision_has_a_stable_analytics_key() {
+    assert_eq!(
+      ReviewDecision::ALL.map(ReviewDecision::analytics_key),
+      ["comment", "approve", "request_changes"]
     );
   }
 
