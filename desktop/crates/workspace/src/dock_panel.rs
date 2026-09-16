@@ -64,6 +64,7 @@ const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
 const DOCK_PANEL_CHANGES_SUMMARY_DEBUG_SELECTOR: &str = "dock-panel-changes-summary";
 const DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR: &str = "dock-panel-changes-action";
 const DOCK_PANEL_CHANGES_ACTION_MENU_DEBUG_SELECTOR: &str = "dock-panel-changes-action-menu";
+const DOCK_PANEL_CHANGES_EMPTY_DEBUG_SELECTOR: &str = "dock-panel-changes-empty-state";
 const DOCK_PANEL_FILES_ACTION_MENU_DEBUG_SELECTOR: &str = "dock-panel-files-action-menu";
 const DOCK_PANEL_HEADER_HEIGHT_PX: f32 = 36.0;
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
@@ -5451,17 +5452,30 @@ impl DockPanel {
       .into_any_element()
   }
 
+  fn render_changes_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
+    if self.repo_root.is_none() {
+      return self.render_empty_state(cx);
+    }
+
+    v_flex()
+      .debug_selector(|| DOCK_PANEL_CHANGES_EMPTY_DEBUG_SELECTOR.to_string())
+      .flex_1()
+      .min_h_0()
+      .items_center()
+      .justify_center()
+      .px_4()
+      .child(
+        div()
+          .text_xs()
+          .text_color(cx.theme().muted_foreground)
+          .child("No changes to commit"),
+      )
+      .into_any_element()
+  }
+
   fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let (icon, title, description, first_hint, second_hint) = if self.repo_root.is_some() {
-      (
-        UiIconName::CircleCheck,
-        "Working tree clean",
-        "Changed and staged files will appear here as soon as the checkout moves.",
-        (UiIconName::Sparkles, "Ask an agent to work"),
-        (UiIconName::FileDiff, "Edit files in this repository"),
-      )
-    } else if self.project_root.is_some() {
+    let (icon, title, description, first_hint, second_hint) = if self.project_root.is_some() {
       (
         UiIconName::CircleSlash,
         "No Git repository",
@@ -5630,7 +5644,7 @@ impl Render for DockPanel {
       DockPanelTab::Files => self.render_files_tab(_window, cx),
       DockPanelTab::Changes => {
         let content = if self.status_entries.is_empty() {
-          self.render_empty_state(cx)
+          self.render_changes_empty_state(cx)
         } else {
           let commit_message = self.commit_input.read(cx).value().to_string();
           let state = self.repo_state(&commit_message);
@@ -9168,6 +9182,15 @@ mod tests {
       cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
         .is_none(),
       "a clean tree has no Stage All or Unstage All primary action"
+    );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CHANGES_EMPTY_DEBUG_SELECTOR)
+        .is_some(),
+      "a clean tree uses the lightweight Changes empty state"
+    );
+    assert!(
+      cx.debug_bounds("dock-panel-empty-state").is_none(),
+      "a clean tree does not use the setup empty-state card"
     );
 
     // The menus share the same rules: commit-specific amend, repository-level undo and push.
