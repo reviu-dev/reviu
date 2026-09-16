@@ -26,6 +26,7 @@ use crate::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection, ProjectionBlock,
     ProjectionBlockMap, ReviewCommentBackground, ReviewCommentSide,
   },
+  search::SearchMatch,
   settings::indent_rainbow_enabled,
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
@@ -109,6 +110,61 @@ fn conflict_doc_line(display_line: &DisplayLine) -> Option<usize> {
     DisplayLine::Doc { doc_line, .. } | DisplayLine::Modified { doc_line, .. } => Some(*doc_line),
     _ => None,
   }
+}
+
+fn find_match_quads(
+  matches: &[SearchMatch],
+  active_match: Option<usize>,
+  line_texts: &HashMap<usize, String>,
+  shaped_lines: &[(usize, Arc<ShapedLine>)],
+  viewport: &Range<usize>,
+  bounds: Bounds<Pixels>,
+  line_height: Pixels,
+  scroll_offset: f32,
+  theme: &Theme,
+) -> Vec<PaintQuad> {
+  let mut quads = Vec::new();
+
+  for (index, found) in matches.iter().enumerate() {
+    if !viewport.contains(&found.display_line) {
+      continue;
+    }
+    let Some(line_text) = line_texts.get(&found.display_line) else {
+      continue;
+    };
+    let Some((_, shaped)) = shaped_lines
+      .iter()
+      .find(|(line, _)| *line == found.display_line)
+    else {
+      continue;
+    };
+
+    let line_len = line_text.chars().count();
+    let start = found.column_start.min(line_len);
+    let end = found.column_end.min(line_len);
+    if start >= end {
+      continue;
+    }
+
+    let x_start = shaped.x_for_index(char_offset_to_byte_offset(line_text, start));
+    let x_end = shaped.x_for_index(char_offset_to_byte_offset(line_text, end));
+    let y = line_y(bounds.top(), line_height, found.display_line, scroll_offset);
+    let color = if active_match == Some(index) {
+      theme.active_search_match()
+    } else {
+      theme.search_match()
+    };
+
+    quads.push(fill(
+      Bounds::from_corners(
+        point(bounds.left() + x_start, y),
+        point(bounds.left() + x_end, y + line_height),
+      ),
+      color,
+    ));
+  }
+
+  quads
 }
 
 fn conflict_background(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
@@ -811,6 +867,7 @@ pub struct PrepaintState {
   group_borders: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
   cursor_quad: Option<PaintQuad>,
+  search_match_quads: Vec<PaintQuad>,
   selection_quads: Vec<PaintQuad>,
   viewport: Range<usize>,
   bounds: Bounds<Pixels>,
@@ -974,6 +1031,8 @@ impl Element for EditorElement {
       projection,
       block_map,
       is_read_only,
+      find_matches,
+      active_find_match,
     ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
@@ -989,6 +1048,14 @@ impl Element for EditorElement {
       let mut viewport_lines = Vec::new();
       let projection = editor.projection.clone();
       let block_map = editor.block_map.clone();
+      let (find_matches, active_find_match) = if self.diff_view == DiffElementView::SplitLeft {
+        (Vec::new(), None)
+      } else {
+        editor
+          .find_highlights()
+          .map(|(matches, active)| (matches.to_vec(), active))
+          .unwrap_or_default()
+      };
 
       for display_idx in viewport.clone() {
         let Some(display_line) = editor.display_line(display_idx, doc_line_count) else {
@@ -1042,6 +1109,8 @@ impl Element for EditorElement {
         projection,
         block_map,
         editor.is_read_only,
+        find_matches,
+        active_find_match,
       )
     };
 
@@ -1216,6 +1285,22 @@ impl Element for EditorElement {
       }
       line_texts
     };
+
+    let search_match_quads = find_match_quads(
+      &find_matches,
+      active_find_match,
+      &line_texts,
+      &shaped_lines,
+      &viewport,
+      bounds,
+      line_height,
+      scroll_offset,
+      &theme,
+    );
+    let active_find_range = active_find_match
+      .and_then(|index| find_matches.get(index))
+      .map(|found| found.doc_range.clone());
+    let active_find_is_selection = active_find_range.as_ref() == Some(&selected_range);
 
     let mut indent_guides = Vec::new();
     if indent_rainbow_enabled() {
@@ -1814,7 +1899,7 @@ impl Element for EditorElement {
           ));
         }
       }
-    } else if !selected_range.is_empty() {
+    } else if !selected_range.is_empty() && !active_find_is_selection {
       let sel_start = selected_range.start;
       let sel_end = selected_range.end;
       let sel_start_line = document.char_to_line(sel_start);
@@ -1885,6 +1970,7 @@ impl Element for EditorElement {
       group_borders,
       diag_paths,
       cursor_quad,
+      search_match_quads,
       selection_quads,
       viewport,
       bounds,
@@ -2141,6 +2227,10 @@ impl Element for EditorElement {
     }
 
     for quad in &prepaint.indent_guides {
+      window.paint_quad(quad.clone());
+    }
+
+    for quad in &prepaint.search_match_quads {
       window.paint_quad(quad.clone());
     }
 

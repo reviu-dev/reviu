@@ -4323,6 +4323,11 @@ impl Editor {
     self.find_panel_open
   }
 
+  pub(crate) fn find_highlights(&self) -> Option<(&[SearchMatch], Option<usize>)> {
+    (self.find_panel_open && !self.find.query().is_empty())
+      .then(|| (self.find.matches(), self.find.active_match()))
+  }
+
   pub fn find_panel_occludes_display_line(&self, display_line: usize) -> bool {
     if !self.find_panel_open {
       return false;

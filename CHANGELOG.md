@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.1
 
+### Editor Find Highlights
+
+File search now highlights every match in the editor and uses a stronger active-match color, so Command-F behaves more like a code editor search instead of only selecting the current result.
+
 ### Project Search Shortcut
 
 Command-Shift-F now opens project-wide text search with file, line and preview results, while the dock panel shortcuts move to clearer defaults for Changes and Files.

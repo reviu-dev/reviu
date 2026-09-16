@@ -96,6 +96,42 @@ impl Theme {
     }
   }
 
+  pub fn search_match(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 42.0 / 360.0,
+        s: 0.92,
+        l: 0.48,
+        a: 0.38,
+      }
+    } else {
+      Hsla {
+        h: 44.0 / 360.0,
+        s: 0.95,
+        l: 0.62,
+        a: 0.45,
+      }
+    }
+  }
+
+  pub fn active_search_match(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 38.0 / 360.0,
+        s: 0.95,
+        l: 0.56,
+        a: 0.68,
+      }
+    } else {
+      Hsla {
+        h: 38.0 / 360.0,
+        s: 0.95,
+        l: 0.52,
+        a: 0.68,
+      }
+    }
+  }
+
   pub fn indent_rainbow_colors(&self) -> [Hsla; 6] {
     if self.is_dark {
       [
