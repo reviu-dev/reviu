@@ -61,6 +61,11 @@ struct ProjectSearchFileResults {
   matches: Vec<ProjectSearchMatch>,
 }
 
+enum ProjectSearchUpdate {
+  Batch(Vec<ProjectSearchFileResults>),
+  Finished { limit_reached: bool },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProjectSearchRow {
   File {
@@ -93,6 +98,7 @@ pub(crate) struct ProjectSearchView {
   options: SearchOptions,
   loading_files: bool,
   searching: bool,
+  limit_reached: bool,
   error: Option<SharedString>,
   on_open: ProjectSearchHandler,
   scroll_handle: VirtualListScrollHandle,
@@ -127,6 +133,7 @@ impl ProjectSearchView {
         .unwrap_or_default(),
       loading_files,
       searching: false,
+      limit_reached: false,
       error: None,
       on_open,
       scroll_handle: VirtualListScrollHandle::new(),
@@ -233,6 +240,7 @@ impl ProjectSearchView {
 
     if query.trim().is_empty() {
       self.searching = false;
+      self.limit_reached = false;
       self.results.clear();
       self.rows.clear();
       self._search_task = Task::ready(());
@@ -241,6 +249,7 @@ impl ProjectSearchView {
     }
 
     self.searching = true;
+    self.limit_reached = false;
     self.error = None;
     self.results.clear();
     self.rows.clear();
@@ -251,7 +260,7 @@ impl ProjectSearchView {
     self._search_task = cx.spawn(async move |this, cx| {
       cx.background_executor().timer(SEARCH_DEBOUNCE).await;
 
-      let (batch_sender, batch_receiver) = async_channel::bounded(8);
+      let (update_sender, update_receiver) = async_channel::bounded(8);
       let search = cx.background_spawn(async move {
         search_project_files_streaming(
           &checkout_root,
@@ -262,36 +271,36 @@ impl ProjectSearchView {
             generation,
             latest_generation,
           },
-          batch_sender,
+          update_sender,
         );
       });
 
-      while let Ok(batch) = batch_receiver.recv().await {
+      while let Ok(update) = update_receiver.recv().await {
         let _ = this.update(cx, |this, cx| {
           if this.search_generation != generation {
             return;
           }
-          this.results.extend(batch);
-          this.collapsed_files.retain(|path| {
-            this
-              .results
-              .iter()
-              .any(|result| result.path.as_path() == path.as_path())
-          });
-          this.sync_result_rows();
+          match update {
+            ProjectSearchUpdate::Batch(batch) => {
+              this.results.extend(batch);
+              this.collapsed_files.retain(|path| {
+                this
+                  .results
+                  .iter()
+                  .any(|result| result.path.as_path() == path.as_path())
+              });
+              this.sync_result_rows();
+            }
+            ProjectSearchUpdate::Finished { limit_reached } => {
+              this.searching = false;
+              this.limit_reached = limit_reached;
+            }
+          }
           cx.notify();
         });
       }
 
       search.await;
-
-      let _ = this.update(cx, |this, cx| {
-        if this.search_generation != generation {
-          return;
-        }
-        this.searching = false;
-        cx.notify();
-      });
     });
     cx.notify();
   }
@@ -336,6 +345,16 @@ impl ProjectSearchView {
 
   fn result_count(&self) -> usize {
     self.results.iter().map(|file| file.matches.len()).sum()
+  }
+
+  fn result_count_label(&self, result_count: usize) -> String {
+    if self.limit_reached {
+      format!("Showing first {MAX_SEARCH_RESULTS}")
+    } else if self.searching && result_count > 0 {
+      format!("{result_count} found...")
+    } else {
+      result_count.to_string()
+    }
   }
 
   fn render_result_row(&mut self, row_index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -444,6 +463,7 @@ impl Render for ProjectSearchView {
     let query_input = self.query_input.clone();
     let query = query_input.read(cx).value().to_string();
     let result_count = self.result_count();
+    let result_count_label = self.result_count_label(result_count);
     let case_sensitive = self.options.case_sensitive;
     let whole_word = self.options.whole_word;
     let regex = self.options.regex;
@@ -539,13 +559,14 @@ impl Render for ProjectSearchView {
               )
               .child(
                 h_flex()
-                  .w(px(88.0))
+                  .w(px(144.0))
                   .gap_1()
                   .items_center()
+                  .justify_end()
                   .text_xs()
                   .text_color(theme.muted_foreground)
                   .when(self.searching, |this| this.child(Spinner::new().small()))
-                  .child(format!("{}", result_count)),
+                  .child(result_count_label),
               ),
           ),
       )
@@ -752,6 +773,11 @@ struct SearchCancellation {
   latest_generation: Arc<AtomicU64>,
 }
 
+#[derive(Default)]
+struct ProjectSearchCompletion {
+  limit_reached: bool,
+}
+
 impl SearchCancellation {
   fn is_cancelled(&self) -> bool {
     self.latest_generation.load(Ordering::Relaxed) != self.generation
@@ -766,7 +792,7 @@ fn search_project_files(
   options: SearchOptions,
 ) -> Vec<ProjectSearchFileResults> {
   let mut results = Vec::new();
-  search_project_files_batched(checkout_root, files, query, options, None, |batch| {
+  let _ = search_project_files_batched(checkout_root, files, query, options, None, |batch| {
     results.extend(batch);
     true
   });
@@ -779,16 +805,23 @@ fn search_project_files_streaming(
   query: &str,
   options: SearchOptions,
   cancellation: SearchCancellation,
-  batch_sender: async_channel::Sender<Vec<ProjectSearchFileResults>>,
+  update_sender: async_channel::Sender<ProjectSearchUpdate>,
 ) {
-  search_project_files_batched(
+  let completion = search_project_files_batched(
     checkout_root,
     files,
     query,
     options,
     Some(&cancellation),
-    |batch| batch_sender.send_blocking(batch).is_ok(),
+    |batch| {
+      update_sender
+        .send_blocking(ProjectSearchUpdate::Batch(batch))
+        .is_ok()
+    },
   );
+  let _ = update_sender.send_blocking(ProjectSearchUpdate::Finished {
+    limit_reached: completion.limit_reached,
+  });
 }
 
 fn search_project_files_batched(
@@ -798,15 +831,15 @@ fn search_project_files_batched(
   options: SearchOptions,
   cancellation: Option<&SearchCancellation>,
   mut on_batch: impl FnMut(Vec<ProjectSearchFileResults>) -> bool,
-) {
+) -> ProjectSearchCompletion {
   let query = query.trim();
   if query.is_empty() {
-    return;
+    return ProjectSearchCompletion::default();
   }
 
   let matcher = match SearchMatcher::new(query, options) {
     Ok(matcher) => matcher,
-    Err(_) => return,
+    Err(_) => return ProjectSearchCompletion::default(),
   };
   let mut total_results = 0;
   let mut batch_results = 0;
@@ -884,7 +917,9 @@ fn search_project_files_batched(
       });
       if batch_results >= SEARCH_RESULT_BATCH_SIZE {
         if !on_batch(std::mem::take(&mut batch)) {
-          return;
+          return ProjectSearchCompletion {
+            limit_reached: total_results >= MAX_SEARCH_RESULTS,
+          };
         }
         batch_results = 0;
       }
@@ -893,6 +928,10 @@ fn search_project_files_batched(
 
   if !batch.is_empty() {
     let _ = on_batch(batch);
+  }
+
+  ProjectSearchCompletion {
+    limit_reached: total_results >= MAX_SEARCH_RESULTS,
   }
 }
 
@@ -984,7 +1023,7 @@ mod tests {
       .collect::<Vec<_>>();
     let mut batch_sizes = Vec::new();
 
-    search_project_files_batched(
+    let completion = search_project_files_batched(
       &temp.path,
       &files,
       "needle",
@@ -997,5 +1036,34 @@ mod tests {
     );
 
     assert_eq!(batch_sizes, vec![SEARCH_RESULT_BATCH_SIZE, 1]);
+    assert!(!completion.limit_reached);
+  }
+
+  #[test]
+  fn project_search_reports_when_the_result_limit_is_reached() {
+    let temp = TempDir::new("project-search-limit");
+    let files = (0..=MAX_SEARCH_RESULTS)
+      .map(|index| {
+        let path = PathBuf::from(format!("file-{index}.txt"));
+        std::fs::write(temp.path.join(&path), "needle\n").expect("write file");
+        path
+      })
+      .collect::<Vec<_>>();
+    let mut result_count = 0;
+
+    let completion = search_project_files_batched(
+      &temp.path,
+      &files,
+      "needle",
+      SearchOptions::default(),
+      None,
+      |batch| {
+        result_count += batch.iter().map(|file| file.matches.len()).sum::<usize>();
+        true
+      },
+    );
+
+    assert_eq!(result_count, MAX_SEARCH_RESULTS);
+    assert!(completion.limit_reached);
   }
 }
