@@ -2424,6 +2424,7 @@ dependencies = [
  "gpui-component",
  "log",
  "parking_lot",
+ "regex",
  "syntax",
  "ui",
  "unicode-segmentation",

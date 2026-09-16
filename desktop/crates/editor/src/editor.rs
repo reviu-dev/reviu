@@ -936,8 +936,10 @@ pub struct Editor {
   find_input: Option<Entity<InputState>>,
   find_input_subscription: Option<Subscription>,
   find_query: String,
+  find_options: FindOptions,
   find_matches: Vec<FindMatch>,
   find_active_match: Option<usize>,
+  find_error: Option<String>,
   find_scroll_epoch: usize,
   pub diff_task: Option<Task<()>>,
   projection_task: Option<Task<()>>,
@@ -981,6 +983,19 @@ struct ReviewCommentLayout {
   height: Pixels,
   messages: Vec<ReviewCommentMessageLayout>,
   collapsed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FindDirection {
+  Next,
+  Previous,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FindOptions {
+  case_sensitive: bool,
+  whole_word: bool,
+  regex: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1453,8 +1468,10 @@ impl Editor {
       find_input: None,
       find_input_subscription: None,
       find_query: String::new(),
+      find_options: FindOptions::default(),
       find_matches: Vec::new(),
       find_active_match: None,
+      find_error: None,
       find_scroll_epoch: 0,
       diff_task: None,
       projection_task: None,
@@ -4122,10 +4139,20 @@ impl Editor {
     }
   }
 
-  fn collect_find_matches(&self, query: &str, cx: &App) -> Vec<FindMatch> {
+  fn collect_find_matches(&self, query: &str, cx: &App) -> Result<Vec<FindMatch>, String> {
     if query.is_empty() {
-      return Vec::new();
+      return Ok(Vec::new());
     }
+
+    let pattern = if self.find_options.regex {
+      query.to_string()
+    } else {
+      regex::escape(query)
+    };
+    let matcher = regex::RegexBuilder::new(&pattern)
+      .case_insensitive(!self.find_options.case_sensitive)
+      .build()
+      .map_err(|error| error.to_string())?;
 
     let document = self.document.read(cx);
     let doc_line_count = document.len_lines();
@@ -4152,21 +4179,18 @@ impl Editor {
       }
 
       let line_start_offset = document.line_to_char(doc_line);
-      let mut search_start = 0usize;
-      while search_start <= line_text.len() {
-        let Some(search_slice) = line_text.get(search_start..) else {
-          break;
-        };
-        let Some(found) = search_slice.find(query) else {
-          break;
-        };
-        let byte_start = search_start + found;
-        let byte_end = byte_start + query.len();
+      for found in matcher.find_iter(line_text) {
+        let byte_start = found.start();
+        let byte_end = found.end();
+        if byte_start == byte_end {
+          continue;
+        }
+        if self.find_options.whole_word
+          && !Self::is_whole_word_match(line_text, byte_start, byte_end)
+        {
+          continue;
+        }
         if !line_text.is_char_boundary(byte_start) || !line_text.is_char_boundary(byte_end) {
-          search_start = search_start.saturating_add(1).min(line_text.len());
-          while search_start < line_text.len() && !line_text.is_char_boundary(search_start) {
-            search_start += 1;
-          }
           continue;
         }
         let column_start = line_text[..byte_start].chars().count();
@@ -4179,15 +4203,26 @@ impl Editor {
           column_end,
           doc_range: range_start..range_end,
         });
-        let next_char_boundary = line_text
-          .get(byte_start..)
-          .and_then(|slice| slice.chars().next().map(|ch| byte_start + ch.len_utf8()))
-          .unwrap_or(line_text.len());
-        search_start = byte_end.max(next_char_boundary);
       }
     }
 
-    matches
+    Ok(matches)
+  }
+
+  fn is_whole_word_match(line_text: &str, byte_start: usize, byte_end: usize) -> bool {
+    let previous_is_word = line_text[..byte_start]
+      .chars()
+      .next_back()
+      .is_some_and(Self::is_find_word_char);
+    let next_is_word = line_text[byte_end..]
+      .chars()
+      .next()
+      .is_some_and(Self::is_find_word_char);
+    !previous_is_word && !next_is_word
+  }
+
+  fn is_find_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
   }
 
   fn scroll_to_find_match(
@@ -4245,6 +4280,40 @@ impl Editor {
     true
   }
 
+  fn scroll_horizontally_to_find_match(&mut self, found: &FindMatch, cx: &mut Context<Self>) {
+    let document = self.document.read(cx);
+    if found.doc_range.start > document.len() {
+      return;
+    }
+    let doc_line = document.char_to_line(found.doc_range.start);
+    let line_text = document
+      .line_content(doc_line)
+      .map(|line| line.into_owned())
+      .unwrap_or_default();
+    let line_len = line_text.chars().count();
+    let column = found.column_end.min(line_len);
+    let cursor_x = self
+      .line_layouts
+      .get(&doc_line)
+      .map(|shaped_line| {
+        let cursor_byte = char_offset_to_byte_offset(&line_text, column);
+        shaped_line.x_for_index(cursor_byte)
+      })
+      .unwrap_or_else(|| self.estimated_cursor_x(column));
+
+    let horizontal_padding = self.gutter_width() + px(EXTRA_EDITOR_WIDTH);
+    let current_scroll_x = self.scroll_handle.offset().x;
+    let viewport_width = self.horizontal_viewport_width();
+    let visible_start_x = -current_scroll_x;
+    let visible_end_x = -current_scroll_x + viewport_width;
+
+    if cursor_x < visible_start_x + horizontal_padding {
+      self.set_horizontal_scroll_offset(-(cursor_x - horizontal_padding).max(px(0.0)));
+    } else if cursor_x > visible_end_x - horizontal_padding {
+      self.set_horizontal_scroll_offset(-(cursor_x - viewport_width + horizontal_padding));
+    }
+  }
+
   fn select_find_match(
     &mut self,
     index: usize,
@@ -4267,6 +4336,7 @@ impl Editor {
       blink.pause_blinking(cx);
     });
     self.scroll_to_find_match(found.display_line, line_height, smooth_scroll, cx);
+    self.scroll_horizontally_to_find_match(&found, cx);
     cx.notify();
   }
 
@@ -4276,17 +4346,45 @@ impl Editor {
     smooth_scroll: bool,
     cx: &mut Context<Self>,
   ) {
+    self.recompute_find_matches(true, cx);
+    if self.find_matches.is_empty() {
+      cx.notify();
+      return;
+    }
+    let active = self.find_active_match.unwrap_or(0);
+    self.select_find_match(active, line_height, smooth_scroll, cx);
+  }
+
+  fn recompute_find_matches(&mut self, preserve_active_match: bool, cx: &mut Context<Self>) {
     if self.find_query.is_empty() {
       self.find_matches.clear();
       self.find_active_match = None;
+      self.find_error = None;
       cx.notify();
       return;
     }
 
-    let previous_active_match = self
-      .find_active_match
-      .and_then(|index| self.find_matches.get(index).cloned());
-    self.find_matches = self.collect_find_matches(&self.find_query, cx);
+    let previous_active_match = preserve_active_match
+      .then(|| {
+        self
+          .find_active_match
+          .and_then(|index| self.find_matches.get(index).cloned())
+      })
+      .flatten();
+
+    match self.collect_find_matches(&self.find_query, cx) {
+      Ok(matches) => {
+        self.find_matches = matches;
+        self.find_error = None;
+      }
+      Err(error) => {
+        self.find_matches.clear();
+        self.find_active_match = None;
+        self.find_error = Some(error);
+        cx.notify();
+        return;
+      }
+    }
 
     if self.find_matches.is_empty() {
       self.find_active_match = None;
@@ -4294,45 +4392,95 @@ impl Editor {
       return;
     }
 
-    let next_active = previous_active_match
+    self.find_active_match = previous_active_match
       .and_then(|previous| {
         self
           .find_matches
           .iter()
           .position(|candidate| *candidate == previous)
       })
-      .unwrap_or(0);
-    self.select_find_match(next_active, line_height, smooth_scroll, cx);
+      .or_else(|| self.find_match_index_from_cursor(FindDirection::Next))
+      .or(Some(0));
+    cx.notify();
+  }
+
+  pub(crate) fn refresh_find_matches_after_document_edit(&mut self, cx: &mut Context<Self>) {
+    if self.find_panel_open && !self.find_query.is_empty() {
+      self.recompute_find_matches(false, cx);
+    }
+  }
+
+  fn find_match_index_from_cursor(&self, direction: FindDirection) -> Option<usize> {
+    if self.find_matches.is_empty() {
+      return None;
+    }
+
+    let cursor = self.cursor_offset();
+    match direction {
+      FindDirection::Next => self
+        .find_matches
+        .iter()
+        .position(|candidate| candidate.doc_range.start >= cursor)
+        .or(Some(0)),
+      FindDirection::Previous => self
+        .find_matches
+        .iter()
+        .rposition(|candidate| candidate.doc_range.end <= cursor)
+        .or_else(|| self.find_matches.len().checked_sub(1)),
+    }
+  }
+
+  fn navigation_target_find_match(
+    &self,
+    direction: FindDirection,
+    previous_active_match: Option<FindMatch>,
+  ) -> Option<usize> {
+    if self.find_matches.is_empty() {
+      return None;
+    }
+
+    if let Some(previous_index) = previous_active_match.and_then(|previous| {
+      self
+        .find_matches
+        .iter()
+        .position(|candidate| *candidate == previous)
+    }) {
+      return Some(match direction {
+        FindDirection::Next => (previous_index + 1) % self.find_matches.len(),
+        FindDirection::Previous if previous_index == 0 => self.find_matches.len() - 1,
+        FindDirection::Previous => previous_index - 1,
+      });
+    }
+
+    self.find_match_index_from_cursor(direction)
+  }
+
+  fn selected_active_find_match(&self) -> Option<FindMatch> {
+    self
+      .find_active_match
+      .and_then(|index| self.find_matches.get(index))
+      .filter(|active| active.doc_range == self.selected_range)
+      .cloned()
   }
 
   fn find_next_match_with_line_height(&mut self, line_height: Pixels, cx: &mut Context<Self>) {
-    if self.find_matches.is_empty() {
-      return;
+    let previous_active_match = self.selected_active_find_match();
+    self.recompute_find_matches(false, cx);
+    if let Some(next_index) =
+      self.navigation_target_find_match(FindDirection::Next, previous_active_match)
+    {
+      self.select_find_match(next_index, line_height, true, cx);
     }
-
-    let next_index = self
-      .find_active_match
-      .map(|index| (index + 1) % self.find_matches.len())
-      .unwrap_or(0);
-    self.select_find_match(next_index, line_height, true, cx);
   }
 
   fn find_previous_match_with_line_height(&mut self, line_height: Pixels, cx: &mut Context<Self>) {
-    if self.find_matches.is_empty() {
-      return;
+    let previous_active_match = self.selected_active_find_match();
+    self.recompute_find_matches(false, cx);
+    if let Some(previous_index) =
+      self.navigation_target_find_match(FindDirection::Previous, previous_active_match)
+    {
+      self.select_find_match(previous_index, line_height, true, cx);
     }
-
-    let previous_index = self
-      .find_active_match
-      .map(|index| {
-        if index == 0 {
-          self.find_matches.len() - 1
-        } else {
-          index - 1
-        }
-      })
-      .unwrap_or_else(|| self.find_matches.len() - 1);
-    self.select_find_match(previous_index, line_height, true, cx);
   }
 
   pub fn is_find_panel_open(&self) -> bool {
@@ -4352,6 +4500,7 @@ impl Editor {
     self.find_query.clear();
     self.find_matches.clear();
     self.find_active_match = None;
+    self.find_error = None;
     self.find_scroll_epoch = self.find_scroll_epoch.saturating_add(1);
 
     if let Some(input) = self.find_input.clone() {
@@ -4404,6 +4553,25 @@ impl Editor {
     self.find_previous_match_with_line_height(self.measured_editor_line_height(), cx);
   }
 
+  pub(crate) fn toggle_find_case_sensitive(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.find_options.case_sensitive = !self.find_options.case_sensitive;
+    self.refresh_find_matches(self.measured_editor_line_height(), false, cx);
+  }
+
+  pub(crate) fn toggle_find_whole_word(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    self.find_options.whole_word = !self.find_options.whole_word;
+    self.refresh_find_matches(self.measured_editor_line_height(), false, cx);
+  }
+
+  pub(crate) fn toggle_find_regex(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    self.find_options.regex = !self.find_options.regex;
+    self.refresh_find_matches(self.measured_editor_line_height(), false, cx);
+  }
+
   fn find_query_from_selection(&self, cx: &App) -> Option<String> {
     let selected = self.selected_text_for_copy(cx)?;
     let selected = selected.replace('\r', "");
@@ -4447,7 +4615,14 @@ impl Editor {
       .unwrap_or(0)
       .min(total_matches);
     let has_matches = total_matches > 0;
+    let find_error = self.find_error.clone();
+    let case_sensitive = self.find_options.case_sensitive;
+    let whole_word = self.find_options.whole_word;
+    let regex = self.find_options.regex;
 
+    let case_editor = editor_entity.clone();
+    let whole_word_editor = editor_entity.clone();
+    let regex_editor = editor_entity.clone();
     let previous_editor = editor_entity.clone();
     let next_editor = editor_entity.clone();
     let close_editor = editor_entity.clone();
@@ -4460,7 +4635,7 @@ impl Editor {
         .absolute()
         .top(px(8.0))
         .right(px(12.0))
-        .w(px(360.0))
+        .w(px(520.0))
         .p_2()
         .occlude()
         .flex()
@@ -4496,10 +4671,56 @@ impl Editor {
         )
         .child(
           div()
-            .w(px(52.0))
+            .w(px(88.0))
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child(format!("{}/{}", current_match, total_matches)),
+            .child(
+              find_error
+                .map(|error| format!("Invalid: {error}"))
+                .unwrap_or_else(|| format!("{}/{}", current_match, total_matches)),
+            ),
+        )
+        .child(
+          Button::new("editor-find-case")
+            .label("Aa")
+            .ghost()
+            .xsmall()
+            .compact()
+            .selected(case_sensitive)
+            .tooltip("Match case")
+            .on_click(move |_, window, cx| {
+              case_editor.update(cx, |editor, cx| {
+                editor.toggle_find_case_sensitive(window, cx);
+              });
+            }),
+        )
+        .child(
+          Button::new("editor-find-word")
+            .label("ab")
+            .ghost()
+            .xsmall()
+            .compact()
+            .selected(whole_word)
+            .tooltip("Whole word")
+            .on_click(move |_, window, cx| {
+              whole_word_editor.update(cx, |editor, cx| {
+                editor.toggle_find_whole_word(window, cx);
+              });
+            }),
+        )
+        .child(
+          Button::new("editor-find-regex")
+            .label(".*")
+            .ghost()
+            .xsmall()
+            .compact()
+            .selected(regex)
+            .tooltip("Use regex")
+            .on_click(move |_, window, cx| {
+              regex_editor.update(cx, |editor, cx| {
+                editor.toggle_find_regex(window, cx);
+              });
+            }),
         )
         .child(
           Button::new("editor-find-prev")
@@ -9763,6 +9984,7 @@ impl EntityInputHandler for Editor {
     self.is_dirty = true;
     let _ = window;
     self.ensure_cursor_visible_when_hidden(cx);
+    self.refresh_find_matches_after_document_edit(cx);
     cx.notify();
     self.schedule_diff_recompute(cx);
   }
@@ -9841,6 +10063,7 @@ impl EntityInputHandler for Editor {
     self.is_dirty = true;
     let _ = window;
     self.ensure_cursor_visible_when_hidden(cx);
+    self.refresh_find_matches_after_document_edit(cx);
     cx.notify();
     self.schedule_diff_recompute(cx);
   }
@@ -10279,6 +10502,11 @@ impl Render for Editor {
         el.on_action(cx.listener(crate::actions::select_all))
           .on_action(cx.listener(crate::actions::copy))
           .on_action(cx.listener(crate::actions::find))
+          .on_action(cx.listener(crate::actions::find_next))
+          .on_action(cx.listener(crate::actions::find_previous))
+          .on_action(cx.listener(crate::actions::toggle_find_case_sensitive))
+          .on_action(cx.listener(crate::actions::toggle_find_whole_word))
+          .on_action(cx.listener(crate::actions::toggle_find_regex))
       })
       .on_action(cx.listener(crate::actions::close_find))
       .when_else(self.theme.is_dark, |el| el.bg(black()), |el| el.bg(white()))
@@ -11633,8 +11861,10 @@ pub mod tests {
           find_input: None,
           find_input_subscription: None,
           find_query: String::new(),
+          find_options: FindOptions::default(),
           find_matches: Vec::new(),
           find_active_match: None,
+          find_error: None,
           find_scroll_epoch: 0,
           review_comments: Vec::new(),
           document: doc,
@@ -14820,11 +15050,85 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn test_find_next_recomputes_after_active_match_changes(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar\nfoo baz");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find_panel_open = true;
+      editor.find_query = "foo".to_string();
+      editor.refresh_find_matches(px(20.0), false, cx);
+      assert_eq!(editor.find_active_match, Some(0));
+
+      editor.document.update(cx, |document, cx| {
+        document.buffer.transaction(Instant::now(), |buffer, tx| {
+          buffer.replace(tx, 0..3, "qux");
+        });
+        cx.notify();
+      });
+      editor.selected_range = 3..3;
+      editor.refresh_find_matches_after_document_edit(cx);
+
+      assert_eq!(editor.find_matches.len(), 1);
+      editor.find_next_match_with_line_height(px(20.0), cx);
+
+      assert_eq!(editor.find_active_match, Some(0));
+      assert_eq!(editor.selected_range, 8..11);
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_selection_scrolls_horizontally(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa needle",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_width = px(120.0);
+      editor.max_line_width = px(1200.0);
+      editor.editor_char_width = px(10.0);
+      editor.find_query = "needle".to_string();
+      editor.refresh_find_matches(px(20.0), false, cx);
+
+      assert!(
+        editor.scroll_handle.offset().x < px(0.0),
+        "find should reveal matches outside the horizontal viewport"
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_options_case_word_and_regex(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "Foo foo food f00");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find_query = "foo".to_string();
+      editor.refresh_find_matches(px(20.0), false, cx);
+      assert_eq!(editor.find_matches.len(), 3);
+
+      editor.find_options.case_sensitive = true;
+      editor.refresh_find_matches(px(20.0), false, cx);
+      assert_eq!(editor.find_matches.len(), 2);
+
+      editor.find_options.whole_word = true;
+      editor.refresh_find_matches(px(20.0), false, cx);
+      assert_eq!(editor.find_matches.len(), 1);
+
+      editor.find_options.regex = true;
+      editor.find_options.whole_word = false;
+      editor.find_query = "f\\d+".to_string();
+      editor.refresh_find_matches(px(20.0), false, cx);
+      assert_eq!(editor.find_matches.len(), 1);
+      assert_eq!(editor.selected_range, 13..16);
+    });
+  }
+
+  #[gpui::test]
   fn test_find_smooth_scroll_uses_test_scheduler_timers(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_lines(cx.clone(), 80);
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.find_matches = editor.collect_find_matches("Line 60", cx);
+      editor.find_matches = editor.collect_find_matches("Line 60", cx).unwrap();
       assert_eq!(editor.find_matches.len(), 1);
       editor.scroll_offset_y = 0.0;
       assert!(editor.scroll_to_find_match(editor.find_matches[0].display_line, px(20.0), true, cx));

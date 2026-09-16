@@ -2,9 +2,11 @@ use std::{borrow::Cow, collections::HashMap};
 
 use editor::{
   AltLeft, AltRight, Backspace, BackspaceAll, BackspaceWord, CloseFind, CmdDown, CmdLeft, CmdRight,
-  CmdUp, Copy, Cut, Delete, Down, End, Enter, Find, Home, Left, Paste, Quit, Redo, Right, Save,
-  SelectAll, SelectCmdDown, SelectCmdLeft, SelectCmdRight, SelectCmdUp, SelectDown, SelectLeft,
-  SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShowCharacterPalette, Tab, Undo, Up,
+  CmdUp, Copy, Cut, Delete, Down, End, Enter, Find, FindNext, FindPrevious, Home, Left, Paste,
+  Quit, Redo, Right, Save, SelectAll, SelectCmdDown, SelectCmdLeft, SelectCmdRight, SelectCmdUp,
+  SelectDown, SelectLeft, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
+  ShowCharacterPalette, Tab, ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, Undo,
+  Up,
 };
 use gpui::{Action, App, Global, KeyBinding, KeyContext, Keystroke, Window};
 use ui::{COMMAND_PALETTE_CONTEXT, CommandPaletteCommand, CommandPaletteCommandId};
@@ -1268,6 +1270,11 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("cmd-shift-z", Redo, None),
     KeyBinding::new("cmd-s", Save, None),
     KeyBinding::new("cmd-f", Find, None),
+    KeyBinding::new("cmd-g", FindNext, Some("Editor")),
+    KeyBinding::new("cmd-shift-g", FindPrevious, Some("Editor")),
+    KeyBinding::new("alt-cmd-c", ToggleFindCaseSensitive, Some("Editor")),
+    KeyBinding::new("alt-cmd-w", ToggleFindWholeWord, Some("Editor")),
+    KeyBinding::new("alt-cmd-x", ToggleFindRegex, Some("Editor")),
     KeyBinding::new("escape", CloseFind, Some("Editor")),
     KeyBinding::new("escape", ReturnFocusToEditor, Some(DOCK_PANEL_CONTEXT)),
     KeyBinding::new("cmd-n", NewFileInFilesPanel, Some(FILES_TREE_CONTEXT)),

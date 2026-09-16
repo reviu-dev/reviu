@@ -47,6 +47,11 @@ actions!(
     Redo,
     Save,
     Find,
+    FindNext,
+    FindPrevious,
+    ToggleFindCaseSensitive,
+    ToggleFindWholeWord,
+    ToggleFindRegex,
     CloseFind,
     Quit,
   ]
@@ -703,6 +708,7 @@ pub fn undo(editor: &mut Editor, _: &Undo, _window: &mut Window, cx: &mut Contex
       editor.redo_stack.push_back(transaction);
       editor.is_dirty = true;
 
+      editor.refresh_find_matches_after_document_edit(cx);
       cx.notify();
       editor.schedule_diff_recompute(cx);
     } else {
@@ -732,6 +738,7 @@ pub fn redo(editor: &mut Editor, _: &Redo, _window: &mut Window, cx: &mut Contex
       editor.undo_stack.push_back(transaction);
       editor.is_dirty = true;
 
+      editor.refresh_find_matches_after_document_edit(cx);
       cx.notify();
       editor.schedule_diff_recompute(cx);
     } else {
@@ -746,6 +753,46 @@ pub fn save(editor: &mut Editor, _: &Save, _window: &mut Window, cx: &mut Contex
 
 pub fn find(editor: &mut Editor, _: &Find, window: &mut Window, cx: &mut Context<Editor>) {
   editor.open_find_panel(window, cx);
+}
+
+pub fn find_next(editor: &mut Editor, _: &FindNext, window: &mut Window, cx: &mut Context<Editor>) {
+  editor.find_next_match(window, cx);
+}
+
+pub fn find_previous(
+  editor: &mut Editor,
+  _: &FindPrevious,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.find_previous_match(window, cx);
+}
+
+pub fn toggle_find_case_sensitive(
+  editor: &mut Editor,
+  _: &ToggleFindCaseSensitive,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.toggle_find_case_sensitive(window, cx);
+}
+
+pub fn toggle_find_whole_word(
+  editor: &mut Editor,
+  _: &ToggleFindWholeWord,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.toggle_find_whole_word(window, cx);
+}
+
+pub fn toggle_find_regex(
+  editor: &mut Editor,
+  _: &ToggleFindRegex,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.toggle_find_regex(window, cx);
 }
 
 pub fn close_find(

@@ -17,6 +17,7 @@ git = { workspace = true }
 gpui-component = { workspace = true }
 blake3 = { workspace = true }
 gfm_markdown_viewer = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
