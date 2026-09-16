@@ -4,21 +4,9 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.1
 
-### Editor Replace
+### Editor Find and Replace
 
-The editor find bar now includes replace controls for the current match or all matches, with replace-all grouped into one undo step.
-
-### Editor Find History
-
-File search now remembers submitted queries in the current editor, so the search field can cycle through previous searches with Up and Down.
-
-### Editor Find Options
-
-File search now uses smart case when case sensitivity is off and remembers the case, whole-word and regex toggles for future editors.
-
-### Editor Find Highlights
-
-File search now highlights every match in the editor and uses a stronger active-match color, so Command-F behaves more like a code editor search instead of only selecting the current result.
+File search now behaves more like a code editor: every match is highlighted, the active result has a stronger color, smart case works when case sensitivity is off, and case, whole-word and regex options are remembered for future editors. The find field also remembers submitted queries, and replace controls can update the current match or all matches with replace-all grouped into one undo step.
 
 ### Project Search Shortcut
 
