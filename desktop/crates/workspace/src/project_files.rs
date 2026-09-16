@@ -154,12 +154,20 @@ pub(crate) fn list_project_files(project_root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 pub(crate) fn list_project_search_files(project_root: &Path) -> Result<Vec<PathBuf>> {
+  list_project_search_files_with_options(project_root, false, false)
+}
+
+pub(crate) fn list_project_search_files_with_options(
+  project_root: &Path,
+  include_gitignored: bool,
+  include_hidden: bool,
+) -> Result<Vec<PathBuf>> {
   Ok(
     list_project_entries_with_options(
       project_root,
       &ProjectScanOptions {
-        include_gitignored: false,
-        include_hidden: false,
+        include_gitignored,
+        include_hidden,
         ..ProjectScanOptions::default()
       },
     )?

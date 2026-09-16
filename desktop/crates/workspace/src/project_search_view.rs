@@ -28,7 +28,9 @@ use gpui_component::{
   spinner::Spinner,
   v_flex, v_virtual_list,
 };
-use ui::{FILE_ICON_SIZE_PX, file_icon_path_for_path_with_theme};
+use ui::{FILE_ICON_SIZE_PX, UiIconName, file_icon_path_for_path_with_theme};
+
+use crate::project_files::list_project_search_files_with_options;
 
 const MAX_SEARCH_RESULTS: usize = 500;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -91,7 +93,11 @@ pub(crate) struct ProjectSearchView {
   checkout_root: PathBuf,
   files: Arc<Vec<PathBuf>>,
   query_input: Entity<InputState>,
+  include_input: Entity<InputState>,
+  exclude_input: Entity<InputState>,
   _query_subscription: Subscription,
+  _include_subscription: Subscription,
+  _exclude_subscription: Subscription,
   results: Vec<ProjectSearchFileResults>,
   rows: Vec<ProjectSearchRow>,
   collapsed_files: HashSet<PathBuf>,
@@ -99,12 +105,16 @@ pub(crate) struct ProjectSearchView {
   loading_files: bool,
   searching: bool,
   limit_reached: bool,
+  filters_open: bool,
+  include_ignored: bool,
+  include_hidden: bool,
   error: Option<SharedString>,
   on_open: ProjectSearchHandler,
   scroll_handle: VirtualListScrollHandle,
   search_generation: u64,
   latest_search_generation: Arc<AtomicU64>,
   _search_task: Task<()>,
+  _files_task: Task<()>,
 }
 
 impl ProjectSearchView {
@@ -117,13 +127,23 @@ impl ProjectSearchView {
     on_open: ProjectSearchHandler,
   ) -> Self {
     let query_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
+    let include_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Include: e.g. src/**/*.rs"));
+    let exclude_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Exclude: e.g. vendor/*, *.lock"));
     let query_subscription = cx.subscribe_in(&query_input, window, Self::on_query_input_event);
+    let include_subscription = cx.subscribe_in(&include_input, window, Self::on_filter_input_event);
+    let exclude_subscription = cx.subscribe_in(&exclude_input, window, Self::on_filter_input_event);
     Self {
       focus_handle: cx.focus_handle(),
       checkout_root,
       files: Arc::new(files),
       query_input,
+      include_input,
+      exclude_input,
       _query_subscription: query_subscription,
+      _include_subscription: include_subscription,
+      _exclude_subscription: exclude_subscription,
       results: Vec::new(),
       rows: Vec::new(),
       collapsed_files: HashSet::new(),
@@ -134,12 +154,16 @@ impl ProjectSearchView {
       loading_files,
       searching: false,
       limit_reached: false,
+      filters_open: false,
+      include_ignored: false,
+      include_hidden: false,
       error: None,
       on_open,
       scroll_handle: VirtualListScrollHandle::new(),
       search_generation: 0,
       latest_search_generation: Arc::new(AtomicU64::new(0)),
       _search_task: Task::ready(()),
+      _files_task: Task::ready(()),
     }
   }
 
@@ -205,6 +229,18 @@ impl ProjectSearchView {
     }
   }
 
+  fn on_filter_input_event(
+    &mut self,
+    _input: &Entity<InputState>,
+    event: &InputEvent,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if matches!(event, InputEvent::Change) {
+      self.refresh_results(cx);
+    }
+  }
+
   fn first_open_request(&self) -> Option<ProjectSearchOpenRequest> {
     let file = self.results.first()?;
     let found = file.matches.first()?;
@@ -228,6 +264,67 @@ impl ProjectSearchView {
         cx.notify();
       }
     }
+  }
+
+  fn filter_texts(&self, cx: &App) -> (String, String) {
+    (
+      self.include_input.read(cx).value().to_string(),
+      self.exclude_input.read(cx).value().to_string(),
+    )
+  }
+
+  fn toggle_filters(&mut self, cx: &mut Context<Self>) {
+    self.filters_open = !self.filters_open;
+    cx.notify();
+  }
+
+  fn toggle_include_ignored(&mut self, cx: &mut Context<Self>) {
+    self.include_ignored = !self.include_ignored;
+    self.reload_files(cx);
+  }
+
+  fn toggle_include_hidden(&mut self, cx: &mut Context<Self>) {
+    self.include_hidden = !self.include_hidden;
+    self.reload_files(cx);
+  }
+
+  fn reload_files(&mut self, cx: &mut Context<Self>) {
+    self.search_generation = self.search_generation.wrapping_add(1);
+    self
+      .latest_search_generation
+      .store(self.search_generation, Ordering::Relaxed);
+    self.loading_files = true;
+    self.searching = false;
+    self.limit_reached = false;
+    self.results.clear();
+    self.rows.clear();
+    self.error = None;
+
+    let checkout_root = self.checkout_root.clone();
+    let include_ignored = self.include_ignored;
+    let include_hidden = self.include_hidden;
+    self._files_task = cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(async move {
+          list_project_search_files_with_options(&checkout_root, include_ignored, include_hidden)
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| match result {
+        Ok(files) => {
+          this.files = Arc::new(files);
+          this.loading_files = false;
+          this.refresh_results(cx);
+        }
+        Err(error) => {
+          log::error!("load files for project search filters: {error:#}");
+          this.loading_files = false;
+          this.error = Some("Could not load project files".into());
+          cx.notify();
+        }
+      });
+    });
+    cx.notify();
   }
 
   fn refresh_results(&mut self, cx: &mut Context<Self>) {
@@ -256,6 +353,7 @@ impl ProjectSearchView {
     let checkout_root = self.checkout_root.clone();
     let files = self.files.clone();
     let options = self.options;
+    let (include_patterns, exclude_patterns) = self.filter_texts(cx);
     let latest_generation = self.latest_search_generation.clone();
     self._search_task = cx.spawn(async move |this, cx| {
       cx.background_executor().timer(SEARCH_DEBOUNCE).await;
@@ -267,6 +365,8 @@ impl ProjectSearchView {
           files.as_ref(),
           &query,
           options,
+          include_patterns,
+          exclude_patterns,
           SearchCancellation {
             generation,
             latest_generation,
@@ -461,12 +561,17 @@ impl Render for ProjectSearchView {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let query_input = self.query_input.clone();
+    let include_input = self.include_input.clone();
+    let exclude_input = self.exclude_input.clone();
     let query = query_input.read(cx).value().to_string();
     let result_count = self.result_count();
     let result_count_label = self.result_count_label(result_count);
     let case_sensitive = self.options.case_sensitive;
     let whole_word = self.options.whole_word;
     let regex = self.options.regex;
+    let filters_open = self.filters_open;
+    let include_ignored = self.include_ignored;
+    let include_hidden = self.include_hidden;
     let entity = cx.entity();
 
     v_flex()
@@ -551,24 +656,130 @@ impl Render for ProjectSearchView {
                           .compact()
                           .selected(regex)
                           .tooltip("Use regex")
-                          .on_click(move |_, _, cx| {
-                            entity.update(cx, |view, cx| view.toggle_regex(cx));
+                          .on_click({
+                            let entity = entity.clone();
+                            move |_, _, cx| {
+                              entity.update(cx, |view, cx| view.toggle_regex(cx));
+                            }
                           }),
                       ),
                   ),
               )
               .child(
                 h_flex()
-                  .w(px(144.0))
-                  .gap_1()
+                  .w(px(176.0))
+                  .gap_2()
                   .items_center()
-                  .justify_end()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .when(self.searching, |this| this.child(Spinner::new().small()))
-                  .child(result_count_label),
+                  .child(
+                    Button::new("project-search-filters")
+                      .icon(IconName::Settings2)
+                      .ghost()
+                      .xsmall()
+                      .compact()
+                      .selected(filters_open)
+                      .tooltip("Search filters")
+                      .on_click(move |_, _, cx| {
+                        entity.update(cx, |view, cx| view.toggle_filters(cx));
+                      }),
+                  )
+                  .child(
+                    h_flex()
+                      .flex_1()
+                      .gap_1()
+                      .items_center()
+                      .justify_end()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .when(self.searching, |this| this.child(Spinner::new().small()))
+                      .child(result_count_label),
+                  ),
               ),
-          ),
+          )
+          .when(filters_open, |this| {
+            this.child(
+              h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                  div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h(px(32.0))
+                    .flex()
+                    .items_center()
+                    .pl_1()
+                    .pr_1()
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded_md()
+                    .bg(theme.background)
+                    .child(
+                      Input::new(&include_input)
+                        .small()
+                        .appearance(false)
+                        .bordered(false)
+                        .focus_bordered(false),
+                    ),
+                )
+                .child(
+                  div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h(px(32.0))
+                    .flex()
+                    .items_center()
+                    .pl_1()
+                    .pr_1()
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded_md()
+                    .bg(theme.background)
+                    .child(
+                      Input::new(&exclude_input)
+                        .small()
+                        .appearance(false)
+                        .bordered(false)
+                        .focus_bordered(false),
+                    ),
+                )
+                .child(
+                  h_flex()
+                    .w(px(176.0))
+                    .gap_2()
+                    .items_center()
+                    .child(
+                      Button::new("project-search-include-ignored")
+                        .icon(UiIconName::FileX)
+                        .ghost()
+                        .xsmall()
+                        .compact()
+                        .selected(include_ignored)
+                        .tooltip("Include ignored files")
+                        .on_click({
+                          let entity = cx.entity();
+                          move |_, _, cx| {
+                            entity.update(cx, |view, cx| view.toggle_include_ignored(cx));
+                          }
+                        }),
+                    )
+                    .child(
+                      Button::new("project-search-include-hidden")
+                        .icon(UiIconName::Eye)
+                        .ghost()
+                        .xsmall()
+                        .compact()
+                        .selected(include_hidden)
+                        .tooltip("Include hidden files")
+                        .on_click({
+                          let entity = cx.entity();
+                          move |_, _, cx| {
+                            entity.update(cx, |view, cx| view.toggle_include_hidden(cx));
+                          }
+                        }),
+                    ),
+                ),
+            )
+          }),
       )
       .child(self.render_results(query.trim().is_empty(), cx))
   }
@@ -792,10 +1003,19 @@ fn search_project_files(
   options: SearchOptions,
 ) -> Vec<ProjectSearchFileResults> {
   let mut results = Vec::new();
-  let _ = search_project_files_batched(checkout_root, files, query, options, None, |batch| {
-    results.extend(batch);
-    true
-  });
+  let _ = search_project_files_batched(
+    checkout_root,
+    files,
+    query,
+    options,
+    "",
+    "",
+    None,
+    |batch| {
+      results.extend(batch);
+      true
+    },
+  );
   results
 }
 
@@ -804,6 +1024,8 @@ fn search_project_files_streaming(
   files: &[PathBuf],
   query: &str,
   options: SearchOptions,
+  include_patterns: String,
+  exclude_patterns: String,
   cancellation: SearchCancellation,
   update_sender: async_channel::Sender<ProjectSearchUpdate>,
 ) {
@@ -812,6 +1034,8 @@ fn search_project_files_streaming(
     files,
     query,
     options,
+    &include_patterns,
+    &exclude_patterns,
     Some(&cancellation),
     |batch| {
       update_sender
@@ -829,6 +1053,8 @@ fn search_project_files_batched(
   files: &[PathBuf],
   query: &str,
   options: SearchOptions,
+  include_patterns: &str,
+  exclude_patterns: &str,
   cancellation: Option<&SearchCancellation>,
   mut on_batch: impl FnMut(Vec<ProjectSearchFileResults>) -> bool,
 ) -> ProjectSearchCompletion {
@@ -841,6 +1067,7 @@ fn search_project_files_batched(
     Ok(matcher) => matcher,
     Err(_) => return ProjectSearchCompletion::default(),
   };
+  let path_filter = SearchPathFilter::new(include_patterns, exclude_patterns);
   let mut total_results = 0;
   let mut batch_results = 0;
   let mut batch = Vec::new();
@@ -850,6 +1077,10 @@ fn search_project_files_batched(
       || cancellation.is_some_and(SearchCancellation::is_cancelled)
     {
       break;
+    }
+
+    if !path_filter.matches(path) {
+      continue;
     }
 
     let absolute_path = checkout_root.join(path);
@@ -933,6 +1164,63 @@ fn search_project_files_batched(
   ProjectSearchCompletion {
     limit_reached: total_results >= MAX_SEARCH_RESULTS,
   }
+}
+
+struct SearchPathFilter {
+  includes: Vec<regex::Regex>,
+  excludes: Vec<regex::Regex>,
+}
+
+impl SearchPathFilter {
+  fn new(include_patterns: &str, exclude_patterns: &str) -> Self {
+    Self {
+      includes: compile_path_patterns(include_patterns),
+      excludes: compile_path_patterns(exclude_patterns),
+    }
+  }
+
+  fn matches(&self, path: &Path) -> bool {
+    let path = path
+      .to_string_lossy()
+      .replace(std::path::MAIN_SEPARATOR, "/");
+    let included =
+      self.includes.is_empty() || self.includes.iter().any(|regex| regex.is_match(&path));
+    let excluded = self.excludes.iter().any(|regex| regex.is_match(&path));
+    included && !excluded
+  }
+}
+
+fn compile_path_patterns(patterns: &str) -> Vec<regex::Regex> {
+  patterns
+    .split([',', '\n'])
+    .map(str::trim)
+    .filter(|pattern| !pattern.is_empty())
+    .filter_map(|pattern| regex::Regex::new(&glob_pattern_to_regex(pattern)).ok())
+    .collect()
+}
+
+fn glob_pattern_to_regex(pattern: &str) -> String {
+  let pattern = pattern.replace(std::path::MAIN_SEPARATOR, "/");
+  let mut regex = String::from("^");
+  let mut chars = pattern.chars().peekable();
+  while let Some(ch) = chars.next() {
+    match ch {
+      '*' if chars.peek() == Some(&'*') => {
+        chars.next();
+        if chars.peek() == Some(&'/') {
+          chars.next();
+          regex.push_str("(?:.*/)?");
+        } else {
+          regex.push_str(".*");
+        }
+      }
+      '*' => regex.push_str("[^/]*"),
+      '?' => regex.push_str("[^/]"),
+      _ => regex.push_str(&regex::escape(&ch.to_string())),
+    }
+  }
+  regex.push('$');
+  regex
 }
 
 struct SearchMatcher {
@@ -1028,6 +1316,8 @@ mod tests {
       &files,
       "needle",
       SearchOptions::default(),
+      "",
+      "",
       None,
       |batch| {
         batch_sizes.push(batch.len());
@@ -1036,6 +1326,41 @@ mod tests {
     );
 
     assert_eq!(batch_sizes, vec![SEARCH_RESULT_BATCH_SIZE, 1]);
+    assert!(!completion.limit_reached);
+  }
+
+  #[test]
+  fn project_search_filters_paths() {
+    let temp = TempDir::new("project-search-filters");
+    std::fs::create_dir_all(temp.path.join("src/bin")).expect("create src");
+    std::fs::create_dir_all(temp.path.join("vendor")).expect("create vendor");
+    std::fs::write(temp.path.join("src/lib.rs"), "needle\n").expect("write lib");
+    std::fs::write(temp.path.join("src/bin/main.rs"), "needle\n").expect("write main");
+    std::fs::write(temp.path.join("vendor/lib.rs"), "needle\n").expect("write vendor");
+    std::fs::write(temp.path.join("README.md"), "needle\n").expect("write readme");
+    let files = vec![
+      PathBuf::from("src/lib.rs"),
+      PathBuf::from("src/bin/main.rs"),
+      PathBuf::from("vendor/lib.rs"),
+      PathBuf::from("README.md"),
+    ];
+    let mut paths = Vec::new();
+
+    let completion = search_project_files_batched(
+      &temp.path,
+      &files,
+      "needle",
+      SearchOptions::default(),
+      "src/**/*.rs",
+      "src/bin/*",
+      None,
+      |batch| {
+        paths.extend(batch.into_iter().map(|file| file.path));
+        true
+      },
+    );
+
+    assert_eq!(paths, vec![PathBuf::from("src/lib.rs")]);
     assert!(!completion.limit_reached);
   }
 
@@ -1056,6 +1381,8 @@ mod tests {
       &files,
       "needle",
       SearchOptions::default(),
+      "",
+      "",
       None,
       |batch| {
         result_count += batch.iter().map(|file| file.matches.len()).sum::<usize>();
