@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.1
 
+### Editor Find Options
+
+File search now uses smart case when case sensitivity is off and remembers the case, whole-word and regex toggles for future editors.
+
 ### Editor Find Highlights
 
 File search now highlights every match in the editor and uses a stronger active-match color, so Command-F behaves more like a code editor search instead of only selecting the current result.

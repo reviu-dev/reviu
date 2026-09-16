@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use gpui::Global;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SearchDirection {
   Next,
@@ -7,11 +9,13 @@ pub(crate) enum SearchDirection {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SearchOptions {
+pub struct SearchOptions {
   pub case_sensitive: bool,
   pub whole_word: bool,
   pub regex: bool,
 }
+
+impl Global for SearchOptions {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SearchMatch {
@@ -50,7 +54,7 @@ impl SearchMatcher {
       regex::escape(query)
     };
     let regex = regex::RegexBuilder::new(&pattern)
-      .case_insensitive(!options.case_sensitive)
+      .case_insensitive(!options.effective_case_sensitive(query))
       .build()
       .map_err(|error| error.to_string())?;
 
@@ -90,7 +94,20 @@ impl SearchMatcher {
   }
 }
 
+impl SearchOptions {
+  pub fn effective_case_sensitive(&self, query: &str) -> bool {
+    self.case_sensitive || query.chars().any(char::is_uppercase)
+  }
+}
+
 impl SearchState {
+  pub fn new(options: SearchOptions) -> Self {
+    Self {
+      options,
+      ..Self::default()
+    }
+  }
+
   pub fn query(&self) -> &str {
     &self.query
   }

@@ -83,6 +83,12 @@ struct SettingsDoc {
   #[serde(deserialize_with = "lenient")]
   onboarding_done: Option<bool>,
   #[serde(deserialize_with = "lenient")]
+  find_case_sensitive: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
+  find_whole_word: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
+  find_regex: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
   agent_notifications: Option<bool>,
 }
 
@@ -116,6 +122,11 @@ impl SettingsDoc {
       menu_bar_icon: self.menu_bar_icon.unwrap_or(defaults.menu_bar_icon),
       analytics_enabled: self.analytics_enabled.unwrap_or(defaults.analytics_enabled),
       onboarding_done: self.onboarding_done.unwrap_or(defaults.onboarding_done),
+      find_case_sensitive: self
+        .find_case_sensitive
+        .unwrap_or(defaults.find_case_sensitive),
+      find_whole_word: self.find_whole_word.unwrap_or(defaults.find_whole_word),
+      find_regex: self.find_regex.unwrap_or(defaults.find_regex),
       agent_notifications: self
         .agent_notifications
         .unwrap_or(defaults.agent_notifications),
@@ -138,6 +149,9 @@ impl From<AppSettings> for SettingsDoc {
       menu_bar_icon: Some(settings.menu_bar_icon),
       analytics_enabled: Some(settings.analytics_enabled),
       onboarding_done: Some(settings.onboarding_done),
+      find_case_sensitive: Some(settings.find_case_sensitive),
+      find_whole_word: Some(settings.find_whole_word),
+      find_regex: Some(settings.find_regex),
       agent_notifications: Some(settings.agent_notifications),
     }
   }
@@ -250,6 +264,9 @@ mod tests {
       menu_bar_icon: false,
       analytics_enabled: false,
       onboarding_done: true,
+      find_case_sensitive: true,
+      find_whole_word: true,
+      find_regex: true,
       agent_notifications: false,
     };
     persist(settings);

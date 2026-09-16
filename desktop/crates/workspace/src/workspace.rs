@@ -236,6 +236,7 @@ impl WorkspaceView {
     cx.set_global(GithubNotificationsStore::default());
 
     cx.set_global(settings);
+    cx.set_global(settings.find_options());
     cx.set_global(shortcuts::load_shortcut_overrides());
     if let Some(error) = crate::keybindings_file::take_startup_error() {
       window.push_notification(

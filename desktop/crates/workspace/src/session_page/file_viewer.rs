@@ -249,6 +249,9 @@ impl SessionPage {
           this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
         }
         EditorEvent::HunkStagingChanged => {}
+        EditorEvent::FindOptionsChanged(options) => {
+          crate::config::AppSettings::update(cx, |settings| settings.set_find_options(*options));
+        }
       },
     )
     .detach();
@@ -694,6 +697,11 @@ impl SessionPage {
             EditorEvent::SavePathRequested | EditorEvent::HunkStagingChanged => {
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             }
+            EditorEvent::FindOptionsChanged(options) => {
+              crate::config::AppSettings::update(cx, |settings| {
+                settings.set_find_options(*options)
+              });
+            }
           },
         )
         .detach();
@@ -1040,6 +1048,11 @@ impl SessionPage {
               }
               EditorEvent::SavePathRequested | EditorEvent::HunkStagingChanged => {
                 this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+              }
+              EditorEvent::FindOptionsChanged(options) => {
+                crate::config::AppSettings::update(cx, |settings| {
+                  settings.set_find_options(*options)
+                });
               }
             },
           )

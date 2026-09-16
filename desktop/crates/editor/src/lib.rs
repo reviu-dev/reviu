@@ -28,4 +28,5 @@ pub use editor::{
 pub use editor_element::{EditorElement, PositionMap, benchmark_word_diff_ranges};
 pub use gutter_element::GutterElement;
 pub use projection::*;
+pub use search::SearchOptions;
 pub use settings::{indent_rainbow_enabled, set_indent_rainbow_enabled};

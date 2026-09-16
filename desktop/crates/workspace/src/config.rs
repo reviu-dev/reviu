@@ -388,6 +388,9 @@ pub struct AppSettings {
   pub menu_bar_icon: bool,
   pub analytics_enabled: bool,
   pub onboarding_done: bool,
+  pub find_case_sensitive: bool,
+  pub find_whole_word: bool,
+  pub find_regex: bool,
   /// Popup when the agent finishes or asks while the window is inactive.
   pub agent_notifications: bool,
 }
@@ -403,7 +406,22 @@ impl AppSettings {
     let mut settings = *cx.global::<Self>();
     f(&mut settings);
     cx.set_global(settings);
+    cx.set_global(settings.find_options());
     ConfigStore::persist_app_settings(settings);
+  }
+
+  pub fn find_options(&self) -> editor::SearchOptions {
+    editor::SearchOptions {
+      case_sensitive: self.find_case_sensitive,
+      whole_word: self.find_whole_word,
+      regex: self.find_regex,
+    }
+  }
+
+  pub fn set_find_options(&mut self, options: editor::SearchOptions) {
+    self.find_case_sensitive = options.case_sensitive;
+    self.find_whole_word = options.whole_word;
+    self.find_regex = options.regex;
   }
 }
 
@@ -422,6 +440,9 @@ impl Default for AppSettings {
       menu_bar_icon: true,
       analytics_enabled: true,
       onboarding_done: false,
+      find_case_sensitive: false,
+      find_whole_word: false,
+      find_regex: false,
       agent_notifications: true,
     }
   }
@@ -958,6 +979,9 @@ impl ConfigStore {
           menu_bar_icon: menu_bar_icon != 0,
           analytics_enabled: analytics_enabled != 0,
           onboarding_done: false,
+          find_case_sensitive: false,
+          find_whole_word: false,
+          find_regex: false,
           agent_notifications: true,
         })
       },
@@ -1584,6 +1608,9 @@ mod tests {
       menu_bar_icon: false,
       analytics_enabled: false,
       onboarding_done: true,
+      find_case_sensitive: true,
+      find_whole_word: true,
+      find_regex: true,
       agent_notifications: false,
     };
     ConfigStore::persist_app_settings(settings);
@@ -1599,6 +1626,9 @@ mod tests {
     assert!(!loaded.files_show_gitignored);
     assert!(!loaded.files_show_hidden);
     assert!(!loaded.menu_bar_icon);
+    assert!(loaded.find_case_sensitive);
+    assert!(loaded.find_whole_word);
+    assert!(loaded.find_regex);
 
     ConfigStore::set_test_db_path(None);
   }

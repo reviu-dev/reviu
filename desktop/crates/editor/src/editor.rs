@@ -58,7 +58,9 @@ use crate::{
     review_comment_shows_header,
   },
   scrollbar_element::EditorScrollbarElement,
-  search::{SearchDirection, SearchHighlights, SearchMatch, SearchMatcher, SearchState},
+  search::{
+    SearchDirection, SearchHighlights, SearchMatch, SearchMatcher, SearchOptions, SearchState,
+  },
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
 
@@ -820,6 +822,8 @@ pub enum EditorEvent {
   SaveFailed { message: Arc<str> },
   /// A hunk was staged, unstaged or restored: the index moved under the host.
   HunkStagingChanged,
+  /// File search options changed and should become the default for future editors.
+  FindOptionsChanged(SearchOptions),
 }
 
 impl gpui::EventEmitter<EditorEvent> for Editor {}
@@ -1443,7 +1447,7 @@ impl Editor {
       find_panel_open: false,
       find_input: None,
       find_input_subscription: None,
-      find: SearchState::default(),
+      find: Self::initial_find_state(cx),
       find_scroll_epoch: 0,
       diff_task: None,
       projection_task: None,
@@ -1473,6 +1477,14 @@ impl Editor {
 
   fn language_hint_for_path(workdir_path: &Path) -> Option<String> {
     languages::detect_language_name_for_path(workdir_path).map(str::to_owned)
+  }
+
+  fn initial_find_state(cx: &App) -> SearchState {
+    SearchState::new(
+      cx.try_global::<SearchOptions>()
+        .copied()
+        .unwrap_or_default(),
+    )
   }
 
   pub fn document(&self) -> &Entity<Document> {
@@ -4404,17 +4416,26 @@ impl Editor {
     cx: &mut Context<Self>,
   ) {
     self.find.toggle_case_sensitive();
+    self.persist_find_options(cx);
     self.refresh_find_matches(self.measured_editor_line_height(), false, cx);
   }
 
   pub(crate) fn toggle_find_whole_word(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
     self.find.toggle_whole_word();
+    self.persist_find_options(cx);
     self.refresh_find_matches(self.measured_editor_line_height(), false, cx);
   }
 
   pub(crate) fn toggle_find_regex(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
     self.find.toggle_regex();
+    self.persist_find_options(cx);
     self.refresh_find_matches(self.measured_editor_line_height(), false, cx);
+  }
+
+  fn persist_find_options(&self, cx: &mut Context<Self>) {
+    let options = self.find.options();
+    cx.set_global(options);
+    cx.emit(EditorEvent::FindOptionsChanged(options));
   }
 
   fn find_query_from_selection(&self, cx: &App) -> Option<String> {
@@ -11733,7 +11754,7 @@ pub mod tests {
           find_panel_open: false,
           find_input: None,
           find_input_subscription: None,
-          find: SearchState::default(),
+          find: Editor::initial_find_state(cx),
           find_scroll_epoch: 0,
           review_comments: Vec::new(),
           document: doc,
@@ -14988,6 +15009,63 @@ pub mod tests {
       assert!(
         editor.scroll_handle.offset().x < px(0.0),
         "find should reveal matches outside the horizontal viewport"
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_uses_smart_case_when_case_sensitive_is_off(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "Foo foo FOO");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find.set_query("foo".to_string());
+      editor.refresh_find_matches(px(20.0), false, cx);
+      assert_eq!(editor.find.matches().len(), 3);
+
+      editor.find.set_query("Foo".to_string());
+      editor.refresh_find_matches(px(20.0), false, cx);
+      assert_eq!(editor.find.matches().len(), 1);
+      assert_eq!(editor.find.highlights().active_range, Some(0..3));
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_options_use_app_defaults(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      cx.set_global(SearchOptions {
+        case_sensitive: true,
+        whole_word: true,
+        regex: true,
+      });
+    });
+    let ctx = EditorTestContext::with_text(cx.clone(), "foo");
+
+    ctx.editor.read_with(&ctx.cx, |editor, _| {
+      assert_eq!(
+        editor.find.options(),
+        SearchOptions {
+          case_sensitive: true,
+          whole_word: true,
+          regex: true,
+        }
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_options_persist_as_app_defaults(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find.toggle_regex();
+      editor.persist_find_options(cx);
+      assert_eq!(
+        *cx.global::<SearchOptions>(),
+        SearchOptions {
+          case_sensitive: false,
+          whole_word: false,
+          regex: true,
+        }
       );
     });
   }
