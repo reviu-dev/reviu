@@ -153,6 +153,23 @@ pub(crate) fn list_project_files(project_root: &Path) -> Result<Vec<PathBuf>> {
   )
 }
 
+pub(crate) fn list_project_search_files(project_root: &Path) -> Result<Vec<PathBuf>> {
+  Ok(
+    list_project_entries_with_options(
+      project_root,
+      &ProjectScanOptions {
+        include_gitignored: false,
+        include_hidden: false,
+        ..ProjectScanOptions::default()
+      },
+    )?
+    .into_iter()
+    .filter(ProjectEntry::is_file)
+    .map(|entry| entry.path)
+    .collect(),
+  )
+}
+
 pub(crate) fn is_default_file_scan_excluded_name(name: &str) -> bool {
   DEFAULT_FILE_SCAN_EXCLUDED_NAMES.contains(&name)
 }
@@ -265,5 +282,22 @@ mod tests {
     assert!(paths.contains(&Path::new("visible.txt")));
     assert!(!paths.contains(&Path::new(".hidden")));
     assert!(!paths.contains(&Path::new(".hidden/secret.txt")));
+  }
+
+  #[test]
+  fn project_search_files_skip_ignored_and_hidden_files() {
+    let repo = TempRepo::init("project-search-files");
+    commit_text_file(&repo.path, Path::new(".gitignore"), "ignored/\n", "ignore");
+    std::fs::write(repo.path.join("visible.txt"), "visible\n").expect("write visible");
+    std::fs::create_dir_all(repo.path.join("ignored")).expect("create ignored dir");
+    std::fs::write(repo.path.join("ignored/secret.txt"), "secret\n").expect("write ignored");
+    std::fs::create_dir_all(repo.path.join(".hidden")).expect("create hidden dir");
+    std::fs::write(repo.path.join(".hidden/secret.txt"), "hidden\n").expect("write hidden");
+
+    let paths = list_project_search_files(&repo.path).expect("list search files");
+
+    assert!(paths.contains(&PathBuf::from("visible.txt")));
+    assert!(!paths.contains(&PathBuf::from("ignored/secret.txt")));
+    assert!(!paths.contains(&PathBuf::from(".hidden/secret.txt")));
   }
 }

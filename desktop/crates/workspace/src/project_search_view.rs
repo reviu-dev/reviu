@@ -1,9 +1,14 @@
 use std::{
   collections::HashSet,
+  fs::File,
+  io::{BufRead, BufReader},
   ops::Range,
   path::{Path, PathBuf},
   rc::Rc,
-  sync::Arc,
+  sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+  },
   time::Duration,
 };
 
@@ -91,6 +96,7 @@ pub(crate) struct ProjectSearchView {
   on_open: ProjectSearchHandler,
   scroll_handle: VirtualListScrollHandle,
   search_generation: u64,
+  latest_search_generation: Arc<AtomicU64>,
   _search_task: Task<()>,
 }
 
@@ -124,6 +130,7 @@ impl ProjectSearchView {
       on_open,
       scroll_handle: VirtualListScrollHandle::new(),
       search_generation: 0,
+      latest_search_generation: Arc::new(AtomicU64::new(0)),
       _search_task: Task::ready(()),
     }
   }
@@ -219,6 +226,9 @@ impl ProjectSearchView {
     let query = self.query_input.read(cx).value().to_string();
     self.search_generation = self.search_generation.wrapping_add(1);
     let generation = self.search_generation;
+    self
+      .latest_search_generation
+      .store(generation, Ordering::Relaxed);
 
     if query.trim().is_empty() {
       self.searching = false;
@@ -236,11 +246,21 @@ impl ProjectSearchView {
     let checkout_root = self.checkout_root.clone();
     let files = self.files.clone();
     let options = self.options;
+    let latest_generation = self.latest_search_generation.clone();
     self._search_task = cx.spawn(async move |this, cx| {
       cx.background_executor().timer(SEARCH_DEBOUNCE).await;
       let results = cx
         .background_spawn(async move {
-          search_project_files(&checkout_root, files.as_ref(), &query, options)
+          search_project_files(
+            &checkout_root,
+            files.as_ref(),
+            &query,
+            options,
+            Some(SearchCancellation {
+              generation,
+              latest_generation,
+            }),
+          )
         })
         .await;
 
@@ -714,11 +734,23 @@ fn highlighted_preview(found: &ProjectSearchMatch, color: gpui::Hsla) -> StyledT
   StyledText::new(found.preview.clone()).with_highlights(highlights)
 }
 
+struct SearchCancellation {
+  generation: u64,
+  latest_generation: Arc<AtomicU64>,
+}
+
+impl SearchCancellation {
+  fn is_cancelled(&self) -> bool {
+    self.latest_generation.load(Ordering::Relaxed) != self.generation
+  }
+}
+
 fn search_project_files(
   checkout_root: &Path,
   files: &[PathBuf],
   query: &str,
   options: SearchOptions,
+  cancellation: Option<SearchCancellation>,
 ) -> Vec<ProjectSearchFileResults> {
   let query = query.trim();
   if query.is_empty() {
@@ -733,7 +765,11 @@ fn search_project_files(
   let mut total_results = 0;
 
   for path in files {
-    if total_results >= MAX_SEARCH_RESULTS {
+    if total_results >= MAX_SEARCH_RESULTS
+      || cancellation
+        .as_ref()
+        .is_some_and(|cancel| cancel.is_cancelled())
+    {
       break;
     }
 
@@ -744,15 +780,31 @@ fn search_project_files(
       continue;
     }
 
-    let Ok(contents) = std::fs::read_to_string(&absolute_path) else {
+    let Ok(file) = File::open(&absolute_path) else {
       continue;
     };
 
     let mut matches = Vec::new();
-    for (line_index, line) in contents.lines().enumerate() {
-      if total_results >= MAX_SEARCH_RESULTS {
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut line_number = 0u32;
+    loop {
+      if total_results >= MAX_SEARCH_RESULTS
+        || cancellation
+          .as_ref()
+          .is_some_and(|cancel| cancel.is_cancelled())
+      {
         break;
       }
+      line.clear();
+      let Ok(bytes_read) = reader.read_line(&mut line) else {
+        break;
+      };
+      if bytes_read == 0 {
+        break;
+      }
+      line_number = line_number.saturating_add(1);
+      let line = line.trim_end_matches(['\r', '\n']);
       let Some((start, end)) = matcher.find(line) else {
         continue;
       };
@@ -772,7 +824,7 @@ fn search_project_files(
             && preview.is_char_boundary(range.end)
         });
       matches.push(ProjectSearchMatch {
-        line_number: line_index.saturating_add(1) as u32,
+        line_number,
         column: line[..start].chars().count().saturating_add(1) as u32,
         preview: preview.into(),
         match_range,
@@ -858,6 +910,7 @@ mod tests {
       &[PathBuf::from("src/lib.rs"), PathBuf::from("README.md")],
       "needle",
       SearchOptions::default(),
+      None,
     );
 
     assert_eq!(results.len(), 2);

@@ -56,7 +56,7 @@ use crate::file_view::{
 };
 use crate::inbox::Inbox;
 use crate::open_intent::OpenIntent;
-use crate::project_files::list_project_files;
+use crate::project_files::{list_project_files, list_project_search_files};
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus, session_row_title};
 use crate::session_page::center_layout::{
@@ -333,6 +333,7 @@ pub struct SessionPage {
   open_file_task: Option<Task<()>>,
   save_as_task: Option<Task<()>>,
   file_search_cache: Option<FileSearchCache>,
+  project_search_cache: Option<FileSearchCache>,
   recent_files: Vec<RecentFile>,
   _file_search_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
@@ -687,6 +688,7 @@ impl SessionPage {
       open_file_task: None,
       save_as_task: None,
       file_search_cache: None,
+      project_search_cache: None,
       recent_files: Vec::new(),
       _file_search_task: None,
       agent_review: AgentReviewComments::new(),
@@ -2884,11 +2886,11 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let cached_paths = self
-      .file_search_cache
+      .project_search_cache
       .as_ref()
       .filter(|cache| cache.checkout_root == repo_root)
       .map(|cache| cache.paths.clone());
-    let cache_is_fresh = self.file_search_cache.as_ref().is_some_and(|cache| {
+    let cache_is_fresh = self.project_search_cache.as_ref().is_some_and(|cache| {
       cache.checkout_root == repo_root && cache.loaded_at.elapsed() < FILE_SEARCH_CACHE_TTL
     });
     let repository_paths = cached_paths
@@ -2938,7 +2940,7 @@ impl SessionPage {
       let result = cx
         .background_spawn({
           let repo_root = load_repo_root.clone();
-          async move { list_project_files(&repo_root) }
+          async move { list_project_search_files(&repo_root) }
         })
         .await;
 
@@ -2948,7 +2950,7 @@ impl SessionPage {
             return;
           }
           let paths = Arc::new(paths);
-          this.file_search_cache = Some(FileSearchCache {
+          this.project_search_cache = Some(FileSearchCache {
             checkout_root: load_repo_root.clone(),
             paths: paths.clone(),
             loaded_at: Instant::now(),
