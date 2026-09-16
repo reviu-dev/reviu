@@ -567,6 +567,7 @@ fn render_file_header(
   };
 
   h_flex()
+    .w_full()
     .items_center()
     .gap_2()
     .px_2()
@@ -653,6 +654,7 @@ fn render_match_row(
     line_number,
     column
   ))
+  .w_full()
   .py_1p5()
   .on_click(move |_, window, cx| {
     let request = request.clone();
@@ -660,6 +662,7 @@ fn render_match_row(
   })
   .child(
     h_flex()
+      .w_full()
       .items_center()
       .gap_3()
       .child(
