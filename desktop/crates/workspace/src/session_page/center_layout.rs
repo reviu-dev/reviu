@@ -368,13 +368,23 @@ impl CenterNode {
     surface: CenterSurface,
     direction: CenterSplitDirection,
   ) -> bool {
+    let new_node = Self::Pane(CenterPane::new(new_pane_id, surface));
+    self.split_pane_node(pane_id, new_split_id, new_node, direction)
+  }
+
+  fn split_pane_node(
+    &mut self,
+    pane_id: CenterPaneId,
+    new_split_id: CenterSplitId,
+    new_node: CenterNode,
+    direction: CenterSplitDirection,
+  ) -> bool {
     match self {
       Self::Pane(pane) => {
         if pane.id != pane_id {
           return false;
         }
         let old_node = self.clone();
-        let new_node = Self::Pane(CenterPane::new(new_pane_id, surface));
         *self = Self::Split(CenterSplit::new(
           new_split_id,
           old_node,
@@ -384,15 +394,25 @@ impl CenterNode {
         true
       }
       Self::Split(split) => {
-        split.first.split_pane(
-          pane_id,
-          new_pane_id,
-          new_split_id,
-          surface.clone(),
-          direction,
-        ) || split
-          .second
-          .split_pane(pane_id, new_pane_id, new_split_id, surface, direction)
+        split
+          .first
+          .split_pane_node(pane_id, new_split_id, new_node.clone(), direction)
+          || split
+            .second
+            .split_pane_node(pane_id, new_split_id, new_node, direction)
+      }
+    }
+  }
+
+  fn reassign_ids(&mut self, next_id: &mut u64) {
+    let id = *next_id;
+    *next_id = (*next_id).saturating_add(1);
+    match self {
+      Self::Pane(pane) => pane.id = CenterPaneId(id),
+      Self::Split(split) => {
+        split.id = CenterSplitId(id);
+        split.first.reassign_ids(next_id);
+        split.second.reassign_ids(next_id);
       }
     }
   }
@@ -522,7 +542,7 @@ impl CenterNode {
     }
   }
 
-  fn surface_count(&self) -> usize {
+  pub(super) fn surface_count(&self) -> usize {
     match self {
       Self::Pane(pane) => pane.surface_count(),
       Self::Split(split) => split.first.surface_count() + split.second.surface_count(),
@@ -805,6 +825,26 @@ impl CenterLayout {
       .split_pane(pane_id, new_pane_id, new_split_id, surface, direction)
     {
       self.active_tab = tab;
+      true
+    } else {
+      false
+    }
+  }
+
+  pub(super) fn split_pane_layout(
+    &mut self,
+    pane_id: CenterPaneId,
+    mut layout: CenterLayout,
+    direction: CenterSplitDirection,
+  ) -> bool {
+    let active_tab = layout.active_tab().clone();
+    layout.root.reassign_ids(&mut self.next_pane_id);
+    let new_split_id = CenterSplitId(self.allocate_pane_id().0);
+    if self
+      .root
+      .split_pane_node(pane_id, new_split_id, layout.root, direction)
+    {
+      self.active_tab = active_tab;
       true
     } else {
       false

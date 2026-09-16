@@ -1490,16 +1490,23 @@ impl SessionPage {
         let theme = cx.theme().clone();
         let first = self.render_center_node(split.first(), window, cx);
         let second = self.render_center_node(split.second(), window, cx);
+        let first_weight = split.first().surface_count().max(1) as f32;
+        let second_weight = split.second().surface_count().max(1) as f32;
+        let total_weight = first_weight + second_weight;
         match split.direction() {
           CenterSplitDirection::Left | CenterSplitDirection::Right => {
             h_resizable(("session-center-split", split.id().as_u64()))
               .child(
                 resizable_panel()
+                  .flex_basis(gpui::relative(first_weight / total_weight))
+                  .flex_grow(first_weight)
                   .size_range(px(CENTER_SPLIT_MIN_WIDTH_PX)..gpui::Pixels::MAX)
                   .child(first),
               )
               .child(
                 resizable_panel()
+                  .flex_basis(gpui::relative(second_weight / total_weight))
+                  .flex_grow(second_weight)
                   .size_range(px(CENTER_SPLIT_MIN_WIDTH_PX)..gpui::Pixels::MAX)
                   .child(
                     div()
@@ -1517,11 +1524,15 @@ impl SessionPage {
             v_resizable(("session-center-split", split.id().as_u64()))
               .child(
                 resizable_panel()
+                  .flex_basis(gpui::relative(first_weight / total_weight))
+                  .flex_grow(first_weight)
                   .size_range(px(CENTER_SPLIT_MIN_HEIGHT_PX)..gpui::Pixels::MAX)
                   .child(first),
               )
               .child(
                 resizable_panel()
+                  .flex_basis(gpui::relative(second_weight / total_weight))
+                  .flex_grow(second_weight)
                   .size_range(px(CENTER_SPLIT_MIN_HEIGHT_PX)..gpui::Pixels::MAX)
                   .child(
                     div()
@@ -1755,6 +1766,29 @@ impl SessionPage {
       cx.notify();
       return;
     };
+
+    if let Some((representative, layout)) = self.center_drag_layout_for_tab(&tab) {
+      let focused_tab = layout.active_tab().clone();
+      let changed = self
+        .center_layout
+        .split_pane_layout(target.pane_id, layout, direction);
+      if changed {
+        if let Some(conversation_id) = focused_tab.conversation_id() {
+          self.activate_session_panel(conversation_id, window, cx);
+        }
+        if focused_tab.kind == CenterTabKind::Terminal {
+          self.focus_terminal_tab(&focused_tab, window, cx);
+        }
+        self.ensure_center_layout_chat_panels(window, cx);
+        self.remember_center_layout_tab(representative);
+        self.center = Self::center_view_for_tab(&focused_tab);
+        self.sync_agent_chat_close_control(cx);
+        self.persist_current_center_workspace(cx);
+        cx.notify();
+        return;
+      }
+    }
+
     let surface = CenterSurface::from_tab(tab.clone());
     let changed = self
       .center_layout
@@ -1776,6 +1810,30 @@ impl SessionPage {
     }
 
     self.activate_center_tab(tab, OpenIntent::Open, window, cx);
+  }
+
+  fn center_drag_layout_for_tab(&self, tab: &CenterTab) -> Option<(CenterTab, CenterLayout)> {
+    if self.center_layout.contains_tab(tab) {
+      return None;
+    }
+    if let Some(layout) = self
+      .center_layouts_by_tab
+      .get(tab)
+      .filter(|layout| layout.surface_count() > 1)
+    {
+      return Some((tab.clone(), layout.clone()));
+    }
+
+    let representative = self.center_layout_representative_for_tab(tab)?;
+    if self.active_center_tab.as_ref() == Some(&representative) {
+      return None;
+    }
+    self
+      .center_layouts_by_tab
+      .get(&representative)
+      .filter(|layout| layout.surface_count() > 1)
+      .cloned()
+      .map(|layout| (representative, layout))
   }
 
   pub(super) fn render_conversation(
@@ -8000,6 +8058,66 @@ mod tests {
       editor.right() <= conversation.left() + px(1.0),
       "dragging the chat tab to the right edge should put it right of the editor: {editor:?} vs {conversation:?}"
     );
+  }
+
+  #[gpui::test]
+  async fn dragging_a_split_center_tab_group_to_an_edge_preserves_all_panes(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-center-tab-drag-split-group");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+    let first_terminal = CenterTab::terminal(1);
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page
+        .center_layout
+        .set_active_surface(CenterSurface::from_tab(first_terminal.clone()));
+      page.remember_center_layout_tab(first_terminal.clone());
+      page.center = CenterView::Terminal;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+    let second_terminal = CenterTab::terminal(2);
+
+    page.update_in(cx, |page, window, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should be the second terminal only");
+      };
+      page.center_drag_target = Some(CenterDropTarget {
+        pane_id: pane.id(),
+        direction: Some(CenterSplitDirection::Right),
+      });
+      page.drop_center_tab(first_terminal.clone(), window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center_layout.surface_count(), 3);
+      assert!(page.center_layout.contains_tab(&chat_tab));
+      assert!(page.center_layout.contains_tab(&first_terminal));
+      assert!(page.center_layout.contains_tab(&second_terminal));
+      assert_eq!(page.center_layout.active_tab(), &first_terminal);
+      assert_eq!(page.active_center_tab.as_ref(), Some(&first_terminal));
+      assert_eq!(page.center_tabs_for_navigation(), vec![first_terminal]);
+    });
   }
 
   #[gpui::test]

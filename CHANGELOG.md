@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.1
 
+### Split Tab Dragging
+
+Dragging a tab that already represents a split layout into another center pane now keeps every pane from the dragged layout and gives the resulting panes an even initial size, so chat, terminal and file combinations move together instead of dropping only the focused pane.
+
 ### New Chat In Split Panes
 
 Split chat panes now include a new chat button that replaces only that conversation pane, keeping adjacent terminals, files or diffs in place for the next task.
