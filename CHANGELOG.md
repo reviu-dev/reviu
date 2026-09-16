@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.1
 
+### Project Search Shortcut
+
+Command-Shift-F now opens project-wide text search with file, line and preview results, while the dock panel shortcuts move to clearer defaults for Changes and Files.
+
 ### Split Tab Dragging
 
 Dragging a tab that already represents a split layout into another center pane now keeps every pane from the dragged layout and gives the resulting panes an even initial size, so chat, terminal and file combinations move together instead of dropping only the focused pane.

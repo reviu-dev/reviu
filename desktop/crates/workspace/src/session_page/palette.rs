@@ -189,6 +189,7 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::show_pull_request());
       commands.push(CommandPaletteCommand::new_terminal());
       commands.push(CommandPaletteCommand::show_file_search());
+      commands.push(CommandPaletteCommand::show_global_search());
 
       // The two diff toggles change what an open diff shows, so they need one.
       if self.diff_editor().is_some() {
@@ -498,6 +499,10 @@ impl SessionPage {
         self.open_file_search(window, cx);
         Ok(())
       }
+      CommandPaletteAction::ShowGlobalSearch => {
+        self.open_global_search(window, cx);
+        Ok(())
+      }
       CommandPaletteAction::ToggleDiffView => {
         self.toggle_diff_view(cx);
         Ok(())
@@ -560,6 +565,7 @@ mod tests {
         CommandPaletteCommandId::ShowPullRequest,
         CommandPaletteCommandId::NewTerminal,
         CommandPaletteCommandId::ShowFileSearch,
+        CommandPaletteCommandId::ShowGlobalSearch,
       ] {
         assert!(ids.contains(&id), "{id:?} is missing from the palette");
       }

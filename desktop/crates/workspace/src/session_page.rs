@@ -81,6 +81,7 @@ use sentry::protocol::Map;
 use crate::annotations::{AnnotationDirection, navigate_annotation};
 #[cfg(test)]
 use crate::annotations::{AnnotationNavigationState, annotation_navigation_state_for};
+use crate::global_search_palette::{GlobalSearchHandler, open_global_search_palette};
 use crate::palette_branches::{
   delete_branch_candidates, palette_branch, palette_stashes, rebase_branch_candidates,
 };
@@ -96,6 +97,7 @@ use crate::svg_preview::SvgPreview;
 use crate::workspace::WorkspaceApi;
 use crate::{
   CommentHunk, JumpToLatestMessage, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
+  ShowGlobalSearch,
 };
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
@@ -2700,6 +2702,16 @@ impl SessionPage {
     cx.stop_propagation();
   }
 
+  fn show_global_search_action(
+    &mut self,
+    _: &ShowGlobalSearch,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_global_search(window, cx);
+    cx.stop_propagation();
+  }
+
   fn open_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
@@ -2764,6 +2776,85 @@ impl SessionPage {
         }
         Err(error) => {
           log::error!("load files for search: {error:#}");
+          let _ = palette.update(cx, |palette, cx| {
+            palette.set_loading_error("Could not load project files", cx);
+          });
+        }
+      });
+    }));
+  }
+
+  fn open_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.checkout_root(cx) else {
+      return;
+    };
+
+    let cached_paths = self
+      .file_search_cache
+      .as_ref()
+      .filter(|cache| cache.checkout_root == repo_root)
+      .map(|cache| cache.paths.clone());
+    let cache_is_fresh = self.file_search_cache.as_ref().is_some_and(|cache| {
+      cache.checkout_root == repo_root && cache.loaded_at.elapsed() < FILE_SEARCH_CACHE_TTL
+    });
+    let repository_paths = cached_paths
+      .as_deref()
+      .map_or_else(Vec::new, |paths| paths.to_vec());
+
+    let view = cx.entity();
+    let handler: GlobalSearchHandler = Arc::new(move |request, window, cx| {
+      view.update(cx, |view, cx| {
+        view.open_file(
+          request.path,
+          request.line,
+          request.column,
+          OpenIntent::Open,
+          window,
+          cx,
+        );
+      });
+      Ok(())
+    });
+    let palette = open_global_search_palette(
+      window,
+      cx,
+      repo_root.clone(),
+      repository_paths,
+      handler,
+      !cache_is_fresh,
+    );
+
+    if cache_is_fresh {
+      return;
+    }
+
+    let load_repo_root = repo_root.clone();
+    let palette = palette.downgrade();
+    self._file_search_task = Some(cx.spawn_in(window, async move |this, cx| {
+      let result = cx
+        .background_spawn({
+          let repo_root = load_repo_root.clone();
+          async move { list_project_files(&repo_root) }
+        })
+        .await;
+
+      let _ = this.update_in(cx, |this, window, cx| match result {
+        Ok(paths) => {
+          if this.checkout_root(cx).as_deref() != Some(load_repo_root.as_path()) {
+            return;
+          }
+          let paths = Arc::new(paths);
+          this.file_search_cache = Some(FileSearchCache {
+            checkout_root: load_repo_root.clone(),
+            paths: paths.clone(),
+            loaded_at: Instant::now(),
+          });
+          let _ = palette.update(cx, |palette, cx| {
+            palette.replace_files(paths.as_ref().clone(), window, cx);
+          });
+        }
+        Err(error) => {
+          log::error!("load files for global search: {error:#}");
           let _ = palette.update(cx, |palette, cx| {
             palette.set_loading_error("Could not load project files", cx);
           });

@@ -2834,6 +2834,7 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::add_selection_to_agent_action))
       .on_action(cx.listener(Self::show_command_palette_action))
       .on_action(cx.listener(Self::show_file_search_action))
+      .on_action(cx.listener(Self::show_global_search_action))
       .on_action(cx.listener(Self::send_review_comments_to_agent_action))
       .on_action(cx.listener(Self::jump_to_latest_message_action))
       .on_action(cx.listener(Self::new_agent_session_action))

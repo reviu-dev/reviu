@@ -411,6 +411,7 @@ pub enum CommandPaletteAction {
   ShowHistory,
   ShowPullRequest,
   ShowFileSearch,
+  ShowGlobalSearch,
   ToggleDiffView,
   ToggleHideWhitespace,
   SendSelectionToAgent,
@@ -1037,6 +1038,7 @@ pub enum CommandPaletteCommandId {
   ShowHistory,
   ShowPullRequest,
   ShowFileSearch,
+  ShowGlobalSearch,
   ToggleDiffView,
   ToggleHideWhitespace,
   SendSelectionToAgent,
@@ -1112,6 +1114,7 @@ impl CommandPaletteCommandId {
       Self::ShowHistory => "show_history",
       Self::ShowPullRequest => "show_pull_request",
       Self::ShowFileSearch => "show_file_search",
+      Self::ShowGlobalSearch => "show_global_search",
       Self::ToggleDiffView => "toggle_diff_view",
       Self::ToggleHideWhitespace => "toggle_hide_whitespace",
       Self::SendSelectionToAgent => "send_selection_to_agent",
@@ -1183,6 +1186,7 @@ impl CommandPaletteCommandId {
       "show_history" => Some(Self::ShowHistory),
       "show_pull_request" => Some(Self::ShowPullRequest),
       "show_file_search" => Some(Self::ShowFileSearch),
+      "show_global_search" => Some(Self::ShowGlobalSearch),
       "toggle_diff_view" => Some(Self::ToggleDiffView),
       "toggle_hide_whitespace" => Some(Self::ToggleHideWhitespace),
       "send_selection_to_agent" => Some(Self::SendSelectionToAgent),
@@ -1777,6 +1781,14 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn show_global_search() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ShowGlobalSearch,
+      "Project search",
+      "Search across files in the current project",
+    )
+  }
+
   pub fn toggle_diff_view() -> Self {
     Self::new(
       CommandPaletteCommandId::ToggleDiffView,
@@ -1999,9 +2011,9 @@ impl CommandPaletteCommand {
       // It opens the panel, but the pull request is what you came for.
       CommandPaletteCommandId::ShowPullRequest => CommandPaletteGroup::PullRequest,
 
-      CommandPaletteCommandId::ShowFileSearch | CommandPaletteCommandId::JumpToLatestMessage => {
-        CommandPaletteGroup::Navigation
-      }
+      CommandPaletteCommandId::ShowFileSearch
+      | CommandPaletteCommandId::ShowGlobalSearch
+      | CommandPaletteCommandId::JumpToLatestMessage => CommandPaletteGroup::Navigation,
 
       CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
         CommandPaletteGroup::View
@@ -2061,6 +2073,7 @@ impl CommandPaletteCommand {
       Id::ShowHistory => &["log", "commits", "show"],
       Id::ShowPullRequest => &["pr", "show"],
       Id::ShowFileSearch => &["find", "goto", "open", "search"],
+      Id::ShowGlobalSearch => &["grep", "find", "content", "search"],
       Id::ToggleDiffView => &["split", "inline", "unified", "side"],
       Id::ToggleHideWhitespace => &["blank", "spaces", "indent"],
       Id::SendSelectionToAgent => &["context", "attach", "prompt"],
@@ -2159,7 +2172,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::ShowFiles => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::ShowHistory => Icon::new(UiIconName::History),
       CommandPaletteCommandId::ShowPullRequest => Icon::new(UiIconName::GitPullRequestArrow),
-      CommandPaletteCommandId::ShowFileSearch => Icon::new(UiIconName::Search),
+      CommandPaletteCommandId::ShowFileSearch | CommandPaletteCommandId::ShowGlobalSearch => {
+        Icon::new(UiIconName::Search)
+      }
       CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
         Icon::new(UiIconName::FileDiff)
       }
@@ -3385,6 +3400,9 @@ impl CommandPalette {
       CommandPaletteCommandId::ShowFileSearch => {
         self.trigger_action(command, CommandPaletteAction::ShowFileSearch, window, cx);
       }
+      CommandPaletteCommandId::ShowGlobalSearch => {
+        self.trigger_action(command, CommandPaletteAction::ShowGlobalSearch, window, cx);
+      }
       CommandPaletteCommandId::ToggleDiffView => {
         self.trigger_action(command, CommandPaletteAction::ToggleDiffView, window, cx);
       }
@@ -4466,6 +4484,7 @@ mod tests {
       CommandPaletteCommand::show_history(),
       CommandPaletteCommand::show_pull_request(),
       CommandPaletteCommand::show_file_search(),
+      CommandPaletteCommand::show_global_search(),
       CommandPaletteCommand::toggle_diff_view(),
       CommandPaletteCommand::toggle_hide_whitespace(),
       CommandPaletteCommand::send_selection_to_agent(),
@@ -4487,6 +4506,8 @@ mod tests {
     assert!(CommandPaletteCommand::show_history().matches("log"));
     assert!(CommandPaletteCommand::show_file_search().matches("search"));
     assert!(CommandPaletteCommand::show_file_search().matches("find"));
+    assert!(CommandPaletteCommand::show_global_search().matches("grep"));
+    assert!(CommandPaletteCommand::show_global_search().matches("content"));
     assert!(CommandPaletteCommand::toggle_diff_view().matches("split"));
     assert!(CommandPaletteCommand::sign_out().matches("logout"));
     assert!(CommandPaletteCommand::open_browser_extensions().matches("chrome"));

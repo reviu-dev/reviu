@@ -9,6 +9,7 @@ actions!(
     SaveFile,
     ShowCommandPalette,
     ShowFileSearch,
+    ShowGlobalSearch,
     CommitChanges
   ]
 );

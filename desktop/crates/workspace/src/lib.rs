@@ -85,6 +85,7 @@ mod git_telemetry;
 pub mod github_navigation;
 mod github_notifications;
 mod github_shared;
+mod global_search_palette;
 mod history_list;
 mod hunk_actions;
 mod inbox;
@@ -127,7 +128,9 @@ mod workspace;
 mod workspace_onboarding;
 mod workspace_window;
 
-pub use actions::{CommitChanges, OpenProject, SaveFile, ShowCommandPalette, ShowFileSearch};
+pub use actions::{
+  CommitChanges, OpenProject, SaveFile, ShowCommandPalette, ShowFileSearch, ShowGlobalSearch,
+};
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};
 pub use auth_state::AuthStateStore;
 pub use crash_report::{

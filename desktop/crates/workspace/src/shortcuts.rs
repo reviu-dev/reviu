@@ -25,8 +25,8 @@ use crate::{
   OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, PreviousAnnotation,
   PreviousCenterTab, PullChanges, PushChanges, RenameSelectedFileItem, RestoreFile, RestoreHunk,
   ReturnFocusToEditor, SaveFileAs, SendReviewCommentsToAgent, ShowBranchSwitcher,
-  ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
-  ToggleHunkStage,
+  ShowCommandPalette, ShowFileSearch, ShowGlobalSearch, ToggleDiffView, ToggleFileStage,
+  ToggleHideWhitespace, ToggleHunkStage,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -40,6 +40,7 @@ pub const FILES_TREE_CONTEXT: &str = "Tree && !Input";
 pub const WORKSPACE_SESSION_CONTEXT: &str = "Workspace WorkspaceSession";
 
 const FILE_SEARCH_CONTEXT: &str = "WorkspaceSession";
+const GLOBAL_SEARCH_CONTEXT: &str = "WorkspaceSession";
 const OPEN_PROJECT_CONTEXT: &str = "WorkspaceSession";
 const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceSession";
 const COMMIT_CHANGES_DESCENDANT_FOCUS: &str = "CommitInput";
@@ -66,6 +67,7 @@ const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
 const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
 const FILE_SEARCH_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
+const GLOBAL_SEARCH_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
 const SESSION_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
@@ -80,6 +82,7 @@ pub enum ShortcutId {
   NewFile,
   SaveFileAs,
   ShowFileSearch,
+  ShowGlobalSearch,
   OpenProject,
   CommitChanges,
   PullChanges,
@@ -119,6 +122,7 @@ impl ShortcutId {
       ShortcutId::NewFile => "new_file",
       ShortcutId::SaveFileAs => "save_file_as",
       ShortcutId::ShowFileSearch => "show_file_search",
+      ShortcutId::ShowGlobalSearch => "show_global_search",
       ShortcutId::OpenProject => "open_project",
       ShortcutId::CommitChanges => "commit_changes",
       ShortcutId::PullChanges => "pull_changes",
@@ -158,6 +162,7 @@ impl ShortcutId {
       "new_file" => Some(ShortcutId::NewFile),
       "save_file_as" => Some(ShortcutId::SaveFileAs),
       "show_file_search" => Some(ShortcutId::ShowFileSearch),
+      "show_global_search" => Some(ShortcutId::ShowGlobalSearch),
       "open_project" => Some(ShortcutId::OpenProject),
       "commit_changes" => Some(ShortcutId::CommitChanges),
       "pull_changes" => Some(ShortcutId::PullChanges),
@@ -211,7 +216,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 35] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -288,6 +293,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
     context: FILE_SEARCH_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &FILE_SEARCH_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ShowGlobalSearch,
+    title: "Project Search",
+    description: "Search across files in the current project.",
+    scope_label: "Projects",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-shift-f",
+    context: GLOBAL_SEARCH_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &GLOBAL_SEARCH_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::PreviousAnnotation,
@@ -537,7 +553,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
     description: "Switch the Git sidebar to Changes and focus the file list.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-e",
+    keystroke: "cmd-shift-c",
     context: OPEN_GIT_CHANGES_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -548,7 +564,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
     description: "Switch the right panel to the project file tree.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-f",
+    keystroke: "cmd-shift-e",
     context: OPEN_FILES_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -860,6 +876,7 @@ impl ShortcutDefinition {
       ShortcutId::NewFile => KeyBinding::new(keystroke, NewFile, Some(&context)),
       ShortcutId::SaveFileAs => KeyBinding::new(keystroke, SaveFileAs, Some(&context)),
       ShortcutId::ShowFileSearch => KeyBinding::new(keystroke, ShowFileSearch, Some(&context)),
+      ShortcutId::ShowGlobalSearch => KeyBinding::new(keystroke, ShowGlobalSearch, Some(&context)),
       ShortcutId::OpenProject => KeyBinding::new(keystroke, OpenProject, Some(&context)),
       ShortcutId::CommitChanges => KeyBinding::new(keystroke, CommitChanges, Some(&context)),
       ShortcutId::PullChanges => KeyBinding::new(keystroke, PullChanges, Some(&context)),
@@ -1085,6 +1102,7 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::ShowHistory => Some(ShortcutId::OpenGitHistorySidebar),
     Command::ShowPullRequest => Some(ShortcutId::OpenPullRequestSidebar),
     Command::ShowFileSearch => Some(ShortcutId::ShowFileSearch),
+    Command::ShowGlobalSearch => Some(ShortcutId::ShowGlobalSearch),
     Command::ToggleDiffView => Some(ShortcutId::ToggleDiffView),
     Command::ToggleHideWhitespace => Some(ShortcutId::ToggleHideWhitespace),
     Command::SendSelectionToAgent => Some(ShortcutId::AddSelectionToAgent),
@@ -1508,6 +1526,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::NewFile => f(&NewFile),
     ShortcutId::SaveFileAs => f(&SaveFileAs),
     ShortcutId::ShowFileSearch => f(&ShowFileSearch),
+    ShortcutId::ShowGlobalSearch => f(&ShowGlobalSearch),
     ShortcutId::OpenProject => f(&OpenProject),
     ShortcutId::CommitChanges => f(&CommitChanges),
     ShortcutId::PullChanges => f(&PullChanges),
@@ -1574,6 +1593,10 @@ mod tests {
     assert_eq!(
       palette_command_shortcut(Command::ShowFileSearch),
       Some(ShortcutId::ShowFileSearch)
+    );
+    assert_eq!(
+      palette_command_shortcut(Command::ShowGlobalSearch),
+      Some(ShortcutId::ShowGlobalSearch)
     );
     assert_eq!(
       palette_command_shortcut(Command::SendSelectionToAgent),
@@ -1714,6 +1737,11 @@ mod tests {
   #[test]
   fn file_search_binding_is_available_in_the_workspace() {
     assert!(has_binding("workspace", "cmd-p"));
+  }
+
+  #[test]
+  fn global_search_binding_is_available_in_the_workspace() {
+    assert!(has_binding("workspace", "cmd-shift-f"));
   }
 
   #[test]
@@ -1932,9 +1960,9 @@ mod tests {
   fn every_dock_surface_has_a_key_of_its_own() {
     // Five surfaces in the right dock, five shortcuts, none of them shared.
     let dock = [
-      (ShortcutId::OpenGitChangesSidebar, "cmd-shift-e"),
+      (ShortcutId::OpenGitChangesSidebar, "cmd-shift-c"),
       (ShortcutId::OpenReviewSidebar, "cmd-shift-r"),
-      (ShortcutId::OpenFilesSidebar, "cmd-shift-f"),
+      (ShortcutId::OpenFilesSidebar, "cmd-shift-e"),
       (ShortcutId::OpenGitHistorySidebar, "cmd-shift-h"),
       (ShortcutId::OpenPullRequestSidebar, "cmd-shift-p"),
     ];
@@ -1997,6 +2025,7 @@ mod tests {
       "cmd-shift-y",
       "cmd-shift-b",
       "cmd-shift-h",
+      "cmd-shift-c",
       "cmd-shift-e",
     ] {
       assert!(
