@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{collections::VecDeque, ops::Range};
 
 use gpui::Global;
 
@@ -7,6 +7,8 @@ pub(crate) enum SearchDirection {
   Next,
   Previous,
 }
+
+const MAX_SEARCH_HISTORY: usize = 50;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchOptions {
@@ -32,6 +34,9 @@ pub(crate) struct SearchState {
   matches: Vec<SearchMatch>,
   active_match: Option<usize>,
   error: Option<String>,
+  history: VecDeque<String>,
+  history_position: Option<usize>,
+  history_draft: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +119,11 @@ impl SearchState {
 
   pub fn set_query(&mut self, query: String) {
     self.query = query;
+    self.reset_history_navigation();
+  }
+
+  pub fn set_query_from_history(&mut self, query: String) {
+    self.query = query;
   }
 
   pub fn options(&self) -> SearchOptions {
@@ -152,6 +162,57 @@ impl SearchState {
     self.matches.clear();
     self.active_match = None;
     self.error = None;
+    self.reset_history_navigation();
+  }
+
+  pub fn remember_current_query(&mut self) {
+    if self.query.trim().is_empty() {
+      return;
+    }
+
+    if let Some(position) = self
+      .history
+      .iter()
+      .position(|existing| existing == &self.query)
+    {
+      self.history.remove(position);
+    }
+    self.history.push_front(self.query.clone());
+    self.history.truncate(MAX_SEARCH_HISTORY);
+    self.reset_history_navigation();
+  }
+
+  pub fn previous_history_query(&mut self) -> Option<String> {
+    if self.history.is_empty() {
+      return None;
+    }
+
+    let position = match self.history_position {
+      Some(position) => (position + 1).min(self.history.len().saturating_sub(1)),
+      None => {
+        self.history_draft = Some(self.query.clone());
+        0
+      }
+    };
+    self.history_position = Some(position);
+    self.history.get(position).cloned()
+  }
+
+  pub fn next_history_query(&mut self) -> Option<String> {
+    let position = self.history_position?;
+    if position == 0 {
+      self.history_position = None;
+      return Some(self.history_draft.take().unwrap_or_default());
+    }
+
+    let position = position - 1;
+    self.history_position = Some(position);
+    self.history.get(position).cloned()
+  }
+
+  fn reset_history_navigation(&mut self) {
+    self.history_position = None;
+    self.history_draft = None;
   }
 
   pub fn toggle_case_sensitive(&mut self) {

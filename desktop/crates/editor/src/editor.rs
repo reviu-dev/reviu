@@ -31,7 +31,10 @@ use gpui_component::{
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
-  input::{Escape as InputEscape, Input, InputEvent, InputState, TextareaState},
+  input::{
+    Escape as InputEscape, Input, InputEvent, InputState, MoveDown as InputMoveDown,
+    MoveUp as InputMoveUp, TextareaState,
+  },
   menu::{DropdownMenu as _, PopupMenuItem},
   resizable::{h_resizable, resizable_panel},
   tag::Tag,
@@ -4100,6 +4103,34 @@ impl Editor {
       .unwrap_or(false)
   }
 
+  fn apply_find_history_query(
+    &mut self,
+    query: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.find.set_query_from_history(query.clone());
+    if let Some(input) = self.find_input.clone() {
+      input.update(cx, |input, cx| {
+        input.set_value(query, window, cx);
+        input.select_all(window, cx);
+      });
+    }
+    self.refresh_find_matches(self.measured_editor_line_height(), true, cx);
+  }
+
+  fn find_previous_history_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(query) = self.find.previous_history_query() {
+      self.apply_find_history_query(query, window, cx);
+    }
+  }
+
+  fn find_next_history_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(query) = self.find.next_history_query() {
+      self.apply_find_history_query(query, window, cx);
+    }
+  }
+
   fn on_find_input_event(
     &mut self,
     state: &Entity<InputState>,
@@ -4402,11 +4433,13 @@ impl Editor {
 
   pub(crate) fn find_next_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let _ = window;
+    self.find.remember_current_query();
     self.find_next_match_with_line_height(self.measured_editor_line_height(), cx);
   }
 
   pub(crate) fn find_previous_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let _ = window;
+    self.find.remember_current_query();
     self.find_previous_match_with_line_height(self.measured_editor_line_height(), cx);
   }
 
@@ -4497,6 +4530,8 @@ impl Editor {
     let regex_editor = editor_entity.clone();
     let previous_editor = editor_entity.clone();
     let next_editor = editor_entity.clone();
+    let history_previous_editor = editor_entity.clone();
+    let history_next_editor = editor_entity.clone();
     let close_editor = editor_entity.clone();
     let mouse_down_editor = editor_entity.clone();
     let mouse_move_editor = editor_entity.clone();
@@ -4548,13 +4583,28 @@ impl Editor {
             .rounded_md()
             .bg(theme.background)
             .child(
-              div().flex_1().min_w(px(0.0)).child(
-                Input::new(&input)
-                  .small()
-                  .appearance(false)
-                  .bordered(false)
-                  .focus_bordered(false),
-              ),
+              div()
+                .flex_1()
+                .min_w(px(0.0))
+                .capture_action(move |_: &InputMoveUp, window, cx| {
+                  history_previous_editor.update(cx, |editor, cx| {
+                    editor.find_previous_history_query(window, cx);
+                  });
+                  cx.stop_propagation();
+                })
+                .capture_action(move |_: &InputMoveDown, window, cx| {
+                  history_next_editor.update(cx, |editor, cx| {
+                    editor.find_next_history_query(window, cx);
+                  });
+                  cx.stop_propagation();
+                })
+                .child(
+                  Input::new(&input)
+                    .small()
+                    .appearance(false)
+                    .bordered(false)
+                    .focus_bordered(false),
+                ),
             )
             .child(
               h_flex()
@@ -15010,6 +15060,45 @@ pub mod tests {
         editor.scroll_handle.offset().x < px(0.0),
         "find should reveal matches outside the horizontal viewport"
       );
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_history_remembers_committed_queries(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar baz");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find.set_query("foo".to_string());
+      editor.find_next_match_with_line_height(px(20.0), cx);
+      editor.find.remember_current_query();
+      editor.find.set_query("bar".to_string());
+      editor.find.remember_current_query();
+      editor.find.set_query("draft".to_string());
+
+      assert_eq!(editor.find.previous_history_query().as_deref(), Some("bar"));
+      assert_eq!(editor.find.previous_history_query().as_deref(), Some("foo"));
+      assert_eq!(editor.find.previous_history_query().as_deref(), Some("foo"));
+      assert_eq!(editor.find.next_history_query().as_deref(), Some("bar"));
+      assert_eq!(editor.find.next_history_query().as_deref(), Some("draft"));
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_history_moves_duplicate_queries_to_front(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar baz");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.find.set_query("foo".to_string());
+      editor.find.remember_current_query();
+      editor.find.set_query("bar".to_string());
+      editor.find.remember_current_query();
+      editor.find.set_query("foo".to_string());
+      editor.find.remember_current_query();
+      editor.find.set_query("".to_string());
+
+      assert_eq!(editor.find.previous_history_query().as_deref(), Some("foo"));
+      assert_eq!(editor.find.previous_history_query().as_deref(), Some("bar"));
+      assert_eq!(editor.find.previous_history_query().as_deref(), Some("bar"));
     });
   }
 
