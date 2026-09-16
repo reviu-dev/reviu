@@ -58,7 +58,7 @@ use crate::{
     review_comment_shows_header,
   },
   scrollbar_element::EditorScrollbarElement,
-  search::{SearchDirection, SearchMatch, SearchMatcher, SearchState},
+  search::{SearchDirection, SearchHighlights, SearchMatch, SearchMatcher, SearchState},
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
 
@@ -4254,9 +4254,12 @@ impl Editor {
     };
 
     self.find.set_active_match(Some(index));
-    self.selected_range = found.doc_range.clone();
-    self.selection_reversed = false;
-    self.display_selection = None;
+    if self.selected_range != found.doc_range {
+      let cursor = found.doc_range.end;
+      self.selected_range = cursor..cursor;
+      self.selection_reversed = false;
+      self.display_selection = None;
+    }
     self.target_column = Some(found.column_end);
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
@@ -4277,6 +4280,15 @@ impl Editor {
       cx.notify();
       return;
     }
+    if !self.selected_range.is_empty()
+      && let Some(selected_match) = self
+        .find
+        .matches()
+        .iter()
+        .position(|found| found.doc_range == self.selected_range)
+    {
+      self.find.set_active_match(Some(selected_match));
+    }
     let active = self.find.active_match().unwrap_or(0);
     self.select_find_match(active, line_height, smooth_scroll, cx);
   }
@@ -4296,25 +4308,21 @@ impl Editor {
   }
 
   fn find_next_match_with_line_height(&mut self, line_height: Pixels, cx: &mut Context<Self>) {
-    let previous_active_match = self.find.selected_active_match(&self.selected_range);
-    self.recompute_find_matches(false, cx);
-    if let Some(next_index) = self.find.navigation_target(
-      SearchDirection::Next,
-      previous_active_match,
-      self.cursor_offset(),
-    ) {
+    self.recompute_find_matches(true, cx);
+    if let Some(next_index) = self
+      .find
+      .navigation_target(SearchDirection::Next, self.cursor_offset())
+    {
       self.select_find_match(next_index, line_height, true, cx);
     }
   }
 
   fn find_previous_match_with_line_height(&mut self, line_height: Pixels, cx: &mut Context<Self>) {
-    let previous_active_match = self.find.selected_active_match(&self.selected_range);
-    self.recompute_find_matches(false, cx);
-    if let Some(previous_index) = self.find.navigation_target(
-      SearchDirection::Previous,
-      previous_active_match,
-      self.cursor_offset(),
-    ) {
+    self.recompute_find_matches(true, cx);
+    if let Some(previous_index) = self
+      .find
+      .navigation_target(SearchDirection::Previous, self.cursor_offset())
+    {
       self.select_find_match(previous_index, line_height, true, cx);
     }
   }
@@ -4323,9 +4331,8 @@ impl Editor {
     self.find_panel_open
   }
 
-  pub(crate) fn find_highlights(&self) -> Option<(&[SearchMatch], Option<usize>)> {
-    (self.find_panel_open && !self.find.query().is_empty())
-      .then(|| (self.find.matches(), self.find.active_match()))
+  pub(crate) fn find_highlights(&self) -> Option<SearchHighlights> {
+    (self.find_panel_open && !self.find.query().is_empty()).then(|| self.find.highlights())
   }
 
   pub fn find_panel_occludes_display_line(&self, display_line: usize) -> bool {
@@ -14890,6 +14897,23 @@ pub mod tests {
 
       assert_eq!(editor.find.matches().len(), 2);
       assert_eq!(editor.find.active_match(), Some(0));
+      assert_eq!(editor.find.highlights().active_range, Some(0..3));
+      assert_eq!(editor.selected_range, 3..3);
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_refresh_preserves_selection_that_seeded_search(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar\nfoo baz");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.selected_range = 0..3;
+      let query = editor.find_query_from_selection(cx).expect("selected text");
+      editor.find.set_query(query);
+      editor.refresh_find_matches(px(20.0), false, cx);
+
+      assert_eq!(editor.find.active_match(), Some(0));
+      assert_eq!(editor.find.highlights().active_range, Some(0..3));
       assert_eq!(editor.selected_range, 0..3);
     });
   }
@@ -14904,15 +14928,18 @@ pub mod tests {
 
       editor.find_next_match_with_line_height(px(20.0), cx);
       assert_eq!(editor.find.active_match(), Some(1));
-      assert_eq!(editor.selected_range, 8..11);
+      assert_eq!(editor.find.highlights().active_range, Some(8..11));
+      assert_eq!(editor.selected_range, 11..11);
 
       editor.find_next_match_with_line_height(px(20.0), cx);
       assert_eq!(editor.find.active_match(), Some(0));
-      assert_eq!(editor.selected_range, 0..3);
+      assert_eq!(editor.find.highlights().active_range, Some(0..3));
+      assert_eq!(editor.selected_range, 3..3);
 
       editor.find_previous_match_with_line_height(px(20.0), cx);
       assert_eq!(editor.find.active_match(), Some(1));
-      assert_eq!(editor.selected_range, 8..11);
+      assert_eq!(editor.find.highlights().active_range, Some(8..11));
+      assert_eq!(editor.selected_range, 11..11);
     });
   }
 
@@ -14939,7 +14966,8 @@ pub mod tests {
       editor.find_next_match_with_line_height(px(20.0), cx);
 
       assert_eq!(editor.find.active_match(), Some(0));
-      assert_eq!(editor.selected_range, 8..11);
+      assert_eq!(editor.find.highlights().active_range, Some(8..11));
+      assert_eq!(editor.selected_range, 11..11);
     });
   }
 
@@ -14986,7 +15014,8 @@ pub mod tests {
       editor.find.set_query("f\\d+".to_string());
       editor.refresh_find_matches(px(20.0), false, cx);
       assert_eq!(editor.find.matches().len(), 1);
-      assert_eq!(editor.selected_range, 13..16);
+      assert_eq!(editor.find.highlights().active_range, Some(13..16));
+      assert_eq!(editor.selected_range, 16..16);
     });
   }
 

@@ -30,6 +30,13 @@ pub(crate) struct SearchState {
   error: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SearchHighlights {
+  pub matches: Vec<SearchMatch>,
+  pub active_match: Option<usize>,
+  pub active_range: Option<Range<usize>>,
+}
+
 pub(crate) struct SearchMatcher {
   regex: regex::Regex,
   options: SearchOptions,
@@ -102,6 +109,17 @@ impl SearchState {
 
   pub fn active_match(&self) -> Option<usize> {
     self.active_match
+  }
+
+  pub fn highlights(&self) -> SearchHighlights {
+    SearchHighlights {
+      matches: self.matches.clone(),
+      active_match: self.active_match,
+      active_range: self
+        .active_match
+        .and_then(|index| self.matches.get(index))
+        .map(|found| found.doc_range.clone()),
+    }
   }
 
   pub fn set_active_match(&mut self, active_match: Option<usize>) {
@@ -185,34 +203,16 @@ impl SearchState {
       .or(Some(0));
   }
 
-  pub fn selected_active_match(&self, selected_range: &Range<usize>) -> Option<SearchMatch> {
-    self
-      .active_match
-      .and_then(|index| self.matches.get(index))
-      .filter(|active| active.doc_range == *selected_range)
-      .cloned()
-  }
-
-  pub fn navigation_target(
-    &self,
-    direction: SearchDirection,
-    previous_active_match: Option<SearchMatch>,
-    cursor: usize,
-  ) -> Option<usize> {
+  pub fn navigation_target(&self, direction: SearchDirection, cursor: usize) -> Option<usize> {
     if self.matches.is_empty() {
       return None;
     }
 
-    if let Some(previous_index) = previous_active_match.and_then(|previous| {
-      self
-        .matches
-        .iter()
-        .position(|candidate| *candidate == previous)
-    }) {
+    if let Some(active_index) = self.active_match {
       return Some(match direction {
-        SearchDirection::Next => (previous_index + 1) % self.matches.len(),
-        SearchDirection::Previous if previous_index == 0 => self.matches.len() - 1,
-        SearchDirection::Previous => previous_index - 1,
+        SearchDirection::Next => (active_index + 1) % self.matches.len(),
+        SearchDirection::Previous if active_index == 0 => self.matches.len() - 1,
+        SearchDirection::Previous => active_index - 1,
       });
     }
 

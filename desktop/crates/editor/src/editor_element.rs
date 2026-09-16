@@ -1031,8 +1031,7 @@ impl Element for EditorElement {
       projection,
       block_map,
       is_read_only,
-      find_matches,
-      active_find_match,
+      find_highlights,
     ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
@@ -1048,13 +1047,10 @@ impl Element for EditorElement {
       let mut viewport_lines = Vec::new();
       let projection = editor.projection.clone();
       let block_map = editor.block_map.clone();
-      let (find_matches, active_find_match) = if self.diff_view == DiffElementView::SplitLeft {
-        (Vec::new(), None)
+      let find_highlights = if self.diff_view == DiffElementView::SplitLeft {
+        None
       } else {
-        editor
-          .find_highlights()
-          .map(|(matches, active)| (matches.to_vec(), active))
-          .unwrap_or_default()
+        editor.find_highlights()
       };
 
       for display_idx in viewport.clone() {
@@ -1109,8 +1105,7 @@ impl Element for EditorElement {
         projection,
         block_map,
         editor.is_read_only,
-        find_matches,
-        active_find_match,
+        find_highlights,
       )
     };
 
@@ -1286,21 +1281,26 @@ impl Element for EditorElement {
       line_texts
     };
 
-    let search_match_quads = find_match_quads(
-      &find_matches,
-      active_find_match,
-      &line_texts,
-      &shaped_lines,
-      &viewport,
-      bounds,
-      line_height,
-      scroll_offset,
-      &theme,
-    );
-    let active_find_range = active_find_match
-      .and_then(|index| find_matches.get(index))
-      .map(|found| found.doc_range.clone());
-    let active_find_is_selection = active_find_range.as_ref() == Some(&selected_range);
+    let search_match_quads = find_highlights
+      .as_ref()
+      .map(|highlights| {
+        find_match_quads(
+          &highlights.matches,
+          highlights.active_match,
+          &line_texts,
+          &shaped_lines,
+          &viewport,
+          bounds,
+          line_height,
+          scroll_offset,
+          &theme,
+        )
+      })
+      .unwrap_or_default();
+    let active_find_is_selection = find_highlights
+      .as_ref()
+      .and_then(|highlights| highlights.active_range.as_ref())
+      == Some(&selected_range);
 
     let mut indent_guides = Vec::new();
     if indent_rainbow_enabled() {
