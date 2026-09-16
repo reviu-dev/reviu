@@ -2,7 +2,7 @@
 
 All notable changes to Reviu are documented here.
 
-## 1.0.1
+## 1.1.0
 
 ### Editor Find and Replace
 
@@ -10,7 +10,7 @@ File search now behaves more like a code editor: every match is highlighted, the
 
 ### Project Search Shortcut
 
-Command-Shift-F now opens project-wide text search as a center tab with grouped, collapsible file results, line and preview matches, and quick keyboard access. Dock panel shortcuts move to clearer defaults for Changes and Files.
+Cmd-Shift-F now opens project-wide text search as a center tab with grouped, collapsible file results, line and preview matches, and quick keyboard access. Dock panel shortcuts move to clearer defaults for Changes and Files.
 
 ### Split Tab Dragging
 
