@@ -373,12 +373,25 @@ impl SessionPage {
           );
         }
         AgentChatPanelEvent::TurnStarted => {
+          let agent = panel.read(cx).backend_kind().as_str().to_string();
+          crate::analytics::track_with(
+            cx,
+            "agent_turn_started",
+            Some(serde_json::json!({ "agent": agent })),
+          );
           this.create_turn_checkpoint(panel.clone(), cx);
         }
         AgentChatPanelEvent::PermissionRequested => {
           this.notify_agent_attention("Reviu agent needs a decision", Some(panel), window, cx);
         }
         AgentChatPanelEvent::TurnFinished { completed } => {
+          let agent = panel.read(cx).backend_kind().as_str().to_string();
+          let outcome = if *completed { "completed" } else { "stopped" };
+          crate::analytics::track_with(
+            cx,
+            "agent_turn_finished",
+            Some(serde_json::json!({ "agent": agent, "outcome": outcome })),
+          );
           // A queued prompt draining into a fresh turn is not a stopping point.
           if !panel.read(cx).is_turn_in_flight() {
             this.notify_agent_attention("Reviu agent finished", Some(panel), window, cx);
@@ -403,6 +416,12 @@ impl SessionPage {
           this.rename_session_worktree_branch(panel.clone(), title.clone(), cx);
         }
         AgentChatPanelEvent::TurnFailed { .. } => {
+          let agent = panel.read(cx).backend_kind().as_str().to_string();
+          crate::analytics::track_with(
+            cx,
+            "agent_turn_failed",
+            Some(serde_json::json!({ "agent": agent })),
+          );
           // No toast: the red card in the transcript and the Failed row in
           // the sidebar already carry it. The popup covers an inactive window.
           this.notify_agent_attention("Reviu agent failed", Some(panel), window, cx);
@@ -1088,7 +1107,8 @@ impl SessionPage {
   fn send_agent_review(&mut self, send: ReviewSend, window: &mut Window, cx: &mut Context<Self>) {
     self.sync_agent_review_comments_to_editor(cx);
 
-    if self.agent_review.sendable_count(&send) == 0 {
+    let sendable_count = self.agent_review.sendable_count(&send);
+    if sendable_count == 0 {
       window.push_notification(Notification::info("No review comments to send"), cx);
       return;
     }
@@ -1118,6 +1138,12 @@ impl SessionPage {
       return;
     }
 
+    let agent = panel.read(cx).backend_kind().as_str().to_string();
+    crate::analytics::track_with(
+      cx,
+      "agent_review_comments_sent",
+      Some(serde_json::json!({ "agent": agent, "count": sendable_count })),
+    );
     self.agent_review.mark_as_sent(&send);
     // Only what went out loses its tick: sending one comment on its own leaves
     // the batch someone was building alone.
