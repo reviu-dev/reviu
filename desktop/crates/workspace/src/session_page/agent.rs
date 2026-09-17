@@ -1152,9 +1152,16 @@ impl SessionPage {
       self.deselect_review_panel_comments(&ids, cx);
     }
     self.sync_agent_review_comments_to_editor(cx);
-    // Back to the conversation to watch the agent address the comments.
-    self.close_diff(window, cx);
+    self.reveal_agent_review_conversation(window, cx);
     cx.notify();
+  }
+
+  fn reveal_agent_review_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.center_layout.contains_tab(&self.active_chat_tab(cx)) {
+      self.reveal_active_session_chat(window, cx);
+    } else {
+      self.close_diff(window, cx);
+    }
   }
 
   fn deselect_review_panel_comments(&mut self, ids: &HashSet<u64>, cx: &mut Context<Self>) {
@@ -2195,6 +2202,7 @@ impl SessionPage {
 
 #[cfg(test)]
 mod tests {
+  use super::super::center_layout::CenterNode;
   use super::super::test_support::*;
   use super::*;
   use crate::agent_review::LocalAgentReviewCommentState;
@@ -2895,6 +2903,200 @@ mod tests {
     page.read_with(cx, |page, _| {
       page.agent_chat_view.clone().expect("active panel")
     })
+  }
+
+  async fn page_with_review_diff<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+  ) -> (
+    TempRepo,
+    Entity<SessionPage>,
+    &'a mut gpui::VisualTestContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel(name, cx).await;
+    active_panel(&page, cx).update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("Review this change", cx)
+    });
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), window, cx);
+    });
+    (repo, page, cx)
+  }
+
+  fn split_review_diff_with_chat(
+    page: &mut SessionPage,
+    chat_tab: CenterTab,
+    cx: &mut Context<SessionPage>,
+  ) {
+    let diff_tab = page.center_layout.active_tab().clone();
+    let CenterNode::Pane(pane) = page.center_layout.root() else {
+      panic!("expected a single diff pane");
+    };
+    assert!(page.center_layout.split_pane(
+      pane.id(),
+      CenterSurface::from_tab(chat_tab),
+      CenterSplitDirection::Left,
+    ));
+    page
+      .center_layout
+      .set_active_surface(CenterSurface::from_tab(diff_tab.clone()));
+    page.remember_center_layout_tab(diff_tab);
+    page.center = CenterView::Diff;
+    cx.notify();
+  }
+
+  async fn assert_review_return_preserves_split(
+    chat_represents_split: bool,
+    cx: &mut TestAppContext,
+  ) {
+    let (_repo, page, cx) = page_with_review_diff("session-review-return-split", cx).await;
+    let panel = active_panel(&page, cx);
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let (tabs, mut expected_layout, representative) = page.update(cx, |page, cx| {
+      split_review_diff_with_chat(page, chat_tab.clone(), cx);
+      if chat_represents_split {
+        page.remember_center_layout_tab(chat_tab.clone());
+      }
+      (
+        page.center_tabs.clone(),
+        page.center_layout.clone(),
+        page.active_center_tab.clone(),
+      )
+    });
+    expected_layout.set_active_surface(CenterSurface::from_tab(chat_tab.clone()));
+
+    page.update_in(cx, |page, window, cx| {
+      page.reveal_agent_review_conversation(window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert_eq!(page.center_tabs, tabs);
+      assert_eq!(page.active_center_tab, representative);
+      assert_eq!(page.center_layout, expected_layout);
+      assert_eq!(page.agent_chat_view.as_ref(), Some(&panel));
+    });
+    assert!(cx.debug_bounds("session-conversation-pane").is_some());
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input_focus_handle(cx));
+    assert_eq!(
+      cx.update(|window, cx| window.focused(cx)),
+      Some(input_focus)
+    );
+  }
+
+  #[gpui::test]
+  async fn review_return_preserves_a_diff_led_split(cx: &mut TestAppContext) {
+    assert_review_return_preserves_split(false, cx).await;
+  }
+
+  #[gpui::test]
+  async fn review_return_preserves_a_chat_led_split(cx: &mut TestAppContext) {
+    assert_review_return_preserves_split(true, cx).await;
+  }
+
+  #[gpui::test]
+  async fn review_return_without_split_reuses_the_conversation(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_review_diff("session-review-return-single", cx).await;
+    let panel = active_panel(&page, cx);
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let tabs = page.read_with(cx, |page, _| page.center_tabs.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.reveal_agent_review_conversation(window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert_eq!(page.center_layout.surface_count(), 1);
+      assert_eq!(page.center_layout.active_tab(), &chat_tab);
+      assert_eq!(page.center_tabs, tabs);
+      assert_eq!(page.agent_chat_view.as_ref(), Some(&panel));
+    });
+  }
+
+  #[gpui::test]
+  async fn review_return_does_not_target_an_unrelated_neighboring_chat(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_review_diff("session-review-return-other-chat", cx).await;
+    let neighboring_panel = active_panel(&page, cx);
+    let neighboring_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let recipient = active_panel(&page, cx);
+    recipient.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("Another task", cx)
+    });
+    let recipient_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    assert_ne!(recipient_tab, neighboring_tab);
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      split_review_diff_with_chat(page, neighboring_tab.clone(), cx)
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.reveal_agent_review_conversation(window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.agent_chat_view.as_ref(), Some(&recipient));
+      assert_eq!(page.center_layout.active_tab(), &recipient_tab);
+      assert_eq!(
+        page.chat_panel_for_tab(&neighboring_tab, cx),
+        Some(neighboring_panel.clone())
+      );
+    });
+    let input_focus = recipient.read_with(cx, |panel, cx| panel.input_focus_handle(cx));
+    assert_eq!(
+      cx.update(|window, cx| window.focused(cx)),
+      Some(input_focus)
+    );
+  }
+
+  #[gpui::test]
+  async fn refused_review_send_preserves_the_split_and_drafts(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_review_diff("session-review-refused-split", cx).await;
+    let (tabs, layout) = page.update(cx, |page, cx| {
+      split_review_diff_with_chat(page, page.active_chat_tab(cx), cx);
+      (page.center_tabs.clone(), page.center_layout.clone())
+    });
+    page.update_in(cx, |page, window, cx| {
+      page.send_agent_review_to_agent(window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.center_tabs, tabs);
+      assert_eq!(page.center_layout, layout);
+      assert_eq!(page.draft_review_comment_count(), 1);
+    });
   }
 
   #[gpui::test]

@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.2.0
+
+### Review Feedback Stays In Split View
+
+Sending review comments to an agent now keeps the diff beside its conversation when both are open in a split. Focus returns to the existing chat without opening a separate conversation tab.
+
 ## 1.1.0
 
 ### Editor Find and Replace
