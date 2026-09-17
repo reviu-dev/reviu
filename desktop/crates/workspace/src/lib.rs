@@ -95,6 +95,7 @@ mod merge_dialog;
 mod open_intent;
 mod palette_actions;
 mod palette_branches;
+mod presentation;
 mod pricing_copy;
 mod pro_promise;
 mod project_files;
@@ -142,5 +143,7 @@ pub use driver_support::{
   DriverBranchKind, DriverBranchRef, DriverGitAction, DriverInteractiveRebaseAction,
   DriverInteractiveRebaseTarget, DriverNotification, DriverNotificationKind, DriverTerminalState,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use presentation::DriverPresentation;
 pub use shortcuts::{SHOW_COMMAND_PALETTE_SHORTCUT, install_app_key_bindings};
 pub use workspace::{WorkspaceView, build_app_menus};

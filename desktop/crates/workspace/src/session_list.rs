@@ -718,7 +718,11 @@ impl SessionList {
     let menu_open = self.open_menu_project.as_deref() == Some(repo_root);
     let drop_gap = self.drop_gap.filter(|_| cx.has_active_drag());
     let git_backed = self.git_repositories.contains(repo_root);
-    let avatar_url = self.project_avatar_urls.get(repo_root).cloned();
+    let avatar_url = crate::presentation::project_avatar(
+      repo_root,
+      self.project_avatar_urls.get(repo_root).cloned(),
+      cx,
+    );
     let active_project = self.displayed_checkout.as_deref().is_some_and(|checkout| {
       self
         .checkout_rows_for_project(repo_root)

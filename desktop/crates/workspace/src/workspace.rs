@@ -1084,12 +1084,10 @@ impl WorkspaceView {
       bar.px_3()
     };
 
-    let left = h_flex()
-      .items_center()
-      .gap_2()
-      .when_some(AppProfile::current().header_tag_label(), |this, label| {
-        this.child(Tag::secondary().small().rounded_full().child(label))
-      });
+    let left = h_flex().items_center().gap_2().when_some(
+      crate::presentation::profile_badge_label(AppProfile::current(), cx),
+      |this, label| this.child(Tag::secondary().small().rounded_full().child(label)),
+    );
 
     let drag_area = div()
       .id("onboarding-titlebar-drag")
@@ -1169,7 +1167,7 @@ impl WorkspaceView {
           state: UserMenuState::Authenticated(UserMenuUser {
             name: display_name.into(),
             email: user.email.into(),
-            image: user.image.map(Into::into),
+            image: crate::presentation::user_avatar(user.image, cx).map(Into::into),
           }),
           current_page,
           on_open_billing: Some(open_billing.clone()),
@@ -1299,9 +1297,10 @@ impl WorkspaceView {
       .items_center()
       .gap_2()
       .child(sidebar_toggle_button)
-      .when_some(AppProfile::current().header_tag_label(), |this, label| {
-        this.child(Tag::secondary().small().rounded_full().child(label))
-      });
+      .when_some(
+        crate::presentation::profile_badge_label(AppProfile::current(), cx),
+        |this, label| this.child(Tag::secondary().small().rounded_full().child(label)),
+      );
 
     if use_client_decorations {
       let drag_area = div()

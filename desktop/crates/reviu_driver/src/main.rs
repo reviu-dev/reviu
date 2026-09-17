@@ -33,6 +33,9 @@ use gpui::{
 use gpui_component::{Root, WindowExt as _};
 use workspace::WorkspaceView;
 
+mod presentation;
+use presentation::Presentation;
+
 /// Same shape as the app's root in `crates/reviu/src/app_root.rs`: the view
 /// plus the layers that dialogs, sheets and notifications render into.
 struct DriverRoot {
@@ -91,11 +94,13 @@ impl Backend {
 struct Args {
   backend: Backend,
   agent_command: Option<String>,
+  presentation: Option<PathBuf>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
   let mut backend = Backend::Test;
   let mut agent_command = None;
+  let mut presentation = None;
   let mut args = args.into_iter();
   while let Some(arg) = args.next() {
     if let Some(value) = arg.strip_prefix("--backend=") {
@@ -110,12 +115,19 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         backend = Backend::parse(&value)?;
       }
       "--agent-command" => agent_command = args.next(),
+      "--presentation" => {
+        presentation =
+          Some(PathBuf::from(args.next().ok_or_else(|| {
+            "--presentation needs a JSON manifest path".to_string()
+          })?));
+      }
       other => return Err(format!("unknown argument: {other}")),
     }
   }
   Ok(Args {
     backend,
     agent_command,
+    presentation,
   })
 }
 
@@ -148,6 +160,8 @@ enum Command {
   Wait {
     ms: u64,
   },
+  /// Deliver one frame's callbacks without waiting for the platform display loop.
+  NextFrame,
   /// Run scheduled work to quiescence.
   Park,
   /// Test backend: answer the next OS folder prompt. Visual backend: open it directly.
@@ -361,22 +375,38 @@ fn main() {
     }
   };
 
+  let presentation = match args
+    .presentation
+    .as_deref()
+    .map(Presentation::load)
+    .transpose()
+  {
+    Ok(presentation) => presentation.unwrap_or_default(),
+    Err(error) => {
+      eprintln!("{error:#}");
+      std::process::exit(2);
+    }
+  };
+
   // Without an override the shell connects the real configured agent.
   agent_chat_panel::set_backend_command_override(args.agent_command);
 
   match args.backend {
-    Backend::Test => run_test_backend(),
-    Backend::Visual => run_visual_backend(),
+    Backend::Test => run_test_backend(presentation),
+    Backend::Visual => run_visual_backend(presentation),
   }
 }
 
-fn run_test_backend() {
+fn run_test_backend(presentation: Presentation) {
   let dispatcher = TestDispatcher::new(0);
   let mut app = TestAppContext::build(dispatcher, None);
   // The app talks to real processes and real time; forbidding parking would
   // panic on their foreign-thread wakeups.
   app.executor().allow_parking();
-  app.update(init_app);
+  app.update(|cx| {
+    init_app(cx);
+    presentation.install(cx);
+  });
 
   let mut mounted = None;
   let (root, cx) = app.add_window_view(|window, cx| {
@@ -452,6 +482,11 @@ fn handle_test_command(
     Command::Wait { ms } => {
       wait_test(cx, ms);
       respond(ok(serde_json::json!({})));
+    }
+    Command::NextFrame => {
+      let callbacks = cx.update(|window, cx| window.simulate_next_frame(cx));
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({ "callbacks": callbacks })));
     }
     Command::Park => {
       cx.run_until_parked();
@@ -935,19 +970,22 @@ fn notification_stats(cx: &mut gpui::VisualTestContext) -> serde_json::Value {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn run_visual_backend() {
+fn run_visual_backend(_presentation: Presentation) {
   eprintln!("visual backend is only supported on macOS");
   std::process::exit(1);
 }
 
 #[cfg(target_os = "macos")]
-fn run_visual_backend() {
+fn run_visual_backend(presentation: Presentation) {
   let mut cx = VisualTestAppContext::with_asset_source(
     gpui_platform::current_platform(false),
     std::sync::Arc::new(ui::AppAssets),
   );
   cx.executor().allow_parking();
-  cx.update(init_app);
+  cx.update(|cx| {
+    init_app(cx);
+    presentation.install(cx);
+  });
 
   let mut mounted = None;
   let window = cx
@@ -1025,6 +1063,14 @@ fn handle_visual_command(
     Command::Wait { ms } => {
       wait_visual(cx, window, ms);
       respond(ok(serde_json::json!({})));
+    }
+    Command::NextFrame => {
+      let callbacks = cx.update_window(window, |_, window, cx| window.simulate_next_frame(cx));
+      cx.run_until_parked();
+      match callbacks {
+        Ok(callbacks) => respond(ok(serde_json::json!({ "callbacks": callbacks }))),
+        Err(error) => respond(err(error.to_string())),
+      }
     }
     Command::Park => {
       cx.run_until_parked();
@@ -2007,6 +2053,7 @@ mod tests {
       Args {
         backend: Backend::Test,
         agent_command: None,
+        presentation: None,
       }
     );
   }
@@ -2024,8 +2071,20 @@ mod tests {
       Args {
         backend: Backend::Visual,
         agent_command: Some("/tmp/stub-agent".to_string()),
+        presentation: None,
       }
     );
+  }
+
+  #[test]
+  fn presentation_manifest_requires_a_path() {
+    assert_eq!(
+      parse_args(["--presentation".into(), "/tmp/presentation.json".into()])
+        .expect("args")
+        .presentation,
+      Some(PathBuf::from("/tmp/presentation.json"))
+    );
+    assert!(parse_args(["--presentation".into()]).is_err());
   }
 
   #[test]
@@ -2044,6 +2103,14 @@ mod tests {
       parse_args(["--backend".to_string(), "other".to_string()]).expect_err("bad backend"),
       "unknown backend: other"
     );
+  }
+
+  #[test]
+  fn next_frame_command_is_json_lines_compatible() {
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"next_frame"}"#).expect("next frame"),
+      Command::NextFrame
+    ));
   }
 
   #[test]

@@ -418,6 +418,7 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
       "cmd": "wait",
       "ms": required_u64(&arguments, "ms")?,
     }),
+    "next_frame" => json!({ "cmd": "next_frame" }),
     "park" => json!({ "cmd": "park" }),
     "path_prompt" => json!({
       "cmd": "path_prompt",
@@ -628,6 +629,11 @@ fn tools() -> Vec<Value> {
       "wait",
       "Let real time pass while pumping the driver.",
       object_schema(vec![integer_property("ms", "Milliseconds to wait.")]).required(["ms"]),
+    ),
+    tool(
+      "next_frame",
+      "Deliver one frame of GPUI callbacks, including deferred focus and review actions.",
+      empty_schema(),
     ),
     tool(
       "park",

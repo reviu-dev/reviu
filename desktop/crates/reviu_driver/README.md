@@ -38,6 +38,7 @@ Useful options:
 - `--backend test`: GPUI test backend, default, no screenshots.
 - `--backend visual`: macOS offscreen Metal renderer, supports screenshots.
 - `--agent-command <path>`: use a fake or custom agent command.
+- `--presentation <manifest.json>`: use local avatar fixtures and optionally hide the profile badge, without changing the app profile.
 
 Build the stub ACP agent when agent sessions are needed:
 
@@ -66,6 +67,7 @@ Common commands:
 {"cmd":"expand_sidebar_projects"}
 {"cmd":"resize_sidebar","width":280}
 {"cmd":"wait_until_editor_ready","timeout_ms":6000}
+{"cmd":"next_frame"}
 {"cmd":"create_pull_request_review_comment","path":"fixtures/pr-open.txt","line":0,"body":"note"}
 {"cmd":"show_review"}
 {"cmd":"submit_pull_request_review","body":"looks good"}
@@ -82,7 +84,27 @@ Common commands:
 
 The test backend also supports selector-driven commands such as `bounds`, `click`, `type`, `key`, `clock`, `wait`, and `park`. The visual backend supports point clicks and `screenshot`.
 
+`next_frame` delivers one batch of `Window::on_next_frame` callbacks and returns the number executed as `callbacks`. Use it after actions that defer work or focus until the next frame. `wait`, `clock` and `park` alone do not guarantee delivery on the offscreen backend. A callback scheduled by another callback needs a subsequent `next_frame`; do not drain indefinitely because animations can reschedule themselves.
+
 The driver reads and writes real repositories. Use temporary repositories for repeatable tests.
+
+## Local presentation fixtures
+
+Both raw driver backends accept an optional JSON manifest:
+
+```json
+{
+  "hide_profile_badge": true,
+  "project_avatars": {"/tmp/demo-repo": "assets/project.png"},
+  "user_avatar": "assets/user.png"
+}
+```
+
+Paths are resolved relative to the manifest. Project directories are canonicalized, so their keys must refer to the main project root, not a session worktree. Images are decoded before the window opens; missing files, invalid images, unknown fields and duplicate canonical projects fail startup. Every field is optional and defaults to normal presentation.
+
+The driver serves these images through an in-memory GPUI HTTP client. Unmapped image requests still return 404, never reach the network, and repository remotes need not be changed. This does not replace the application's API client or its `API_BASE_URL` configuration. The user image only overrides an already authenticated user's avatar; it does not sign in or change their identity.
+
+Presentation overrides are available only in `test-support` builds and are never persisted. Hiding the badge does not change `REVIU_PROFILE`, config paths, keychain services or analytics settings. For isolated captures, still supply a temporary `HOME` and `XDG_CONFIG_HOME`, keep `REVIU_PROFILE=dev`, and configure the fixture API separately. No presentation environment variable is read by the packaged app. The manifest option is currently exposed by the raw driver CLI, not the MCP wrapper.
 
 ## `reviu-driver-mcp`
 
@@ -122,7 +144,7 @@ Useful options:
 Core tools:
 
 - lifecycle: `start`, `restart`, `status`, `quit`
-- UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `park`, `scroll`
+- UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `next_frame`, `park`, `scroll`
 - app state: `path_prompt`, `open_file`, `open_code_file`, `open_pull_request_file`, `open_terminal`, `split_center_with_previous`, `terminal_state`, `open_terminal_file_link`, `open_agent_diff_snapshot`, `focus_agent_chat`, `focus_agent_chat_by_title`, `new_agent_session`, `seed_agent_message`, `split_center_with_chat`, `resize_dock`, `set_editor_scroll`, `expand_sidebar_projects`, `resize_sidebar`, `wait_until_editor_ready`, `show_changes`, `show_pull_request`, `expand_pull_request_details`, `show_review`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`, `github_notifications`
 - Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `refresh_github_notifications`, `open_github_notification`, `mark_github_notification_done`, `run_git_action`, `create_pull_request_review_comment`, `submit_pull_request_review`, `discard_pull_request_review`
 - visual: `screenshot` with `--backend visual` on macOS
