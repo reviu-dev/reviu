@@ -62,6 +62,12 @@ fn newline_indents_blocks_and_places_caret_between_paired_delimiters(cx: &mut Te
     ),
     ("json", "{|}", "{\n  \n}", "{\n  "),
     (
+      "ts",
+      "import App from './App.vue\nif (ready) {|}",
+      "import App from './App.vue\nif (ready) {\n  \n}",
+      "import App from './App.vue\nif (ready) {\n  ",
+    ),
+    (
       "rs",
       "fn f<'a>() {|}",
       "fn f<'a>() {\n    \n}",

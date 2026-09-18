@@ -73,6 +73,8 @@ use crate::{
 #[path = "mouse_selection.rs"]
 mod mouse_selection;
 use mouse_selection::MouseSelection;
+#[path = "auto_pairs.rs"]
+mod auto_pairs;
 #[path = "document_lifecycle.rs"]
 mod document_lifecycle;
 #[path = "editing.rs"]
@@ -86,6 +88,8 @@ pub struct Transaction {
   pub id: TransactionId,
   pub(crate) selection_before: SelectionSnapshot,
   pub(crate) selection_after: SelectionSnapshot,
+  pairs_before: Vec<auto_pairs::AutoPair>,
+  pairs_after: Vec<auto_pairs::AutoPair>,
 }
 
 /// Default viewport height before first render
@@ -883,6 +887,7 @@ pub struct Editor {
 
   pub(crate) target_column: Option<usize>,
 
+  auto_pairs: auto_pairs::AutoPairs,
   pub(crate) undo_stack: VecDeque<Transaction>,
   pub(crate) redo_stack: VecDeque<Transaction>,
 
@@ -1416,6 +1421,7 @@ impl Editor {
       last_scroll_x: px(0.0),
       max_cache_size: MAX_CACHE_SIZE,
       target_column: None,
+      auto_pairs: auto_pairs::AutoPairs::default(),
       undo_stack: VecDeque::new(),
       redo_stack: VecDeque::new(),
       theme: Theme::dark(),
@@ -4505,7 +4511,7 @@ impl Editor {
     }
   }
 
-  fn replace_current_find_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  fn replace_current_find_match(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
     if self.selection_is_read_only() || self.find.query().is_empty() {
       return;
     }
@@ -4518,7 +4524,7 @@ impl Editor {
 
     let replacement = self.replace_input_text(cx);
     self.selected_range = range;
-    self.replace_text_in_range(None, &replacement, window, cx);
+    self.replace_literal_text_in_range(None, &replacement, cx);
     self.find_next_match_with_line_height(self.measured_editor_line_height(), cx);
   }
 
@@ -8666,6 +8672,9 @@ impl Editor {
     if self.document.read(cx).buffer.last_transaction_id() != Some(id) {
       return;
     }
+    let (pairs_before, pairs_after) = self
+      .auto_pairs
+      .finish(self.document.read(cx).buffer.version());
     self.redo_stack.clear();
     let selection_after = SelectionSnapshot {
       range: selection_after,
@@ -8673,11 +8682,14 @@ impl Editor {
     };
     if let Some(transaction) = self.undo_stack.iter_mut().find(|t| t.id == id) {
       transaction.selection_after = selection_after;
+      transaction.pairs_after = pairs_after;
     } else {
       self.undo_stack.push_back(Transaction {
         id,
         selection_before,
         selection_after,
+        pairs_before,
+        pairs_after,
       });
     }
   }
@@ -9798,107 +9810,20 @@ impl EntityInputHandler for Editor {
     &mut self,
     range_utf16: Option<Range<usize>>,
     new_text: &str,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.selection_is_read_only() {
+    if !self.can_edit_text(cx) {
       return;
     }
-    if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
-      return;
-    }
-    self.cursor_blink.update(cx, |blink, cx| {
-      blink.pause_blinking(cx);
-    });
-    self.display_selection = None;
-    let range = range_utf16
+    // Native input may explicitly target the selection even for ordinary typing.
+    let replaces_selection = range_utf16
       .as_ref()
-      .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
-      .or(self.marked_range.clone())
-      .unwrap_or(self.selected_range.clone());
-    let range = self.clamp_range_to_doc_len(range, cx);
-    let was_composing = self.marked_range.is_some();
-    let standalone = !was_composing
-      && (new_text.contains('\n')
-        || !self.selected_range.is_empty()
-        || new_text.graphemes(true).count() > 1
-        || (!range.is_empty() && !new_text.is_empty()));
-    if standalone {
-      self.finalize_transaction(cx);
+      .is_none_or(|range| *range == self.range_to_utf16(&self.selected_range, cx));
+    if replaces_selection && self.marked_range.is_none() && self.try_auto_pair(new_text, cx) {
+      return;
     }
-
-    let selection_before = self.selection_snapshot(cx);
-    let start_line = self.document.read(cx).char_to_line(range.start);
-    let end_line = self.document.read(cx).char_to_line(range.end);
-
-    let line_height = self.measured_editor_line_height();
-    let doc_line_count = self.document.read(cx).len_lines();
-    let total_display_lines = self.display_line_count(doc_line_count);
-    let display_viewport = self.viewport_range(line_height, total_display_lines);
-    let doc_viewports = self.doc_ranges_for_display_viewport(display_viewport);
-    let new_line_count = new_text.matches('\n').count();
-    let force_end_line = start_line.saturating_add(new_line_count).max(end_line);
-    let force_range = start_line..(force_end_line + 1);
-
-    self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
-
-    let transaction_id = self.document.update(cx, |doc, cx| {
-      let id = if was_composing {
-        doc
-          .buffer
-          .continue_transaction(Instant::now(), |buffer, transaction| {
-            buffer.replace(transaction, range.clone(), new_text);
-          })
-      } else {
-        doc
-          .buffer
-          .transaction(Instant::now(), |buffer, transaction| {
-            buffer.replace(transaction, range.clone(), new_text);
-          })
-      };
-
-      if !doc.should_defer_full_highlight() {
-        doc.schedule_recompute_highlights(cx);
-      }
-      doc.schedule_viewport_highlights_for_ranges(
-        &doc_viewports,
-        Some(force_range.clone()),
-        crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
-        cx,
-      );
-
-      cx.notify();
-      id
-    });
-    self.mark_conflict_cache_dirty();
-
-    let has_newline = new_text.contains('\n');
-
-    if has_newline || start_line != end_line {
-      self.invalidate_lines_from(start_line);
-    } else {
-      self.invalidate_line(start_line);
-    }
-
-    let new_text_chars = new_text.chars().count();
-    let doc_len_after = self.document.read(cx).len();
-    let new_cursor = (range.start + new_text_chars).min(doc_len_after);
-    self.selected_range = new_cursor..new_cursor;
-    self.selection_reversed = false;
-    self.marked_range.take();
-
-    let selection_after = self.selected_range.clone();
-
-    self.record_transaction(transaction_id, selection_before, selection_after, cx);
-    if standalone || was_composing {
-      self.finalize_transaction(cx);
-    }
-    self.refresh_dirty(cx);
-    let _ = window;
-    self.ensure_cursor_visible_when_hidden(cx);
-    self.refresh_find_matches_after_document_edit(cx);
-    cx.notify();
-    self.schedule_diff_recompute(cx);
+    self.replace_literal_text_in_range(range_utf16, new_text, cx);
   }
 
   fn replace_and_mark_text_in_range(
@@ -9926,6 +9851,13 @@ impl EntityInputHandler for Editor {
     let range = self.clamp_range_to_doc_len(range, cx);
 
     let selection_before = self.selection_snapshot(cx);
+    self.auto_pairs.prepare(
+      self.document.read(cx).buffer.version(),
+      &[editing::TextEdit {
+        range: range.clone(),
+        text: new_text.to_string(),
+      }],
+    );
     let continuing_composition = self.marked_range.is_some();
     if !continuing_composition {
       self.finalize_transaction(cx);
@@ -11858,6 +11790,7 @@ pub mod tests {
           last_scroll_x: px(0.0),
           max_cache_size: MAX_CACHE_SIZE,
           target_column: None,
+          auto_pairs: auto_pairs::AutoPairs::default(),
           undo_stack: VecDeque::new(),
           redo_stack: VecDeque::new(),
           theme: Theme::dark(),

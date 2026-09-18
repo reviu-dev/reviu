@@ -27,7 +27,11 @@ pub(super) fn map_offset(offset: usize, edits: &[TextEdit]) -> usize {
   offset - removed + inserted
 }
 
-fn non_code_at_end(source: &str, highlights: &[syntax::HighlightSpan], language: &str) -> bool {
+pub(super) fn non_code_at_end(
+  source: &str,
+  highlights: &[syntax::HighlightSpan],
+  language: &str,
+) -> bool {
   let block_comments = matches!(
     language,
     "rust"
@@ -46,8 +50,27 @@ fn non_code_at_end(source: &str, highlights: &[syntax::HighlightSpan], language:
       | "scss"
       | "hcl"
   );
-  let nested = matches!(language, "rust" | "swift" | "kotlin" | "scala");
-  let hash_comments = matches!(language, "python" | "yaml" | "ruby" | "bash" | "hcl");
+  let nested = matches!(
+    language,
+    "rust" | "swift" | "kotlin" | "scala" | "ocaml" | "ocaml_interface" | "haskell"
+  );
+  let (block_start, block_end) = match language {
+    "html" | "xml" | "markdown" => (b"<!--".as_slice(), b"-->".as_slice()),
+    "ocaml" | "ocaml_interface" => (b"(*".as_slice(), b"*)".as_slice()),
+    "haskell" => (b"{-".as_slice(), b"-}".as_slice()),
+    "lua" => (b"--[[".as_slice(), b"]]".as_slice()),
+    "julia" => (b"#=".as_slice(), b"=#".as_slice()),
+    _ => (b"/*".as_slice(), b"*/".as_slice()),
+  };
+  let line_comment = match language {
+    "python" | "yaml" | "ruby" | "bash" | "hcl" | "toml" | "make" | "dockerfile" | "cmake"
+    | "r" | "julia" | "elixir" => Some(b"#".as_slice()),
+    "sql" | "lua" | "haskell" => Some(b"--".as_slice()),
+    "clojure" => Some(b";".as_slice()),
+    "zig" => Some(b"//".as_slice()),
+    _ if block_comments => Some(b"//".as_slice()),
+    _ => None,
+  };
   let mut depth = 0usize;
   let mut offset = 0;
   let mut quote: Option<Vec<u8>> = None;
@@ -59,19 +82,26 @@ fn non_code_at_end(source: &str, highlights: &[syntax::HighlightSpan], language:
         offset += delimiter.len();
         quote = None;
       } else if !raw && rest.starts_with(b"\\") {
-        offset += 2;
+        offset += if rest.starts_with(b"\\\r\n") { 3 } else { 2 };
+      } else if matches!(language, "typescript" | "python")
+        && matches!(delimiter.as_slice(), b"'" | b"\"")
+        && matches!(rest.first(), Some(b'\r' | b'\n'))
+      {
+        // An invalid single-line string must not swallow code on subsequent lines.
+        quote = None;
+        offset += 1;
       } else {
         offset += 1;
       }
       continue;
     }
     if depth > 0 {
-      if rest.starts_with(b"*/") {
+      if rest.starts_with(block_end) {
         depth -= 1;
-        offset += 2;
-      } else if nested && rest.starts_with(b"/*") {
+        offset += block_end.len();
+      } else if nested && rest.starts_with(block_start) {
         depth += 1;
-        offset += 2;
+        offset += block_start.len();
       } else {
         offset += 1;
       }
@@ -89,7 +119,12 @@ fn non_code_at_end(source: &str, highlights: &[syntax::HighlightSpan], language:
       offset = span.byte_range.end;
       continue;
     }
-    if (block_comments && rest.starts_with(b"//")) || (hash_comments && rest.starts_with(b"#")) {
+    if (block_comments || block_start != b"/*" || language == "sql")
+      && rest.starts_with(block_start)
+    {
+      depth = 1;
+      offset += block_start.len();
+    } else if line_comment.is_some_and(|marker| rest.starts_with(marker)) {
       offset += rest
         .iter()
         .position(|byte| *byte == b'\n')
@@ -97,17 +132,32 @@ fn non_code_at_end(source: &str, highlights: &[syntax::HighlightSpan], language:
       if offset == bytes.len() {
         return true;
       }
-    } else if block_comments && rest.starts_with(b"/*") {
-      depth = 1;
-      offset += 2;
-    } else if language != "yaml" && matches!(rest.first(), Some(b'\'' | b'"' | b'`')) {
+    } else if matches!(rest.first(), Some(b'\'' | b'"' | b'`')) {
+      if rest[0] == b'\''
+        && (matches!(
+          language,
+          "clojure" | "haskell" | "ocaml" | "ocaml_interface"
+        ) || (matches!(language, "plain" | "markdown" | "yaml")
+          && source[..offset]
+            .chars()
+            .next_back()
+            .is_some_and(|character| character.is_alphanumeric())))
+      {
+        offset += 1;
+        continue;
+      }
       let character = rest[0];
       let mut delimiter = vec![character];
       let triple = [character; 3];
-      if matches!(language, "python" | "kotlin" | "swift" | "scala") && rest.starts_with(&triple) {
+      if matches!(
+        language,
+        "python" | "kotlin" | "swift" | "scala" | "toml" | "julia" | "elixir"
+      ) && rest.starts_with(&triple)
+      {
         delimiter = triple.to_vec();
       }
-      raw = false;
+      raw = (language == "go" && character == b'`')
+        || (matches!(language, "bash" | "toml") && character == b'\'');
       if language == "rust" && character == b'"' {
         let before = &bytes[..offset];
         let hashes = before
@@ -120,7 +170,11 @@ fn non_code_at_end(source: &str, highlights: &[syntax::HighlightSpan], language:
           delimiter.extend(std::iter::repeat_n(b'#', hashes));
         }
       }
-      offset += if raw { 1 } else { delimiter.len() };
+      offset += if language == "rust" && raw {
+        1
+      } else {
+        delimiter.len()
+      };
       quote = Some(delimiter);
     } else {
       offset += 1;
@@ -186,6 +240,115 @@ pub(super) fn block_opener(document: &Document, prefix: &str, line_start: usize)
 }
 
 impl Editor {
+  pub(crate) fn replace_literal_text_in_range(
+    &mut self,
+    range_utf16: Option<Range<usize>>,
+    new_text: &str,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.can_edit_text(cx) {
+      return;
+    }
+    self.cursor_blink.update(cx, |blink, cx| {
+      blink.pause_blinking(cx);
+    });
+    self.display_selection = None;
+    let range = range_utf16
+      .as_ref()
+      .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
+      .or(self.marked_range.clone())
+      .unwrap_or(self.selected_range.clone());
+    let range = self.clamp_range_to_doc_len(range, cx);
+    let was_composing = self.marked_range.is_some();
+    let standalone = !was_composing
+      && (new_text.contains('\n')
+        || !self.selected_range.is_empty()
+        || new_text.graphemes(true).count() > 1
+        || (!range.is_empty() && !new_text.is_empty()));
+    if standalone {
+      self.finalize_transaction(cx);
+    }
+
+    let selection_before = self.selection_snapshot(cx);
+    self.auto_pairs.prepare(
+      self.document.read(cx).buffer.version(),
+      &[TextEdit {
+        range: range.clone(),
+        text: new_text.to_string(),
+      }],
+    );
+    let start_line = self.document.read(cx).char_to_line(range.start);
+    let end_line = self.document.read(cx).char_to_line(range.end);
+
+    let line_height = self.measured_editor_line_height();
+    let doc_line_count = self.document.read(cx).len_lines();
+    let total_display_lines = self.display_line_count(doc_line_count);
+    let display_viewport = self.viewport_range(line_height, total_display_lines);
+    let doc_viewports = self.doc_ranges_for_display_viewport(display_viewport);
+    let new_line_count = new_text.matches('\n').count();
+    let force_end_line = start_line.saturating_add(new_line_count).max(end_line);
+    let force_range = start_line..(force_end_line + 1);
+
+    self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
+
+    let transaction_id = self.document.update(cx, |doc, cx| {
+      let id = if was_composing {
+        doc
+          .buffer
+          .continue_transaction(Instant::now(), |buffer, transaction| {
+            buffer.replace(transaction, range.clone(), new_text);
+          })
+      } else {
+        doc
+          .buffer
+          .transaction(Instant::now(), |buffer, transaction| {
+            buffer.replace(transaction, range.clone(), new_text);
+          })
+      };
+
+      if !doc.should_defer_full_highlight() {
+        doc.schedule_recompute_highlights(cx);
+      }
+      doc.schedule_viewport_highlights_for_ranges(
+        &doc_viewports,
+        Some(force_range.clone()),
+        crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+        cx,
+      );
+
+      cx.notify();
+      id
+    });
+    self.mark_conflict_cache_dirty();
+
+    let has_newline = new_text.contains('\n');
+
+    if has_newline || start_line != end_line {
+      self.invalidate_lines_from(start_line);
+    } else {
+      self.invalidate_line(start_line);
+    }
+
+    let new_text_chars = new_text.chars().count();
+    let doc_len_after = self.document.read(cx).len();
+    let new_cursor = (range.start + new_text_chars).min(doc_len_after);
+    self.selected_range = new_cursor..new_cursor;
+    self.selection_reversed = false;
+    self.marked_range.take();
+
+    let selection_after = self.selected_range.clone();
+
+    self.record_transaction(transaction_id, selection_before, selection_after, cx);
+    if standalone || was_composing {
+      self.finalize_transaction(cx);
+    }
+    self.refresh_dirty(cx);
+    self.ensure_cursor_visible_when_hidden(cx);
+    self.refresh_find_matches_after_document_edit(cx);
+    cx.notify();
+    self.schedule_diff_recompute(cx);
+  }
+
   pub(super) fn can_edit_text(&self, cx: &App) -> bool {
     !self.selection_is_read_only()
       && !(self.selected_range.is_empty() && self.is_read_only_display_cursor(cx))
@@ -214,6 +377,7 @@ impl Editor {
     }
     let start_line = document.char_to_line(edits.first().map_or(0, |edit| edit.range.start));
     let end_line = document.char_to_line(edits.last().map_or(0, |edit| edit.range.end));
+    self.auto_pairs.prepare(document.buffer.version(), &edits);
     self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
     let id = self.document.update(cx, |document, cx| {
       let id = document

@@ -175,6 +175,14 @@ impl Editor {
     } else {
       transaction.selection_before.clone()
     };
+    self.auto_pairs.restore(
+      self.document.read(cx).buffer.version(),
+      if redo {
+        transaction.pairs_after.clone()
+      } else {
+        transaction.pairs_before.clone()
+      },
+    );
     self.pending_reload_scroll_anchor = None;
     self.restore_selection(selection, cx);
     if redo {

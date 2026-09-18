@@ -172,6 +172,9 @@ pub fn backspace(
     editor.ensure_cursor_visible(window, cx);
     return;
   }
+  if editor.backspace_auto_pair(cx) {
+    return;
+  }
   let range = if editor.selected_range.is_empty() {
     boundaries::previous_boundary(editor, editor.cursor_offset(), cx)..editor.cursor_offset()
   } else {
@@ -746,13 +749,13 @@ pub fn select_all(editor: &mut Editor, _: &SelectAll, _: &mut Window, cx: &mut C
   editor.select_all_display_lines(cx);
 }
 
-pub fn paste(editor: &mut Editor, _: &Paste, window: &mut Window, cx: &mut Context<Editor>) {
+pub fn paste(editor: &mut Editor, _: &Paste, _window: &mut Window, cx: &mut Context<Editor>) {
   editor.finalize_transaction(cx);
   editor.target_column = None;
   if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
     let cursor = editor.cursor_offset();
     let current_line = editor.document.read(cx).char_to_line(cursor);
-    editor.replace_text_in_range(None, &text, window, cx);
+    editor.replace_literal_text_in_range(None, &text, cx);
     // Invalidate cache from current line onwards since paste may add multiple lines
     editor.invalidate_lines_from(current_line);
     editor.finalize_transaction(cx);
