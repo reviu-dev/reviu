@@ -104,10 +104,6 @@ const comparisonRows = [
               data-featured={tier.featured ? "true" : undefined}
               style={`--reveal-delay: ${index * 150 + 150}ms;`}
             >
-              {tier.featured && (
-                <div class="absolute inset-x-0 top-0 h-1 bg-linear-to-r from-primary via-cyan-400 to-primary" />
-              )}
-
               <div class="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
                 <div class="max-w-md">
                   <div class="flex items-center gap-3">
