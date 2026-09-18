@@ -25,6 +25,14 @@ pub(crate) fn handle_global_command_palette_action(
       open_settings_dialog(window, cx);
       Ok(())
     }
+    CommandPaletteAction::OpenSettingsFile => {
+      cx.reveal_path(&crate::settings_file::settings_file_path());
+      Ok(())
+    }
+    CommandPaletteAction::OpenKeybindingsFile => {
+      cx.reveal_path(&crate::keybindings_file::keybindings_file_path());
+      Ok(())
+    }
     CommandPaletteAction::OpenBillingPage => {
       crate::billing_dialog::open_billing_dialog(window, cx);
       Ok(())

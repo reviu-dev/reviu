@@ -34,7 +34,7 @@ fn record_error(op: &'static str, err: &dyn std::error::Error, notify: bool) {
   }
 }
 
-fn keybindings_file_path() -> PathBuf {
+pub(crate) fn keybindings_file_path() -> PathBuf {
   #[cfg(test)]
   {
     ConfigStore::test_db_path()
@@ -110,69 +110,49 @@ pub(crate) fn load() -> HashMap<ShortcutId, String> {
   }
 }
 
+pub(crate) fn parse(raw: &str) -> anyhow::Result<HashMap<ShortcutId, String>> {
+  Ok(overrides_from_document(&serde_json::from_str(raw)?))
+}
+
+pub(crate) fn update_override(
+  shortcut_id: ShortcutId,
+  keystroke: Option<&str>,
+) -> anyhow::Result<String> {
+  crate::config_file::edit_json(&keybindings_file_path(), |document| {
+    if let Some(keystroke) = keystroke {
+      document.insert(shortcut_id.storage_key().to_string(), keystroke.into());
+    } else {
+      document.remove(shortcut_id.storage_key());
+    }
+    Ok(())
+  })
+}
+
+#[cfg(test)]
 pub(crate) fn set(shortcut_id: ShortcutId, keystroke: &str) {
-  edit_document(|document| {
-    document.insert(shortcut_id.storage_key().to_string(), keystroke.into());
-  });
+  if let Err(error) = update_override(shortcut_id, Some(keystroke)) {
+    record_error("keybindings.write", error.as_ref(), false);
+  }
 }
 
+#[cfg(test)]
 pub(crate) fn remove(shortcut_id: ShortcutId) {
-  edit_document(|document| {
-    document.remove(shortcut_id.storage_key());
-  });
-}
-
-/// Edits only the touched key so entries this build does not know survive.
-/// A file that no longer parses is left alone rather than clobbered.
-fn edit_document(edit: impl FnOnce(&mut Document)) {
-  let path = keybindings_file_path();
-  let mut document = match std::fs::read_to_string(&path) {
-    Ok(raw) => match serde_json::from_str::<Document>(&raw) {
-      Ok(document) => document,
-      Err(err) => {
-        record_error("keybindings.parse", &err, false);
-        return;
-      }
-    },
-    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      document_from_overrides(&ConfigStore::load_shortcut_overrides_from_db())
-    }
-    Err(err) => {
-      record_error("keybindings.read", &err, false);
-      return;
-    }
-  };
-
-  edit(&mut document);
-  write_document(&document);
+  if let Err(error) = update_override(shortcut_id, None) {
+    record_error("keybindings.write", error.as_ref(), false);
+  }
 }
 
 fn write_document(document: &Document) -> bool {
-  let path = keybindings_file_path();
-  if let Some(parent) = path.parent()
-    && let Err(err) = std::fs::create_dir_all(parent)
-  {
-    record_error("keybindings.write", &err, false);
-    return false;
-  }
-
-  let json = match serde_json::to_string_pretty(document) {
-    Ok(json) => json,
-    Err(err) => {
-      record_error("keybindings.serialize", &err, false);
-      return false;
+  match crate::config_file::edit_json(&keybindings_file_path(), |fields| {
+    fields.extend(document.clone());
+    Ok(())
+  }) {
+    Ok(_) => true,
+    Err(error) => {
+      record_error("keybindings.write", error.as_ref(), false);
+      false
     }
-  };
-
-  // A crash mid-write must not leave a truncated keybindings file.
-  let tmp = path.with_extension("json.tmp");
-  let written =
-    std::fs::write(&tmp, format!("{json}\n")).and_then(|()| std::fs::rename(&tmp, &path));
-  if let Err(err) = written {
-    record_error("keybindings.write", &err, false);
-    return false;
   }
-  true
 }
 
 #[cfg(test)]

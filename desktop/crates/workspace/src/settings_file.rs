@@ -29,7 +29,7 @@ fn record_error(op: &'static str, err: &dyn std::error::Error, notify: bool) {
   }
 }
 
-fn settings_file_path() -> PathBuf {
+pub(crate) fn settings_file_path() -> PathBuf {
   #[cfg(test)]
   {
     ConfigStore::test_db_path()
@@ -160,13 +160,13 @@ impl From<AppSettings> for SettingsDoc {
 pub(crate) fn load() -> AppSettings {
   let path = settings_file_path();
   match std::fs::read_to_string(&path) {
-    Ok(raw) => match serde_json::from_str::<SettingsDoc>(&raw) {
-      Ok(doc) => {
+    Ok(raw) => match parse(&raw) {
+      Ok(settings) => {
         ConfigStore::drop_legacy_app_settings_from_db();
-        doc.resolve()
+        settings
       }
       Err(err) => {
-        record_error("settings.parse", &err, true);
+        record_error("settings.parse", err.as_ref(), true);
         AppSettings::default()
       }
     },
@@ -184,32 +184,45 @@ pub(crate) fn load() -> AppSettings {
   }
 }
 
-pub(crate) fn persist(settings: AppSettings) -> bool {
-  let path = settings_file_path();
-  if let Some(parent) = path.parent()
-    && let Err(err) = std::fs::create_dir_all(parent)
-  {
-    record_error("settings.write", &err, false);
-    return false;
-  }
+pub(crate) fn parse(raw: &str) -> anyhow::Result<AppSettings> {
+  let document: serde_json::Map<String, serde_json::Value> = serde_json::from_str(raw)?;
+  Ok(serde_json::from_value::<SettingsDoc>(serde_json::Value::Object(document))?.resolve())
+}
 
-  let json = match serde_json::to_string_pretty(&SettingsDoc::from(settings)) {
-    Ok(json) => json,
-    Err(err) => {
-      record_error("settings.serialize", &err, false);
-      return false;
+pub(crate) fn update(
+  update: impl FnOnce(&mut AppSettings),
+) -> anyhow::Result<(AppSettings, String)> {
+  let text = crate::config_file::edit_json(&settings_file_path(), |document| {
+    let mut settings = parse(&serde_json::to_string(document)?)?;
+    let previous = serde_json::to_value(SettingsDoc::from(settings))?;
+    update(&mut settings);
+    let next = serde_json::to_value(SettingsDoc::from(settings))?;
+    if let Some(fields) = next.as_object() {
+      for (key, value) in fields {
+        if previous.get(key) != Some(value) {
+          document.insert(key.clone(), value.clone());
+        }
+      }
     }
-  };
+    Ok(())
+  })?;
+  Ok((parse(&text)?, text))
+}
 
-  // A crash mid-write must not leave a truncated settings file.
-  let tmp = path.with_extension("json.tmp");
-  let written =
-    std::fs::write(&tmp, format!("{json}\n")).and_then(|()| std::fs::rename(&tmp, &path));
-  if let Err(err) = written {
-    record_error("settings.write", &err, false);
-    return false;
+pub(crate) fn persist(settings: AppSettings) -> bool {
+  match crate::config_file::edit_json(&settings_file_path(), |document| {
+    let fields = serde_json::to_value(SettingsDoc::from(settings))?;
+    if let Some(fields) = fields.as_object() {
+      document.extend(fields.clone());
+    }
+    Ok(())
+  }) {
+    Ok(_) => true,
+    Err(error) => {
+      record_error("settings.write", error.as_ref(), false);
+      false
+    }
   }
-  true
 }
 
 #[cfg(test)]

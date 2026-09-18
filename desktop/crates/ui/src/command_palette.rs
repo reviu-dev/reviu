@@ -399,6 +399,8 @@ pub enum CommandPaletteAction {
   },
   OpenGitConfigPage,
   OpenSettingsPage,
+  OpenSettingsFile,
+  OpenKeybindingsFile,
   OpenBillingPage,
   OpenAboutPage,
   OpenLogs,
@@ -1026,6 +1028,8 @@ pub enum CommandPaletteCommandId {
   OpenGithubFromUrl,
   OpenGitConfigPage,
   OpenSettingsPage,
+  OpenSettingsFile,
+  OpenKeybindingsFile,
   OpenBillingPage,
   OpenAboutPage,
   OpenLogs,
@@ -1102,6 +1106,8 @@ impl CommandPaletteCommandId {
       Self::OpenGithubFromUrl => "open_github_from_url",
       Self::OpenGitConfigPage => "open_git_config_page",
       Self::OpenSettingsPage => "open_settings_page",
+      Self::OpenSettingsFile => "open_settings_file",
+      Self::OpenKeybindingsFile => "open_keybindings_file",
       Self::OpenBillingPage => "open_billing_page",
       Self::OpenAboutPage => "open_about_page",
       Self::OpenLogs => "open_logs",
@@ -1174,6 +1180,8 @@ impl CommandPaletteCommandId {
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
       "open_settings_page" => Some(Self::OpenSettingsPage),
+      "open_settings_file" => Some(Self::OpenSettingsFile),
+      "open_keybindings_file" => Some(Self::OpenKeybindingsFile),
       "open_billing_page" => Some(Self::OpenBillingPage),
       "open_about_page" => Some(Self::OpenAboutPage),
       "open_logs" => Some(Self::OpenLogs),
@@ -1676,6 +1684,22 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn open_settings_file() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenSettingsFile,
+      "Open settings file",
+      "Reveal settings.json in the file manager",
+    )
+  }
+
+  pub fn open_keybindings_file() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenKeybindingsFile,
+      "Open keybindings file",
+      "Reveal keybindings.json in the file manager",
+    )
+  }
+
   pub fn open_settings_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenSettingsPage,
@@ -1921,6 +1945,8 @@ impl CommandPaletteCommand {
 
     commands.push(Self::open_logs());
     commands.push(Self::reveal_logs());
+    commands.push(Self::open_settings_file());
+    commands.push(Self::open_keybindings_file());
 
     commands.push(Self::send_feedback());
 
@@ -1995,6 +2021,8 @@ impl CommandPaletteCommand {
 
       CommandPaletteCommandId::OpenGitConfigPage
       | CommandPaletteCommandId::OpenSettingsPage
+      | CommandPaletteCommandId::OpenSettingsFile
+      | CommandPaletteCommandId::OpenKeybindingsFile
       | CommandPaletteCommandId::OpenBillingPage
       | CommandPaletteCommandId::OpenAboutPage
       | CommandPaletteCommandId::OpenLogs
@@ -2086,6 +2114,7 @@ impl CommandPaletteCommand {
       Id::ForgetProject => &["remove", "recent", "sidebar"],
       Id::OpenGithubFromUrl => &["link", "paste"],
       Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme", "goto"],
+      Id::OpenSettingsFile | Id::OpenKeybindingsFile => &["config", "json", "dotfiles", "reveal"],
       Id::OpenGitConfigPage => &["gitconfig", "identity", "email", "username", "goto"],
       Id::OpenBillingPage => &[
         "billing",
@@ -2158,7 +2187,9 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
-      CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
+      CommandPaletteCommandId::OpenSettingsPage
+      | CommandPaletteCommandId::OpenSettingsFile
+      | CommandPaletteCommandId::OpenKeybindingsFile => Icon::new(IconName::Settings2),
       CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
       CommandPaletteCommandId::OpenAboutPage => Icon::new(UiIconName::Info),
       CommandPaletteCommandId::OpenLogs | CommandPaletteCommandId::RevealLogs => {
@@ -3364,6 +3395,17 @@ impl CommandPalette {
       CommandPaletteCommandId::OpenSettingsPage => {
         self.trigger_action(command, CommandPaletteAction::OpenSettingsPage, window, cx);
       }
+      CommandPaletteCommandId::OpenSettingsFile => {
+        self.trigger_action(command, CommandPaletteAction::OpenSettingsFile, window, cx);
+      }
+      CommandPaletteCommandId::OpenKeybindingsFile => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenKeybindingsFile,
+          window,
+          cx,
+        );
+      }
       CommandPaletteCommandId::OpenBillingPage => {
         self.trigger_action(command, CommandPaletteAction::OpenBillingPage, window, cx);
       }
@@ -4442,6 +4484,8 @@ mod tests {
       CommandPaletteCommandId::OpenGithubFromUrl,
       CommandPaletteCommandId::OpenGitConfigPage,
       CommandPaletteCommandId::OpenSettingsPage,
+      CommandPaletteCommandId::OpenSettingsFile,
+      CommandPaletteCommandId::OpenKeybindingsFile,
       CommandPaletteCommandId::OpenBillingPage,
       CommandPaletteCommandId::OpenAboutPage,
       CommandPaletteCommandId::OpenLogs,

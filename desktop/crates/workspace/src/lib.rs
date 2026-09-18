@@ -67,6 +67,8 @@ mod dock_badge;
 
 mod changes_list;
 mod config;
+mod config_file;
+mod config_reload;
 mod conversation_hub;
 mod crash_report;
 mod date_format;

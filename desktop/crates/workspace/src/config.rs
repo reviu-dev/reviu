@@ -415,11 +415,15 @@ impl AppSettings {
   }
 
   pub fn update(cx: &mut App, f: impl FnOnce(&mut Self)) {
-    let mut settings = *cx.global::<Self>();
-    f(&mut settings);
-    cx.set_global(settings);
-    cx.set_global(settings.find_options());
-    ConfigStore::persist_app_settings(settings);
+    match crate::settings_file::update(f) {
+      Ok((_, text)) => {
+        crate::config_reload::saved(crate::config_reload::ConfigKind::Settings, text, cx)
+      }
+      Err(error) => {
+        cx.set_global(Self::get(cx));
+        crate::config_reload::save_failed(crate::config_reload::ConfigKind::Settings, error, cx);
+      }
+    }
   }
 
   pub fn find_options(&self) -> editor::SearchOptions {
@@ -1057,6 +1061,7 @@ impl ConfigStore {
     }
   }
 
+  #[cfg(test)]
   pub fn persist_app_settings(settings: AppSettings) {
     crate::settings_file::persist(settings);
   }
@@ -1233,10 +1238,12 @@ impl ConfigStore {
     overrides
   }
 
+  #[cfg(test)]
   pub fn persist_shortcut_override(shortcut_id: ShortcutId, keystroke: &str) {
     crate::keybindings_file::set(shortcut_id, keystroke);
   }
 
+  #[cfg(test)]
   pub fn clear_shortcut_override(shortcut_id: ShortcutId) {
     crate::keybindings_file::remove(shortcut_id);
   }

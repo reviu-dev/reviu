@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use editor::{Copy, Cut, Paste, Quit, Redo, Save, SelectAll, Undo, set_indent_rainbow_enabled};
+use editor::{Copy, Cut, Paste, Quit, Redo, Save, SelectAll, Undo};
 #[cfg(test)]
 use gpui::Keystroke;
 use gpui::{
@@ -10,7 +10,7 @@ use gpui::{
   MenuItem, Render, Subscription, Task, Window, WindowButton, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex, kbd::Kbd,
+  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, h_flex, kbd::Kbd,
   notification::Notification, spinner::Spinner, tag::Tag,
 };
 
@@ -172,6 +172,7 @@ pub struct WorkspaceView {
   _update_check_task: Option<Task<()>>,
   _periodic_update_check_task: Option<Task<()>>,
   _notification_poll_task: Option<Task<()>>,
+  _config_watch_task: Option<Task<()>>,
   #[cfg(any(target_os = "linux", target_os = "windows"))]
   _status_bar_event_task: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
@@ -220,56 +221,38 @@ impl WorkspaceView {
     }
 
     let settings = ConfigStore::load_app_settings();
-    if let Some(error) = crate::settings_file::take_startup_error() {
-      window.push_notification(
-        Notification::new()
-          .title("Your settings could not be read")
-          .message(format!("Reviu started with default settings. {error}"))
-          .autohide(false),
-        cx,
-      );
-    }
+    let settings_error = crate::settings_file::take_startup_error();
 
     cx.set_global(WorkspaceApi::new());
     cx.set_global(AuthStateStore::default());
     cx.set_global(AppUpdateStore::default());
     cx.set_global(GithubNotificationsStore::default());
 
-    cx.set_global(settings);
-    cx.set_global(settings.find_options());
+    crate::config_reload::apply_settings(settings, Some(window), cx);
     cx.set_global(shortcuts::load_shortcut_overrides());
-    if let Some(error) = crate::keybindings_file::take_startup_error() {
-      window.push_notification(
-        Notification::new()
-          .title("Your keybindings could not be read")
-          .message(format!("Reviu started with default shortcuts. {error}"))
-          .autohide(false),
-        cx,
-      );
-    }
+    let keybindings_error = crate::keybindings_file::take_startup_error();
     cx.set_global(crate::command_usage::CommandUsageStore::load());
     crate::command_usage::install_palette_usage_recorder(cx);
     crate::analytics::Analytics::init(cx);
     crate::analytics::track(cx, "app_started");
     // Signing in is app-wide, not something a page owns.
     crate::auth_flow::load_stored_token(cx);
-    set_indent_rainbow_enabled(settings.indent_rainbow);
-    Theme::global_mut(cx).font_size = px(settings.font_size);
-    if settings.auto_switch_theme {
-      Theme::sync_system_appearance(Some(window), cx);
-    } else {
-      let mode = if settings.dark_mode {
-        ThemeMode::Dark
-      } else {
-        ThemeMode::Light
-      };
-      Theme::change(mode, Some(window), cx);
-    }
     crate::install_app_key_bindings(cx);
 
     // Deep links and the pro promise land in the app with no window of their
     // own, and both have to open the billing dialog.
     WorkspaceWindow::register(window.window_handle(), cx);
+    for (kind, error) in [
+      (crate::config_reload::ConfigKind::Settings, settings_error),
+      (
+        crate::config_reload::ConfigKind::Keybindings,
+        keybindings_error,
+      ),
+    ] {
+      if let Some(error) = error {
+        crate::config_reload::save_failed(kind, anyhow::anyhow!(error), cx);
+      }
+    }
 
     let session_page = cx.new(|cx| SessionPage::new(window, cx));
     let onboarding_page = cx.new(|cx| WorkspaceOnboarding::new(session_page.clone(), window, cx));
@@ -300,6 +283,7 @@ impl WorkspaceView {
       _update_check_task: None,
       _periodic_update_check_task: None,
       _notification_poll_task: None,
+      _config_watch_task: Some(crate::config_reload::watch(cx)),
       #[cfg(any(target_os = "linux", target_os = "windows"))]
       _status_bar_event_task: None,
       _subscriptions: Vec::new(),
@@ -316,6 +300,7 @@ impl WorkspaceView {
     });
     view._subscriptions.push(subscription);
     let subscription = cx.observe_global::<shortcuts::ShortcutOverrides>(|_, cx| {
+      Self::sync_app_menus(cx);
       cx.notify();
     });
     view._subscriptions.push(subscription);
@@ -325,9 +310,6 @@ impl WorkspaceView {
     view.start_notification_polling(cx);
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     view.start_status_bar_event_polling(cx);
-    if PersistedSettings::get(cx).menu_bar_icon {
-      crate::status_bar::init_status_bar(STATUS_BAR_ICON_PNG);
-    }
 
     view
   }
@@ -784,10 +766,6 @@ impl WorkspaceView {
     }
 
     Theme::sync_system_appearance(Some(window), cx);
-    let mut settings = PersistedSettings::get(cx);
-    settings.dark_mode = cx.theme().mode.is_dark();
-    cx.set_global(settings);
-    ConfigStore::persist_app_settings(settings);
   }
 
   fn handle_pending_status_bar_notification(&self, cx: &mut App) {
@@ -1477,6 +1455,7 @@ mod tests {
         session_page: page,
         onboarding_page,
         window_handle: window.window_handle(),
+        _config_watch_task: None,
         _update_check_task: None,
         _periodic_update_check_task: None,
         _notification_poll_task: None,
@@ -1516,6 +1495,7 @@ mod tests {
         session_page: page,
         onboarding_page,
         window_handle: window.window_handle(),
+        _config_watch_task: None,
         _update_check_task: None,
         _periodic_update_check_task: None,
         _notification_poll_task: None,

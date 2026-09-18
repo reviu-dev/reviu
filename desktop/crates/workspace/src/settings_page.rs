@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use editor::set_indent_rainbow_enabled;
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, Global, Keystroke, KeystrokeEvent, Render,
   SharedString, Subscription, Window, div, prelude::*, px,
 };
 
 use gpui_component::{
-  ActiveTheme as _, Disableable, IconName, IndexPath, Sizable, Size, Theme, ThemeMode,
+  ActiveTheme as _, Disableable, IconName, IndexPath, Sizable, Size,
   button::{Button, ButtonVariants},
   checkbox::Checkbox,
   h_flex,
@@ -159,6 +158,7 @@ impl SettingsPage {
     let persisted_settings_subscription = cx.observe_global::<PersistedSettings>(|this, cx| {
       this.sync_persisted_settings(PersistedSettings::get(cx), cx);
     });
+    let shortcuts_subscription = cx.observe_global::<ShortcutOverrides>(|_, cx| cx.notify());
 
     Self {
       focus_handle: cx.focus_handle(),
@@ -181,6 +181,7 @@ impl SettingsPage {
         shortcut_capture_subscription,
         default_agent_select_subscription,
         persisted_settings_subscription,
+        shortcuts_subscription,
       ],
     }
   }
@@ -267,15 +268,10 @@ impl SettingsPage {
             "Dark Mode",
             SettingField::switch(|cx: &App| cx.theme().mode.is_dark(), {
               move |val: bool, cx: &mut App| {
-                PersistedSettings::update(cx, |s| s.dark_mode = val);
-
-                let mode = if val {
-                  ThemeMode::Dark
-                } else {
-                  ThemeMode::Light
-                };
-                Theme::change(mode, None, cx);
-                cx.refresh_windows();
+                PersistedSettings::update(cx, |settings| {
+                  settings.dark_mode = val;
+                  settings.auto_switch_theme = false;
+                });
               }
             })
             .default_value(false),
@@ -294,10 +290,6 @@ impl SettingsPage {
                   view.update(cx, |view, _| {
                     view.auto_switch_theme = val;
                   });
-                  if val {
-                    Theme::sync_system_appearance(None, cx);
-                  }
-
                   PersistedSettings::update(cx, |s| s.auto_switch_theme = val);
                   cx.refresh_windows();
                 }
@@ -317,7 +309,6 @@ impl SettingsPage {
               |cx: &App| f64::from(cx.theme().font_size),
               {
                 move |val: f64, cx: &mut App| {
-                  Theme::global_mut(cx).font_size = px(val as f32);
                   PersistedSettings::update(cx, |s| s.font_size = val as f32);
                   cx.refresh_windows();
                 }
@@ -386,7 +377,6 @@ impl SettingsPage {
                     view.indent_rainbow = val;
                   });
 
-                  set_indent_rainbow_enabled(val);
                   PersistedSettings::update(cx, |s| s.indent_rainbow = val);
                   cx.refresh_windows();
                 }
@@ -493,7 +483,8 @@ impl SettingsPage {
             "Help improve Reviu by sending anonymous feature usage events (no repository, file, or account data). See the privacy policy on reviu.dev for details.",
           ),
         ]),
-      ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))),
+      ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))
+        .chain([Self::config_file_group(crate::config_reload::ConfigKind::Settings)])),
       SettingPage::new("Agents")
         .description("Choose the ACP agents Reviu shows and the default agent for new chats.")
         .groups([self.agent_settings_group(view.clone())]),
@@ -638,17 +629,6 @@ impl SettingsPage {
                 });
 
                 PersistedSettings::update(cx, |s| s.menu_bar_icon = val);
-                crate::status_bar::set_status_bar_enabled(
-                  val,
-                  crate::workspace::STATUS_BAR_ICON_PNG,
-                );
-                if val {
-                  let notifications =
-                    crate::github_notifications::GithubNotificationsStore::list(cx);
-                  let unread =
-                    crate::github_notifications::GithubNotificationsStore::unread_count(cx);
-                  crate::status_bar::update_status_bar(unread, &notifications);
-                }
               }
             },
           )
@@ -669,7 +649,26 @@ impl SettingsPage {
         Self::keyboard_shortcuts_group(ShortcutCategory::Review, view.clone(), window, cx),
         Self::keyboard_shortcuts_group(ShortcutCategory::LocalGit, view.clone(), window, cx),
         Self::keyboard_shortcuts_group(ShortcutCategory::App, view, window, cx),
+        Self::config_file_group(crate::config_reload::ConfigKind::Keybindings),
       ])
+  }
+
+  fn config_file_group(kind: crate::config_reload::ConfigKind) -> SettingGroup {
+    let path = kind.path();
+    SettingGroup::new()
+      .title("Configuration File")
+      .items([SettingItem::new(
+        kind.name(),
+        SettingField::render(move |_, _, _| {
+          Button::new(kind.name())
+            .small()
+            .outline()
+            .label("Reveal")
+            .on_click(move |_, _, cx| cx.reveal_path(&kind.path()))
+            .into_any_element()
+        }),
+      )
+      .description(path.display().to_string())])
   }
 
   fn keyboard_shortcuts_group(
@@ -847,7 +846,6 @@ impl SettingsPage {
       .shortcut_recording
       .filter(|current| *current != shortcut_id);
     self.shortcut_error = None;
-    self.rebuild_app_key_bindings(cx);
     cx.notify();
   }
 
@@ -882,7 +880,6 @@ impl SettingsPage {
         shortcuts::set_shortcut_override(cx, shortcut_id, &event.keystroke);
         self.shortcut_recording = None;
         self.shortcut_error = None;
-        self.rebuild_app_key_bindings(cx);
         cx.notify();
       }
       Err(error) => {
@@ -893,11 +890,6 @@ impl SettingsPage {
         cx.notify();
       }
     }
-  }
-
-  fn rebuild_app_key_bindings(&self, cx: &mut Context<Self>) {
-    crate::install_app_key_bindings(cx);
-    cx.set_menus(crate::workspace::build_app_menus_for_current_auth(cx));
   }
 
   fn is_recording_shortcut(&self, shortcut_id: ShortcutId) -> bool {
@@ -1107,6 +1099,7 @@ mod tests {
 
   #[gpui::test]
   async fn settings_dialog_tracks_persisted_settings_updates(cx: &mut TestAppContext) {
+    let _config = crate::config_file::TestConfig::new();
     let cx = dialog_host(cx);
     cx.update(open_settings_dialog);
     cx.run_until_parked();
@@ -1134,6 +1127,7 @@ mod tests {
 
   #[gpui::test]
   async fn escape_closes_settings_dialog(cx: &mut TestAppContext) {
+    let _config = crate::config_file::TestConfig::new();
     let cx = dialog_host(cx);
     cx.update(open_settings_dialog);
     cx.run_until_parked();

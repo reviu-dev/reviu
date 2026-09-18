@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.3.0
 
+### Live Configuration Files
+
+Find your settings and keyboard shortcut files from Settings or the command palette. Manual edits now apply without restarting Reviu, including symlinked dotfiles. Invalid JSON keeps your last working configuration and shows an error that clears when the file is corrected.
+
 ### Untitled Draft Recovery
 
 Untitled tabs now keep their contents, selection and split placement across restarts, with automatic local backups for crash recovery. Quit without naming your drafts and pick up where you left off; saving or explicitly discarding a tab removes its backup without creating placeholder files in your project.

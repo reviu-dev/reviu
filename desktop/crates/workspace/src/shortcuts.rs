@@ -629,12 +629,8 @@ impl ShortcutOverrides {
     self.entries.get(&id).map(String::as_str)
   }
 
-  fn set(&mut self, id: ShortcutId, keystroke: String) {
-    self.entries.insert(id, keystroke);
-  }
-
-  fn remove(&mut self, id: ShortcutId) {
-    self.entries.remove(&id);
+  pub(crate) fn from_entries(entries: HashMap<ShortcutId, String>) -> Self {
+    Self { entries }
   }
 
   pub fn contains(&self, id: ShortcutId) -> bool {
@@ -979,24 +975,20 @@ pub fn load_shortcut_overrides() -> ShortcutOverrides {
 
 pub fn set_shortcut_override(cx: &mut App, id: ShortcutId, keystroke: &Keystroke) {
   let keystroke = serialize_keystroke(keystroke);
-  let mut overrides = ShortcutOverrides::get(cx);
-
-  if keystroke == shortcut_definition(id).keystroke {
-    overrides.remove(id);
-    ConfigStore::clear_shortcut_override(id);
-  } else {
-    overrides.set(id, keystroke.clone());
-    ConfigStore::persist_shortcut_override(id, &keystroke);
-  }
-
-  cx.set_global(overrides);
+  let keystroke = (keystroke != shortcut_definition(id).keystroke).then_some(keystroke.as_str());
+  save_shortcut_override(cx, id, keystroke);
 }
 
 pub fn clear_shortcut_override(cx: &mut App, id: ShortcutId) {
-  let mut overrides = ShortcutOverrides::get(cx);
-  overrides.remove(id);
-  cx.set_global(overrides);
-  ConfigStore::clear_shortcut_override(id);
+  save_shortcut_override(cx, id, None);
+}
+
+fn save_shortcut_override(cx: &mut App, id: ShortcutId, keystroke: Option<&str>) {
+  let kind = crate::config_reload::ConfigKind::Keybindings;
+  match crate::keybindings_file::update_override(id, keystroke) {
+    Ok(text) => crate::config_reload::saved(kind, text, cx),
+    Err(error) => crate::config_reload::save_failed(kind, error, cx),
+  }
 }
 
 pub fn shortcut_is_customized(cx: &App, id: ShortcutId) -> bool {
@@ -1147,6 +1139,8 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     | Command::PopStash
     | Command::OpenGithubFromUrl
     | Command::OpenGitConfigPage
+    | Command::OpenSettingsFile
+    | Command::OpenKeybindingsFile
     | Command::OpenBillingPage
     | Command::OpenAboutPage
     | Command::OpenLogs
