@@ -75,6 +75,8 @@ mod mouse_selection;
 use mouse_selection::MouseSelection;
 #[path = "document_lifecycle.rs"]
 mod document_lifecycle;
+#[path = "editing.rs"]
+mod editing;
 use document_lifecycle::SelectionSnapshot;
 
 #[derive(Clone, Debug)]
@@ -93,7 +95,6 @@ pub const DEFAULT_MAX_LINE_WIDTH: f32 = 800.0;
 /// Extra width added to editor content for horizontal scrolling
 const EXTRA_EDITOR_WIDTH: f32 = 200.0;
 /// Number of spaces to insert on tab
-pub(crate) const TAB_SPACES: usize = 4;
 /// Maximum number of cached shaped lines
 const MAX_CACHE_SIZE: usize = 200;
 /// Number of lines of padding when auto-scrolling to cursor
@@ -10402,6 +10403,7 @@ impl Render for Editor {
         |el| {
           el.on_action(cx.listener(crate::actions::enter))
             .on_action(cx.listener(crate::actions::tab))
+            .on_action(cx.listener(crate::actions::outdent))
             .on_action(cx.listener(crate::actions::backspace))
             .on_action(cx.listener(crate::actions::backspace_word))
             .on_action(cx.listener(crate::actions::backspace_all))

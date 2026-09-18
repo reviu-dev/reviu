@@ -43,12 +43,47 @@ const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
 const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const INDENT_GUIDE_BORDER_WIDTH: f32 = 1.0;
-const INDENT_RAINBOW_BLOCK_COLUMNS: usize = 2;
 const CONFLICT_MARKER_ALPHA_MULTIPLIER: f32 = 1.35;
 const EDITOR_CHAR_WIDTH_SAMPLE: &str =
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
 const REVIEW_COMMENT_CHAR_WIDTH_SAMPLE: &str =
   "the quick brown fox jumps over the lazy dog, with spaces and punctuation. ";
+
+fn expand_tab_stops(mut line: ShapedLine, source: &str, tab_width: Pixels) -> ShapedLine {
+  let mut shifts = Vec::new();
+  let mut shift = px(0.0);
+  for (byte, character) in source.char_indices() {
+    if character != '\t' {
+      continue;
+    }
+    let original_start = line.x_for_index(byte);
+    let original_end = line.x_for_index(byte + 1);
+    let start = original_start + shift;
+    let end = tab_width * ((start / tab_width).floor() + 1.0);
+    shift += end - start - (original_end - original_start);
+    shifts.push((byte, shift));
+  }
+  if shifts.is_empty() {
+    return line;
+  }
+  let mut runs = line.runs.clone();
+  for glyph in runs.iter_mut().flat_map(|run| &mut run.glyphs) {
+    let preceding = shifts.partition_point(|(byte, _)| *byte < glyph.index);
+    if let Some((_, shift)) = preceding.checked_sub(1).and_then(|index| shifts.get(index)) {
+      glyph.position.x += *shift;
+    }
+  }
+  *line = Arc::new(gpui::LineLayout {
+    font_size: line.font_size,
+    width: line.width + shift,
+    ascent: line.ascent,
+    descent: line.descent,
+    runs,
+    len: source.len(),
+  });
+  line.text = source.to_string().into();
+  line
+}
 
 fn indent_guide_byte_ranges(text: &str, tab_spaces: usize) -> Vec<Range<usize>> {
   if tab_spaces == 0 {
@@ -1144,6 +1179,7 @@ impl Element for EditorElement {
     let theme = self.editor.read(cx).theme.clone();
 
     let document_entity = self.editor.read(cx).document().clone();
+    let indent_width = document_entity.read(cx).indentation.width;
     let mut newly_shaped = Vec::new();
     let word_diffs_by_display = {
       let editor = self.editor.read(cx);
@@ -1241,9 +1277,23 @@ impl Element for EditorElement {
           runs
         };
 
-        let shaped = window
-          .text_system()
-          .shape_line(line_text.into(), font_size, &runs, None);
+        let shaped = if line_text.contains('\t') {
+          let shaped = window.text_system().shape_line(
+            line_text.replace('\t', " ").into(),
+            font_size,
+            &runs,
+            None,
+          );
+          expand_tab_stops(
+            shaped,
+            &line_text,
+            measured_char_width * indent_width as f32,
+          )
+        } else {
+          window
+            .text_system()
+            .shape_line(line_text.into(), font_size, &runs, None)
+        };
         newly_shaped.push((display_idx, doc_line, shaped));
       }
     }
@@ -1312,7 +1362,7 @@ impl Element for EditorElement {
           continue;
         };
         let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
-        for (depth, byte_range) in indent_guide_byte_ranges(text, INDENT_RAINBOW_BLOCK_COLUMNS)
+        for (depth, byte_range) in indent_guide_byte_ranges(text, indent_width)
           .into_iter()
           .enumerate()
         {
@@ -2411,6 +2461,40 @@ mod tests {
       element.line_visibility(display_line, None),
       LineVisibility::Text
     );
+  }
+
+  #[test]
+  fn tab_layout_preserves_source_indices_and_hit_testing() {
+    let source = "\té\tx";
+    let mut line = ShapedLine::default();
+    *line = Arc::new(gpui::LineLayout {
+      width: px(40.0),
+      len: source.len(),
+      runs: vec![gpui::ShapedRun {
+        font_id: gpui::FontId(0),
+        glyphs: source
+          .char_indices()
+          .enumerate()
+          .map(|(column, (index, _))| gpui::ShapedGlyph {
+            id: gpui::GlyphId(0),
+            position: point(px(column as f32 * 10.0), px(0.0)),
+            index,
+            is_emoji: false,
+          })
+          .collect(),
+      }],
+      ..Default::default()
+    });
+    let original = line.clone();
+    let expanded = expand_tab_stops(line, source, px(40.0));
+    assert_eq!(expanded.text.as_ref(), source);
+    assert_eq!(expanded.x_for_index(1), px(40.0));
+    assert_eq!(expanded.x_for_index(3), px(50.0));
+    assert_eq!(expanded.x_for_index(4), px(80.0));
+    assert_eq!(expanded.width(), px(90.0));
+    assert_eq!(expanded.closest_index_for_x(px(30.0)), 1);
+    assert_eq!(expanded.closest_index_for_x(px(70.0)), 4);
+    assert_eq!(original.width(), px(40.0));
   }
 
   #[test]

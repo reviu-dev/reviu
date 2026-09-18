@@ -108,7 +108,7 @@ impl Editor {
       self.document.read(cx).buffer.is_dirty() || self.git_state.index_dirty || self.disk_conflict;
   }
 
-  fn restore_selection(&mut self, selection: SelectionSnapshot, cx: &mut Context<Self>) {
+  pub(super) fn restore_selection(&mut self, selection: SelectionSnapshot, cx: &mut Context<Self>) {
     self.selected_range = self.clamp_range_to_doc_len(selection.range, cx);
     self.selection_reversed = selection.reversed;
     self.display_selection = None;
@@ -126,7 +126,7 @@ impl Editor {
       .update(cx, |blink, cx| blink.pause_blinking(cx));
   }
 
-  fn invalidate_after_history_edit(&mut self, cx: &mut Context<Self>) {
+  pub(super) fn invalidate_after_history_edit(&mut self, cx: &mut Context<Self>) {
     self.invalidate_projection_builds();
     self.mark_conflict_cache_dirty();
     self.line_layouts.clear();
@@ -505,6 +505,7 @@ impl Editor {
     }
     self.document.update(cx, |document, _| {
       document.buffer.mark_saved(document.buffer.version());
+      document.redetect_indentation();
     });
     if let Some((mut anchor, offset)) = scroll_anchor {
       let document = self.document.read(cx);

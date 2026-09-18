@@ -12,6 +12,7 @@ actions!(
   [
     Enter,
     Tab,
+    Outdent,
     Backspace,
     BackspaceWord,
     BackspaceAll,
@@ -63,15 +64,16 @@ fn should_handle_backspace_in_display_space(editor: &Editor, cx: &Context<Editor
   editor.selected_range.is_empty() && editor.is_read_only_display_cursor(cx)
 }
 
-pub fn enter(editor: &mut Editor, _: &Enter, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
-  editor.replace_text_in_range(None, "\n", window, cx);
+pub fn enter(editor: &mut Editor, _: &Enter, _window: &mut Window, cx: &mut Context<Editor>) {
+  editor.insert_indented_newline(cx);
 }
 
-pub fn tab(editor: &mut Editor, _: &Tab, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
-  let spaces = " ".repeat(crate::editor::TAB_SPACES);
-  editor.replace_text_in_range(None, &spaces, window, cx);
+pub fn tab(editor: &mut Editor, _: &Tab, _window: &mut Window, cx: &mut Context<Editor>) {
+  editor.indent_selection(false, cx);
+}
+
+pub fn outdent(editor: &mut Editor, _: &Outdent, _window: &mut Window, cx: &mut Context<Editor>) {
+  editor.indent_selection(true, cx);
 }
 
 pub fn backspace(

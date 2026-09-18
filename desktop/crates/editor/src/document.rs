@@ -36,6 +36,7 @@ struct LineHighlight {
 
 pub struct Document {
   pub buffer: TextBuffer,
+  pub(crate) indentation: crate::indentation::Indentation,
 
   highlighter: Option<SyntaxHighlighter>,
   // Line-local highlight cache (None = not computed yet)
@@ -59,8 +60,15 @@ impl Document {
       .and_then(languages::detect_language_config)
       .map(SyntaxHighlighter::new);
 
+    let indentation = crate::indentation::Indentation::detect(
+      (0..buffer.len_lines()).filter_map(|line| buffer.line_content(line)),
+      highlighter
+        .as_ref()
+        .map(|highlighter| highlighter.config.name),
+    );
     let mut doc = Self {
       buffer,
+      indentation,
       highlighter,
       highlights: Arc::new(RwLock::new(Vec::new())),
       pending_highlight_task: None,
@@ -136,6 +144,7 @@ impl Document {
 
   pub fn replace_all(&mut self, text: &str, cx: &mut Context<Self>) {
     self.buffer = TextBuffer::from_text(text);
+    self.redetect_indentation();
     self.highlights.write().clear();
     self.dirty_highlight_lines.write().clear();
     self.schedule_initial_highlights(cx);
@@ -146,10 +155,25 @@ impl Document {
     self.highlighter = language_hint
       .and_then(languages::detect_language_config)
       .map(SyntaxHighlighter::new);
+    self.redetect_indentation();
     self.highlights.write().clear();
     self.dirty_highlight_lines.write().clear();
     self.schedule_initial_highlights(cx);
     cx.notify();
+  }
+
+  pub(crate) fn language_config(&self) -> Option<&'static syntax::LanguageConfig> {
+    self
+      .highlighter
+      .as_ref()
+      .map(|highlighter| highlighter.config)
+  }
+
+  pub(crate) fn redetect_indentation(&mut self) {
+    self.indentation = crate::indentation::Indentation::detect(
+      (0..self.len_lines()).filter_map(|line| self.line_content(line)),
+      self.language_config().map(|config| config.name),
+    );
   }
 
   pub fn should_defer_full_highlight(&self) -> bool {

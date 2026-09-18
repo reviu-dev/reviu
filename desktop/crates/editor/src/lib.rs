@@ -5,6 +5,7 @@ mod document;
 mod editor;
 mod editor_element;
 mod gutter_element;
+mod indentation;
 mod projection;
 mod scrollbar_element;
 mod search;

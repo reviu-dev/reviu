@@ -2,9 +2,9 @@ use std::{borrow::Cow, collections::HashMap};
 
 use editor::{
   AltLeft, AltRight, Backspace, BackspaceAll, BackspaceWord, CloseFind, CmdDown, CmdLeft, CmdRight,
-  CmdUp, Copy, Cut, Delete, Down, End, Enter, Find, FindNext, FindPrevious, Home, Left, Paste,
-  Quit, Redo, Right, Save, SelectAll, SelectCmdDown, SelectCmdLeft, SelectCmdRight, SelectCmdUp,
-  SelectDown, SelectLeft, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
+  CmdUp, Copy, Cut, Delete, Down, End, Enter, Find, FindNext, FindPrevious, Home, Left, Outdent,
+  Paste, Quit, Redo, Right, Save, SelectAll, SelectCmdDown, SelectCmdLeft, SelectCmdRight,
+  SelectCmdUp, SelectDown, SelectLeft, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
   ShowCharacterPalette, Tab, ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, Undo,
   Up,
 };
@@ -1251,6 +1251,7 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
   let mut bindings = vec![
     KeyBinding::new("enter", Enter, None),
     KeyBinding::new("tab", Tab, None),
+    KeyBinding::new("shift-tab", Outdent, Some("Editor && !Input")),
     KeyBinding::new("backspace", Backspace, None),
     KeyBinding::new("alt-backspace", BackspaceWord, None),
     KeyBinding::new("cmd-backspace", BackspaceAll, None),
@@ -1668,6 +1669,30 @@ mod tests {
         .iter()
         .map(|(id, keystroke)| (*id, (*keystroke).to_string()))
         .collect(),
+    }
+  }
+
+  #[test]
+  fn outdent_is_scoped_to_editor_text_not_nested_inputs_or_other_surfaces() {
+    assert_eq!(
+      first_binding_action_name(
+        "Changes",
+        &["Editor"],
+        "shift-tab",
+        default_app_key_bindings()
+      ),
+      Some("editor::Outdent")
+    );
+    for contexts in [
+      &[][..],
+      &["Input"][..],
+      &["Editor", "Input"][..],
+      &["Terminal"][..],
+    ] {
+      assert_ne!(
+        first_binding_action_name("Changes", contexts, "shift-tab", default_app_key_bindings()),
+        Some("editor::Outdent")
+      );
     }
   }
 
