@@ -72,6 +72,7 @@ const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publis
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
 const DOCK_PANEL_DEFAULT_BRANCH_PR_DEBUG_SELECTOR: &str = "dock-panel-default-branch-pr";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
+const FILE_TREE_SUBDUED_ENTRY_OPACITY: f32 = 0.62;
 use std::rc::Rc;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -972,6 +973,7 @@ pub struct DockPanel {
   files_inline_create_placeholder_to_ignore: Option<PathBuf>,
   files_loaded: bool,
   files_file_count: usize,
+  files_entry_visibility: HashMap<String, FileTreeEntryVisibility>,
   files_include_gitignored: bool,
   files_include_hidden: bool,
   files_reveal_path_when_loaded: Option<PathBuf>,
@@ -1255,6 +1257,7 @@ impl DockPanel {
       files_inline_create_placeholder_to_ignore: None,
       files_loaded: false,
       files_file_count: 0,
+      files_entry_visibility: HashMap::new(),
       files_include_gitignored: settings.files_show_gitignored,
       files_include_hidden: settings.files_show_hidden,
       files_reveal_path_when_loaded: None,
@@ -1316,6 +1319,7 @@ impl DockPanel {
         if let Ok(files) = files {
           this.files_file_count = files.iter().filter(|entry| entry.is_file()).count();
           let entries = files.into_iter().map(Rc::new).collect::<Vec<_>>();
+          let entry_visibility = file_tree_entry_visibility_map(&entries);
           let expanded = expanded_folder_paths.unwrap_or_else(|| {
             if this.files_loaded {
               this.current_files_expanded_paths(cx)
@@ -1327,6 +1331,7 @@ impl DockPanel {
           this.files_tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
           });
+          this.files_entry_visibility = entry_visibility;
           this.files_inline_create_placeholder_to_ignore = None;
           this.files_loaded = true;
           if this.active_tab == DockPanelTab::Files
@@ -1628,10 +1633,12 @@ impl DockPanel {
       .into_iter()
       .map(|path| renamed_file_tree_path_id(&path, &old_id, &new_id))
       .collect::<HashSet<_>>();
+    let entry_visibility = file_tree_entry_visibility_map(&entries);
     let (items, _, _, _) = build_project_tree_items_with_expansion(&entries, Some(&expanded));
     self.files_tree_state.update(cx, |tree, cx| {
       tree.set_items(items, cx);
     });
+    self.files_entry_visibility = entry_visibility;
     cx.notify();
   }
 
@@ -1806,6 +1813,7 @@ impl DockPanel {
       is_gitignored: false,
       is_hidden: false,
     }));
+    let entry_visibility = file_tree_entry_visibility_map(&entries);
     let (items, _, _, _) = build_project_tree_items_with_expansion(&entries, Some(&expanded));
     self.files_tree_state.update(cx, |tree, cx| {
       tree.set_items(items, cx);
@@ -1813,6 +1821,7 @@ impl DockPanel {
         tree.set_selected_index(Some(index), cx);
       }
     });
+    self.files_entry_visibility = entry_visibility;
     self.files_inline_rename = Some(FilesInlineRename {
       relative_path: placeholder,
       input: input.clone(),
@@ -1864,7 +1873,7 @@ impl DockPanel {
     let mut index = 0;
     while let Some(entry) = tree.entry(index) {
       if entry.is_root() {
-        collect_project_tree_entries(entry.item(), &mut entries);
+        collect_project_tree_entries(entry.item(), &self.files_entry_visibility, &mut entries);
       }
       index += 1;
     }
@@ -1906,10 +1915,12 @@ impl DockPanel {
       .filter(|entry| entry.path_id() != placeholder_id)
       .collect::<Vec<_>>();
     let expanded = self.current_files_expanded_paths(cx);
+    let entry_visibility = file_tree_entry_visibility_map(&entries);
     let (items, _, _, _) = build_project_tree_items_with_expansion(&entries, Some(&expanded));
     self.files_tree_state.update(cx, |tree, cx| {
       tree.set_items(items, cx);
     });
+    self.files_entry_visibility = entry_visibility;
   }
 
   fn create_file_entry(
@@ -3696,6 +3707,7 @@ impl DockPanel {
     if project_changed {
       self.files_loaded = false;
       self.files_file_count = 0;
+      self.files_entry_visibility.clear();
       self.files_reveal_path_when_loaded = None;
       self.files_loading = false;
       self.files_load_generation = self.files_load_generation.wrapping_add(1);
@@ -4316,6 +4328,7 @@ impl DockPanel {
     }
 
     let (file_statuses, folder_statuses) = file_tree_status_maps(&self.status_entries);
+    let entry_visibility = self.files_entry_visibility.clone();
 
     let panel = cx.entity().downgrade();
     let inline_rename = self.files_inline_rename.as_ref().map(|rename| {
@@ -4364,6 +4377,11 @@ impl DockPanel {
           let theme = cx.theme().clone();
           let item = entry.item();
           let is_folder = entry.is_folder();
+          let visibility = entry_visibility
+            .get(item.id.as_ref())
+            .copied()
+            .unwrap_or_default();
+          let is_subdued_entry = visibility.is_gitignored;
           let icon: AnyElement = if is_folder {
             Icon::new(if entry.is_expanded() {
               IconName::FolderOpen
@@ -4445,6 +4463,9 @@ impl DockPanel {
               .when(is_empty_placeholder, |this| {
                 this.text_color(theme.muted_foreground).italic()
               })
+              .when(is_subdued_entry && !is_empty_placeholder, |this| {
+                this.opacity(FILE_TREE_SUBDUED_ENTRY_OPACITY)
+              })
               .child(item.label.clone())
               .into_any_element()
           };
@@ -4472,7 +4493,14 @@ impl DockPanel {
                 .w_full()
                 .items_center()
                 .gap_2()
-                .child(icon)
+                .child(
+                  div()
+                    .flex_none()
+                    .when(is_subdued_entry, |this| {
+                      this.opacity(FILE_TREE_SUBDUED_ENTRY_OPACITY)
+                    })
+                    .child(icon),
+                )
                 .child(label)
                 .when_some(status, |this, status| {
                   this.child(render_file_tree_status_badge(
@@ -5728,12 +5756,49 @@ impl Focusable for DockPanel {
   }
 }
 
-fn collect_project_tree_entries(item: &TreeItem, entries: &mut Vec<Rc<ProjectEntry>>) {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FileTreeEntryVisibility {
+  is_gitignored: bool,
+  is_hidden: bool,
+}
+
+impl From<&ProjectEntry> for FileTreeEntryVisibility {
+  fn from(entry: &ProjectEntry) -> Self {
+    Self {
+      is_gitignored: entry.is_gitignored,
+      is_hidden: entry.is_hidden,
+    }
+  }
+}
+
+fn file_tree_entry_visibility_map(
+  entries: &[Rc<ProjectEntry>],
+) -> HashMap<String, FileTreeEntryVisibility> {
+  entries
+    .iter()
+    .map(|entry| {
+      (
+        entry.path_id(),
+        FileTreeEntryVisibility::from(entry.as_ref()),
+      )
+    })
+    .collect()
+}
+
+fn collect_project_tree_entries(
+  item: &TreeItem,
+  visibility: &HashMap<String, FileTreeEntryVisibility>,
+  entries: &mut Vec<Rc<ProjectEntry>>,
+) {
   if is_empty_folder_placeholder_id(item.id.as_ref()) {
     return;
   }
   let path = PathBuf::from(item.id.as_ref());
-  let entry = if item.is_folder() {
+  let entry_visibility = visibility
+    .get(item.id.as_ref())
+    .copied()
+    .unwrap_or_default();
+  let mut entry = if item.is_folder() {
     ProjectEntry {
       path,
       kind: ProjectEntryKind::Directory,
@@ -5743,9 +5808,11 @@ fn collect_project_tree_entries(item: &TreeItem, entries: &mut Vec<Rc<ProjectEnt
   } else {
     ProjectEntry::file(path)
   };
+  entry.is_gitignored = entry_visibility.is_gitignored;
+  entry.is_hidden = entry_visibility.is_hidden;
   entries.push(Rc::new(entry));
   for child in &item.children {
-    collect_project_tree_entries(child, entries);
+    collect_project_tree_entries(child, visibility, entries);
   }
 }
 
@@ -7273,6 +7340,18 @@ mod tests {
         .expect("ignored folder is visible");
       assert!(ignored.is_folder());
       assert_eq!(ignored.item().children[0].id.as_ref(), "ignored/secret.txt");
+      assert!(
+        panel
+          .files_entry_visibility
+          .get("ignored")
+          .is_some_and(|visibility| visibility.is_gitignored)
+      );
+      assert!(
+        panel
+          .files_entry_visibility
+          .get("ignored/secret.txt")
+          .is_some_and(|visibility| visibility.is_gitignored)
+      );
     });
   }
 
@@ -7444,6 +7523,23 @@ mod tests {
     });
     await_refresh(&panel, cx).await;
     open_files_tab_and_wait(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      assert!(tree.index_of(&".hidden".into()).is_some());
+      assert!(
+        panel
+          .files_entry_visibility
+          .get(".hidden")
+          .is_some_and(|visibility| visibility.is_hidden)
+      );
+      assert!(
+        panel
+          .files_entry_visibility
+          .get(".hidden/secret.txt")
+          .is_some_and(|visibility| visibility.is_hidden)
+      );
+    });
 
     panel.update(cx, |panel, cx| {
       panel.set_files_include_hidden(false, cx);
