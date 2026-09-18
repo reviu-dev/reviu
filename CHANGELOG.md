@@ -2,7 +2,7 @@
 
 All notable changes to Reviu are documented here.
 
-## 1.3.0
+## 1.2.0
 
 ### Live Configuration Files
 
@@ -23,8 +23,6 @@ Permission prompts now keep approval buttons short and stable, with long agent-p
 ### Softer Ignored Files
 
 The Files panel now keeps visible gitignored files visually quieter, so generated folders stay available without competing with regular project files.
-
-## 1.2.0
 
 ### Review Feedback Stays In Split View
 
