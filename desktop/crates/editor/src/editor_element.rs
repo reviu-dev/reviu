@@ -262,6 +262,8 @@ pub struct PositionMap {
   pub shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
   pub line_texts: HashMap<usize, String>,
   pub bounds: Bounds<Pixels>,
+  pub(crate) viewport_bounds: Bounds<Pixels>,
+  pub(crate) view: DiffElementView,
   pub line_height: Pixels,
   pub viewport: Range<usize>,
   pub scroll_offset: f32,
@@ -288,11 +290,14 @@ impl PositionMap {
   }
 
   pub fn display_cursor_for_position(&self, position: Point<Pixels>) -> Option<DisplayCursor> {
-    if !self.bounds.contains(&position) {
+    if self.viewport.is_empty() {
       return None;
     }
-
-    let y_offset = position.y - self.bounds.top();
+    let y = position
+      .y
+      .max(self.viewport_bounds.top())
+      .min((self.viewport_bounds.bottom() - px(0.01)).max(self.viewport_bounds.top()));
+    let y_offset = y - self.bounds.top();
     let line_float = self.scroll_offset + (y_offset / self.line_height);
     if line_float.is_sign_negative() {
       return None;
@@ -322,23 +327,11 @@ impl PositionMap {
   }
 
   pub fn point_for_position(&self, position: Point<Pixels>, document: &Document) -> Option<usize> {
-    if !self.bounds.contains(&position) {
-      return None;
-    }
-
     if document.is_empty() {
       return Some(0);
     }
 
-    let y_offset = position.y - self.bounds.top();
-    let line_float = self.scroll_offset + (y_offset / self.line_height);
-    if line_float.is_sign_negative() {
-      return None;
-    }
-    let mut actual_row = line_float.floor() as usize;
-    if actual_row >= self.viewport.end {
-      actual_row = self.viewport.end.saturating_sub(1);
-    }
+    let actual_row = self.display_cursor_for_position(position)?.line;
 
     let doc_line = if let Some(projection) = &self.projection {
       projection.display_to_doc_line(actual_row)?
@@ -703,20 +696,21 @@ enum EditorElementRole {
   Secondary,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DiffElementView {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DiffElementView {
+  #[default]
   Inline,
   SplitLeft,
   SplitRight,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LineVisibility {
+pub(crate) enum LineVisibility {
   Text,
   Blank,
 }
 
-fn line_visibility_for_view(
+pub(crate) fn line_visibility_for_view(
   diff_view: DiffElementView,
   display_line: &DisplayLine,
   block: Option<&ProjectionBlock>,
@@ -825,7 +819,7 @@ fn hunk_border_colors_for_kinds(
   Some((color_for_kind(first_kind?), color_for_kind(last_kind?)))
 }
 
-fn display_line_text_for_view(
+pub(crate) fn display_line_text_for_view(
   display_line: &DisplayLine,
   diff_view: DiffElementView,
   document: &Document,
@@ -1948,12 +1942,13 @@ impl Element for EditorElement {
       }
     }
 
-    let cursor_quad = if is_primary && !is_read_only {
+    let selection_active = self.editor.read(cx).selection_view == self.diff_view;
+    let cursor_quad = if is_primary && selection_active && !is_read_only {
       cursor_quad
     } else {
       None
     };
-    let selection_quads = if is_primary {
+    let selection_quads = if selection_active {
       selection_quads
     } else {
       Vec::new()
@@ -2007,6 +2002,11 @@ impl Element for EditorElement {
       shaped_lines: prepaint.shaped_lines.clone(),
       line_texts: prepaint.line_texts.clone(),
       bounds: prepaint.bounds,
+      viewport_bounds: prepaint
+        .scroll_hitbox
+        .bounds
+        .intersect(&prepaint.scroll_hitbox.content_mask.bounds),
+      view: self.diff_view,
       line_height: prepaint.line_height,
       viewport: prepaint.viewport.clone(),
       scroll_offset,
@@ -2014,6 +2014,12 @@ impl Element for EditorElement {
       block_map: prepaint.block_map.clone(),
     });
 
+    self.editor.update(cx, |editor, cx| {
+      if editor.selection_view == self.diff_view {
+        editor.selection_position_map = Some(Rc::clone(&position_map));
+        editor.refresh_mouse_selection(&position_map, cx);
+      }
+    });
     window.set_cursor_style(CursorStyle::IBeam, &prepaint.scroll_hitbox);
     let mouse_position = window.mouse_position();
     if prepaint.bounds.contains(&mouse_position)
@@ -2030,41 +2036,46 @@ impl Element for EditorElement {
         ElementInputHandler::new(bounds, self.editor.clone()),
         cx,
       );
-
-      window.on_mouse_event({
-        let editor = self.editor.clone();
-        let position_map = Rc::clone(&position_map);
-        let scroll_hitbox = prepaint.scroll_hitbox.clone();
-        let diff_view = self.diff_view;
-        move |event: &MouseDownEvent, phase, window, cx| {
-          // The laid-out bounds can outgrow the visible column; the hitbox
-          // carries the clip, so a press under an overlay never selects.
-          if phase == DispatchPhase::Bubble
-            && event.button == MouseButton::Left
-            && scroll_hitbox.is_hovered(window)
-          {
-            if position_hits_blank_line(&position_map, event.position, diff_view) {
-              cx.stop_propagation();
-              return;
-            }
-            editor.update(cx, |editor, cx| {
-              editor.mouse_left_down(event, &position_map, window, cx);
-            });
-          }
-        }
-      });
-
-      window.on_mouse_event({
-        let editor = self.editor.clone();
-        move |event: &MouseUpEvent, phase, window, cx| {
-          if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-            editor.update(cx, |editor, cx| {
-              editor.mouse_left_up(event, window, cx);
-            });
-          }
-        }
-      });
     }
+
+    window.on_mouse_event({
+      let editor = self.editor.clone();
+      let position_map = Rc::clone(&position_map);
+      let scroll_hitbox = prepaint.scroll_hitbox.clone();
+      let diff_view = self.diff_view;
+      move |event: &MouseDownEvent, phase, window, cx| {
+        // The laid-out bounds can outgrow the visible column; the hitbox
+        // carries the clip, so a press under an overlay never selects.
+        if phase == DispatchPhase::Bubble
+          && event.button == MouseButton::Left
+          && scroll_hitbox.is_hovered(window)
+        {
+          if position_hits_blank_line(&position_map, event.position, diff_view) {
+            cx.stop_propagation();
+            return;
+          }
+          editor.update(cx, |editor, cx| {
+            editor.mouse_left_down(event, &position_map, window, cx);
+          });
+          cx.stop_propagation();
+        }
+      }
+    });
+
+    window.on_mouse_event({
+      let editor = self.editor.clone();
+      move |event: &MouseUpEvent, phase, window, cx| {
+        if event.button == MouseButton::Left && is_primary {
+          editor.update(cx, |editor, cx| {
+            if phase == DispatchPhase::Capture {
+              editor.mouse_left_up(event, window, cx);
+            } else {
+              editor.finish_review_comment_create_drag(window, cx);
+            }
+          });
+        }
+      }
+    });
 
     let allow_hover = is_primary || matches!(self.diff_view, DiffElementView::SplitLeft);
     if allow_hover {
@@ -2078,25 +2089,25 @@ impl Element for EditorElement {
           DiffElementView::Inline => None,
         };
         move |event: &MouseMoveEvent, phase, window, cx| {
-          if phase == DispatchPhase::Bubble {
-            let is_selecting = editor.read(cx).is_selecting;
-            if is_selecting && is_primary {
+          let is_selecting = editor.read(cx).is_selecting;
+          if phase == DispatchPhase::Capture && is_selecting {
+            if editor.read(cx).selection_view == position_map.view {
               editor.update(cx, |editor, cx| {
                 editor.mouse_dragged(event, &position_map, window, cx);
               });
-            } else {
-              let is_occluded = !scroll_hitbox.is_hovered(window);
-              editor.update(cx, |editor, cx| {
-                editor.mouse_moved(
-                  event,
-                  &position_map,
-                  is_occluded,
-                  is_primary,
-                  review_comment_side,
-                  cx,
-                );
-              });
             }
+          } else if phase == DispatchPhase::Bubble && !is_selecting {
+            let is_occluded = !scroll_hitbox.is_hovered(window);
+            editor.update(cx, |editor, cx| {
+              editor.mouse_moved(
+                event,
+                &position_map,
+                is_occluded,
+                is_primary,
+                review_comment_side,
+                cx,
+              );
+            });
           }
         }
       });
@@ -2325,6 +2336,8 @@ mod tests {
       shaped_lines: Vec::new(),
       line_texts: HashMap::new(),
       bounds: test_bounds(200.0, 100.0),
+      viewport_bounds: test_bounds(200.0, 100.0),
+      view: DiffElementView::Inline,
       line_height: px(20.0),
       viewport: 0..3,
       scroll_offset: 0.0,

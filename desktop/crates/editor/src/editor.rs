@@ -4,6 +4,7 @@ use std::{
   hash::{Hash, Hasher},
   ops::Range,
   path::{Path, PathBuf},
+  rc::Rc,
   sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -22,9 +23,9 @@ use gfm_markdown_viewer::{
 use git::{ApplyLocation, DiffSet, FileDiff, GitFileBases, GitStore, RepoFile};
 use gpui::{
   Anchor, App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, ExternalPaths,
-  FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-  ScrollHandle, ShapedLine, SharedString, Subscription, Task, UTF16Selection, Window, black, div,
-  point, prelude::*, px, white,
+  FocusHandle, Focusable, MouseButton, MouseMoveEvent, Pixels, Point, ScrollHandle, ShapedLine,
+  SharedString, Subscription, Task, UTF16Selection, Window, black, div, point, prelude::*, px,
+  white,
 };
 use gpui_component::{
   ActiveTheme as _, ColorName, Disableable as _, Icon, IconName, Selectable, Sizable,
@@ -48,10 +49,12 @@ use ui::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
-  boundaries::{line_range_at_offset, word_range_at_offset, word_range_in_text},
+  boundaries::word_range_in_text,
   cursor_blink::CursorBlink,
   document::Document,
-  editor_element::{EditorElement, PositionMap, WordDiffCache, build_word_diff_cache},
+  editor_element::{
+    DiffElementView, EditorElement, PositionMap, WordDiffCache, build_word_diff_cache,
+  },
   gutter_element::GutterElement,
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
@@ -66,6 +69,10 @@ use crate::{
   },
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
+
+#[path = "mouse_selection.rs"]
+mod mouse_selection;
+use mouse_selection::MouseSelection;
 
 #[derive(Clone, Debug)]
 pub struct Transaction {
@@ -839,6 +846,10 @@ pub struct Editor {
   pub display_selection: Option<DisplaySelection>,
   pub marked_range: Option<Range<usize>>,
   pub is_selecting: bool,
+  pub(crate) selection_view: DiffElementView,
+  pub(crate) selection_position_map: Option<Rc<PositionMap>>,
+  mouse_selection: Option<MouseSelection>,
+  selection_autoscroll_task: Option<Task<()>>,
 
   pub line_layouts: HashMap<usize, Arc<ShapedLine>>,
   pub virtual_line_layouts: HashMap<usize, Arc<ShapedLine>>,
@@ -1193,7 +1204,7 @@ impl Default for ConflictCache {
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DisplayCursor {
   pub line: usize,
   pub column: usize,
@@ -1361,6 +1372,10 @@ impl Editor {
       display_selection: None,
       marked_range: None,
       is_selecting: false,
+      selection_view: DiffElementView::Inline,
+      selection_position_map: None,
+      mouse_selection: None,
+      selection_autoscroll_task: None,
       line_layouts: HashMap::new(),
       virtual_line_layouts: HashMap::new(),
       last_layout_font_size: px(0.0),
@@ -1762,6 +1777,15 @@ impl Editor {
   pub fn set_diff_view_mode(&mut self, mode: DiffViewMode, cx: &mut Context<Self>) {
     if self.diff_view_mode != mode {
       self.diff_view_mode = mode;
+      self.selection_view = match mode {
+        DiffViewMode::Inline => DiffElementView::Inline,
+        DiffViewMode::Split => DiffElementView::SplitRight,
+      };
+      self.display_selection = None;
+      self.mouse_selection = None;
+      self.is_selecting = false;
+      self.selection_autoscroll_task = None;
+      self.selection_position_map = None;
       if self.diffs.is_some() {
         self.rebuild_projection(cx);
       } else {
@@ -3617,6 +3641,8 @@ impl Editor {
     };
 
     self.is_selecting = false;
+    self.mouse_selection = None;
+    self.selection_autoscroll_task = None;
     self.display_selection = None;
     self.review_comment_create_drag_start_display_line = Some(target.display_line);
     self.review_comment_create_drag_side = Some(target.side);
@@ -3713,7 +3739,11 @@ impl Editor {
     }
   }
 
-  fn finish_review_comment_create_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  pub(crate) fn finish_review_comment_create_drag(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     if self.review_comment_create_submitting {
       return;
     }
@@ -4451,7 +4481,7 @@ impl Editor {
   }
 
   fn replace_current_find_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.is_read_only || self.find.query().is_empty() {
+    if self.selection_is_read_only() || self.find.query().is_empty() {
       return;
     }
 
@@ -4468,7 +4498,7 @@ impl Editor {
   }
 
   fn replace_all_find_matches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.is_read_only || self.find.query().is_empty() {
+    if self.selection_is_read_only() || self.find.query().is_empty() {
       return;
     }
 
@@ -4692,7 +4722,7 @@ impl Editor {
     let total_matches = self.find.matches().len();
     let current_match = self.find.current_match_number();
     let has_matches = total_matches > 0;
-    let can_replace = has_matches && !self.is_read_only && self.find.error().is_none();
+    let can_replace = has_matches && !self.selection_is_read_only() && self.find.error().is_none();
     let find_error = self.find.error().map(str::to_string);
     let has_find_error = find_error.is_some();
     let find_status = find_error
@@ -7343,17 +7373,8 @@ impl Editor {
 
     let mut lines = Vec::new();
     for display_line in start.line..=end_line {
-      let line_text = match self.display_line(display_line, doc_line_count) {
-        Some(DisplayLine::Doc { doc_line, .. }) => document
-          .line_content(doc_line)
-          .map(|cow| cow.into_owned())
-          .unwrap_or_default(),
-        Some(DisplayLine::Modified { doc_line, .. }) => document
-          .line_content(doc_line)
-          .map(|cow| cow.into_owned())
-          .unwrap_or_default(),
-        Some(DisplayLine::Removed { text, .. }) => text.to_string(),
-        _ => continue,
+      let Some(line_text) = self.selection_line_text(display_line, self.selection_view, cx) else {
+        continue;
       };
 
       let line_len = line_text.chars().count();
@@ -7384,7 +7405,11 @@ impl Editor {
     if lines.is_empty() {
       None
     } else {
-      Some(lines.join("\n"))
+      let mut text = lines.join("\n");
+      if end.column == 0 && end.line > start.line {
+        text.push('\n');
+      }
+      Some(text)
     }
   }
 
@@ -8827,6 +8852,7 @@ impl Editor {
     self.selected_range = offset..offset;
     if !self.is_selecting {
       self.display_selection = None;
+      self.mouse_selection = None;
     }
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
@@ -8851,6 +8877,7 @@ impl Editor {
     };
     if !self.is_selecting {
       self.display_selection = None;
+      self.mouse_selection = None;
     }
     if self.selected_range.end < self.selected_range.start {
       self.selection_reversed = !self.selection_reversed;
@@ -9021,6 +9048,9 @@ impl Editor {
   }
 
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
+    if !self.is_selecting {
+      self.mouse_selection = None;
+    }
     self.display_selection = Some(DisplaySelection {
       start: cursor,
       end: cursor,
@@ -9049,6 +9079,9 @@ impl Editor {
     cursor: DisplayCursor,
     cx: &mut Context<Self>,
   ) {
+    if !self.is_selecting {
+      self.mouse_selection = None;
+    }
     self.display_selection = Some(DisplaySelection {
       start: anchor,
       end: cursor,
@@ -9062,11 +9095,7 @@ impl Editor {
       self.doc_offset_for_display_cursor(anchor, cx),
       self.doc_offset_for_display_cursor(cursor, cx),
     ) {
-      if reversed {
-        self.selected_range = cursor_offset..anchor_offset;
-      } else {
-        self.selected_range = anchor_offset..cursor_offset;
-      }
+      self.selected_range = anchor_offset.min(cursor_offset)..anchor_offset.max(cursor_offset);
     }
 
     self.cursor_blink.update(cx, |blink, cx| {
@@ -9681,31 +9710,6 @@ impl Editor {
     true
   }
 
-  pub(crate) fn select_all_display_lines(&mut self, cx: &mut Context<Self>) -> bool {
-    let Some(start_line) = self.first_selectable_display_line() else {
-      return false;
-    };
-    let Some(end_line) = self.last_selectable_display_line() else {
-      return false;
-    };
-    let end_column = self.display_line_len(end_line, cx);
-    self.display_selection = Some(DisplaySelection {
-      start: DisplayCursor {
-        line: start_line,
-        column: 0,
-      },
-      end: DisplayCursor {
-        line: end_line,
-        column: end_column,
-      },
-    });
-    let doc_len = self.document.read(cx).len();
-    self.selected_range = 0..doc_len;
-    self.selection_reversed = false;
-    cx.notify();
-    true
-  }
-
   fn display_cursor_for_offset(&self, offset: usize, cx: &App) -> Option<DisplayCursor> {
     let document = self.document.read(cx);
     if document.is_empty() {
@@ -9838,137 +9842,6 @@ impl Editor {
     if start <= end { start..end } else { end..start }
   }
 
-  pub fn mouse_left_down(
-    &mut self,
-    event: &MouseDownEvent,
-    position_map: &PositionMap,
-    _window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if !position_map.bounds.contains(&event.position) {
-      return;
-    }
-
-    self.target_column = None;
-    self.is_selecting = true;
-
-    self.cursor_blink.update(cx, |blink, cx| {
-      blink.pause_blinking(cx);
-    });
-
-    if let Some(display_line) = position_map.display_line_for_position(event.position)
-      && self.is_ui_block_display_line(display_line)
-    {
-      self.is_selecting = false;
-      return;
-    }
-
-    let Some(display_cursor) = position_map.display_cursor_for_position(event.position) else {
-      return;
-    };
-
-    self.last_mouse_position = Some(event.position);
-
-    let anchor = if event.modifiers.shift {
-      if let Some(selection) = &self.display_selection {
-        selection.start
-      } else {
-        self
-          .display_cursor_for_offset(self.selection_anchor_offset(), cx)
-          .unwrap_or(display_cursor)
-      }
-    } else {
-      display_cursor
-    };
-
-    self.display_selection = Some(DisplaySelection {
-      start: anchor,
-      end: display_cursor,
-    });
-
-    let (offset, doc_len) = {
-      let document = self.document.read(cx);
-      let offset = position_map
-        .point_for_position(event.position, document)
-        .or_else(|| self.doc_offset_for_display_cursor(display_cursor, cx));
-      (offset, document.len())
-    };
-    let Some(offset) = offset else {
-      return;
-    };
-
-    if event.modifiers.shift {
-      self.select_to(offset, cx);
-    } else {
-      match event.click_count {
-        1 => {
-          self.move_to(offset, cx);
-        }
-        2 => {
-          if self.is_removed_display_line(display_cursor.line, cx) {
-            if let Some(text) = self.removed_line_text(display_cursor.line, cx) {
-              let column = display_cursor.column.min(text.chars().count());
-              let (start, end) = Self::word_range_in_line(&text, column);
-              self.set_display_selection_with_anchor(
-                DisplayCursor {
-                  line: display_cursor.line,
-                  column: start,
-                },
-                DisplayCursor {
-                  line: display_cursor.line,
-                  column: end,
-                },
-                cx,
-              );
-            }
-            return;
-          }
-          let (word_start, word_end) = word_range_at_offset(self, offset, cx);
-          self.selected_range = word_start..word_end;
-          self.selection_reversed = false;
-          self.display_selection = None;
-          cx.notify();
-        }
-        3 => {
-          if self.is_removed_display_line(display_cursor.line, cx) {
-            let line_len = self.display_line_len(display_cursor.line, cx);
-            self.set_display_selection_with_anchor(
-              DisplayCursor {
-                line: display_cursor.line,
-                column: 0,
-              },
-              DisplayCursor {
-                line: display_cursor.line,
-                column: line_len,
-              },
-              cx,
-            );
-            return;
-          }
-          let (line_start, line_end) = line_range_at_offset(self, offset, cx);
-          self.selected_range = line_start..line_end;
-          self.selection_reversed = false;
-          self.display_selection = None;
-          cx.notify();
-        }
-        _ => {
-          if self.select_all_display_lines(cx) {
-            return;
-          }
-          self.selected_range = 0..doc_len;
-          self.selection_reversed = false;
-          self.display_selection = None;
-          cx.notify();
-        }
-      }
-    }
-  }
-
-  pub fn mouse_left_up(&mut self, _: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-    self.is_selecting = false;
-    self.finish_review_comment_create_drag(window, cx);
-  }
-
   pub fn mouse_moved(
     &mut self,
     event: &MouseMoveEvent,
@@ -10034,52 +9907,6 @@ impl Editor {
       cx.notify();
     }
   }
-
-  pub fn mouse_dragged(
-    &mut self,
-    event: &MouseMoveEvent,
-    position_map: &PositionMap,
-    _: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if self.review_comment_create_drag_active {
-      self.update_review_comment_create_drag_from_display_line(
-        position_map.display_line_for_position(event.position),
-        cx,
-      );
-      return;
-    }
-
-    if !self.is_selecting {
-      return;
-    }
-
-    self.last_mouse_position = Some(event.position);
-
-    if let Some(display_cursor) = position_map.display_cursor_for_position(event.position) {
-      if let Some(selection) = self.display_selection.as_mut() {
-        selection.end = display_cursor;
-      } else {
-        self.display_selection = Some(DisplaySelection {
-          start: display_cursor,
-          end: display_cursor,
-        });
-      }
-    }
-
-    let document = self.document.read(cx);
-    let offset = position_map
-      .point_for_position(event.position, document)
-      .or_else(|| {
-        position_map
-          .display_cursor_for_position(event.position)
-          .and_then(|cursor| self.doc_offset_for_display_cursor(cursor, cx))
-      });
-
-    if let Some(offset) = offset {
-      self.select_to(offset, cx);
-    }
-  }
 }
 
 impl EntityInputHandler for Editor {
@@ -10132,7 +9959,7 @@ impl EntityInputHandler for Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.is_read_only {
+    if self.selection_is_read_only() {
       return;
     }
     if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
@@ -10219,7 +10046,7 @@ impl EntityInputHandler for Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.is_read_only {
+    if self.selection_is_read_only() {
       return;
     }
     if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
@@ -10334,6 +10161,13 @@ fn parse_github_pr_comment_link(url: &str) -> Option<(u64, u64)> {
 
 impl Render for Editor {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    if self.display_selection.is_none() {
+      self.selection_view = match self.diff_view_mode {
+        DiffViewMode::Inline => DiffElementView::Inline,
+        DiffViewMode::Split => DiffElementView::SplitRight,
+      };
+      self.mouse_selection = None;
+    }
     let is_dark = cx.theme().mode.is_dark();
     if self.theme.is_dark != is_dark {
       self.theme = Theme::new(is_dark);
@@ -10682,7 +10516,7 @@ impl Render for Editor {
       .relative()
       .overflow_hidden()
       .when(
-        editor_caret_actions_enabled(editor_actions_enabled, self.is_read_only),
+        editor_caret_actions_enabled(editor_actions_enabled, self.selection_is_read_only()),
         |el| {
           el.on_action(cx.listener(crate::actions::enter))
             .on_action(cx.listener(crate::actions::tab))
@@ -12095,6 +11929,10 @@ pub mod tests {
           display_selection: None,
           marked_range: None,
           is_selecting: false,
+          selection_view: DiffElementView::Inline,
+          selection_position_map: None,
+          mouse_selection: None,
+          selection_autoscroll_task: None,
           line_layouts: HashMap::new(),
           virtual_line_layouts: HashMap::new(),
           last_layout_font_size: px(0.0),

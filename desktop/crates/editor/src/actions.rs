@@ -644,13 +644,7 @@ pub fn select_cmd_down(
 
 pub fn select_all(editor: &mut Editor, _: &SelectAll, _: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
-  if editor.select_all_display_lines(cx) {
-    return;
-  }
-  let doc_len = editor.document.read(cx).len();
-
-  editor.move_to(0, cx);
-  editor.select_to(doc_len, cx);
+  editor.select_all_display_lines(cx);
 }
 
 pub fn paste(editor: &mut Editor, _: &Paste, window: &mut Window, cx: &mut Context<Editor>) {

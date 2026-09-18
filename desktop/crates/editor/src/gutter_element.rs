@@ -1,7 +1,8 @@
 use gpui::{
   App, Bounds, DispatchPhase, ElementId, Entity, GlobalElementId, Hitbox, HitboxBehavior,
-  InspectorElementId, LayoutId, MouseMoveEvent, PaintQuad, Pixels, ScrollDelta, ScrollWheelEvent,
-  Style, TextAlign, TextRun, Window, fill, point, prelude::*, px, relative, size,
+  InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels,
+  ScrollDelta, ScrollWheelEvent, Style, TextAlign, TextRun, Window, fill, point, prelude::*, px,
+  relative, size,
 };
 use gpui_component::ActiveTheme as _;
 use std::{collections::HashMap, ops::Range, sync::Arc};
@@ -9,7 +10,8 @@ use std::{collections::HashMap, ops::Range, sync::Arc};
 use git::DiffLineKind;
 
 use crate::{
-  editor::{ConflictLineKind, Editor, ScrollAxis},
+  editor::{ConflictLineKind, DisplayCursor, Editor, ScrollAxis},
+  editor_element::DiffElementView,
   projection::{
     ChangeKind, DisplayLine, HunkState, Projection, ProjectionBlock, ProjectionBlockMap,
     ReviewCommentBackground, ReviewCommentSide,
@@ -789,6 +791,34 @@ impl Element for GutterElement {
 
     window.on_mouse_event({
       let editor = self.editor.clone();
+      let hitbox = prepaint.scroll_hitbox.clone();
+      let line_height = prepaint.line_height;
+      let view = match self.view {
+        GutterView::Inline => DiffElementView::Inline,
+        GutterView::SplitLeft => DiffElementView::SplitLeft,
+        GutterView::SplitRight => DiffElementView::SplitRight,
+      };
+      move |event: &MouseDownEvent, phase, window, cx| {
+        if phase != DispatchPhase::Bubble
+          || event.button != MouseButton::Left
+          || !hitbox.is_hovered(window)
+        {
+          return;
+        }
+        editor.update(cx, |editor, cx| {
+          let line = (editor.scroll_offset_y + (event.position.y - bounds.top()) / line_height)
+            .max(0.0)
+            .floor() as usize;
+          let mut event = event.clone();
+          event.click_count = 3;
+          editor.begin_mouse_selection(DisplayCursor { line, column: 0 }, view, &event, window, cx);
+        });
+        cx.stop_propagation();
+      }
+    });
+
+    window.on_mouse_event({
+      let editor = self.editor.clone();
       let line_height = prepaint.line_height;
       let review_comment_side = self.review_comment_side();
       // The gutter hover belongs to its pane, like the text hover does.
@@ -801,6 +831,9 @@ impl Element for GutterElement {
           return;
         }
         editor.update(cx, |editor, cx| {
+          if editor.is_selecting {
+            return;
+          }
           editor.hovered_from_primary = is_primary;
           let display_line = {
             let y_offset = event.position.y - bounds.top();
