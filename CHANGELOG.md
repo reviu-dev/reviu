@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.3.0
 
+### Dock Shortcut Hints
+
+Hovering a dock tab now shows its keyboard shortcut alongside its name, including any shortcut you have customized in Settings.
+
 ### Compact Permission Actions
 
 Permission prompts now keep approval buttons short and stable, with long agent-provided labels available as tooltips so the primary action no longer shifts around.

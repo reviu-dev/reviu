@@ -2724,6 +2724,16 @@ impl SessionPage {
     sliding.into_any_element()
   }
 
+  fn dock_rail_tab_action(tab: DockPanelTab) -> Box<dyn gpui::Action> {
+    match tab {
+      DockPanelTab::Changes => Box::new(crate::OpenGitChangesSidebar),
+      DockPanelTab::Review => Box::new(crate::OpenReviewSidebar),
+      DockPanelTab::Files => Box::new(crate::OpenFilesSidebar),
+      DockPanelTab::History => Box::new(crate::OpenGitHistorySidebar),
+      DockPanelTab::PullRequest => Box::new(crate::OpenPullRequestSidebar),
+    }
+  }
+
   fn rail_button(
     id: &'static str,
     icon: impl Into<gpui_component::Icon>,
@@ -2805,8 +2815,12 @@ impl SessionPage {
       .read(cx)
       .pending_pull_request_comment_count();
     let changed_files = self.dock_panel.read(cx).status_entries().len();
+    // Include the generation so tooltips ignore superseded shortcut bindings.
+    let shortcut_context = crate::shortcuts::current_workspace_key_context(cx);
     for (id, icon, tooltip, tab) in tabs {
+      let action = Self::dock_rail_tab_action(tab);
       let button = Self::rail_button(id, icon, tooltip)
+        .tooltip_with_action(tooltip, action.as_ref(), Some(&shortcut_context))
         .selected(self.dock_open && active_tab == tab)
         .on_click(cx.listener(move |this, _, window, cx| {
           this.open_dock_tab(tab, window, cx);
@@ -8536,6 +8550,57 @@ mod tests {
     // Icons that come and go with the remote make the rail unlearnable, and the
     // panel behind this one is a promotion surface.
     assert!(cx.debug_bounds("dock-rail-pull-request").is_some());
+  }
+
+  #[gpui::test]
+  fn dock_rail_tooltips_resolve_current_shortcuts_and_overrides(cx: &mut TestAppContext) {
+    use crate::shortcuts::{self, ShortcutId};
+
+    isolate_config_store_for_test();
+    cx.update(shortcuts::install_workspace_shortcuts);
+    let cx = cx.add_empty_window();
+
+    for (tab, shortcut) in [
+      (DockPanelTab::Changes, ShortcutId::OpenGitChangesSidebar),
+      (DockPanelTab::Review, ShortcutId::OpenReviewSidebar),
+      (DockPanelTab::Files, ShortcutId::OpenFilesSidebar),
+      (DockPanelTab::History, ShortcutId::OpenGitHistorySidebar),
+      (
+        DockPanelTab::PullRequest,
+        ShortcutId::OpenPullRequestSidebar,
+      ),
+    ] {
+      let default = shortcuts::shortcut_keystroke(shortcut);
+      for expected in [
+        default.clone(),
+        gpui::Keystroke::parse("ctrl-alt-8").expect("first override"),
+        gpui::Keystroke::parse("ctrl-alt-9").expect("second override"),
+        default,
+      ] {
+        cx.update(|window, cx| {
+          shortcuts::set_shortcut_override(cx, shortcut, &expected);
+          shortcuts::install_workspace_shortcuts(cx);
+          let action = SessionPage::dock_rail_tab_action(tab);
+          let context = shortcuts::current_workspace_key_context(cx);
+          assert!(
+            gpui_component::kbd::Kbd::binding_for_action(action.as_ref(), Some(&context), window)
+              .is_some(),
+            "{tab:?} tooltip must include a Kbd"
+          );
+          let binding = window
+            .highest_precedence_binding_for_action_in_context(
+              action.as_ref(),
+              gpui::KeyContext::parse(&context).expect("tooltip context"),
+            )
+            .expect("tooltip shortcut");
+          assert_eq!(
+            binding.keystrokes().first().expect("keystroke").inner(),
+            &expected,
+            "{tab:?} tooltip must follow overrides and resets"
+          );
+        });
+      }
+    }
   }
 
   #[gpui::test]
