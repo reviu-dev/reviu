@@ -73,12 +73,15 @@ use crate::{
 #[path = "mouse_selection.rs"]
 mod mouse_selection;
 use mouse_selection::MouseSelection;
+#[path = "document_lifecycle.rs"]
+mod document_lifecycle;
+use document_lifecycle::SelectionSnapshot;
 
 #[derive(Clone, Debug)]
 pub struct Transaction {
   pub id: TransactionId,
-  pub selection_before: Range<usize>,
-  pub selection_after: Range<usize>,
+  pub(crate) selection_before: SelectionSnapshot,
+  pub(crate) selection_after: SelectionSnapshot,
 }
 
 /// Default viewport height before first render
@@ -973,6 +976,11 @@ pub struct Editor {
   pub index_mtime: Option<SystemTime>,
   pub is_dirty: bool,
   pub save_task: Option<Task<()>>,
+  save_in_flight: bool,
+  disk_contents: Option<Arc<str>>,
+  disk_conflict: bool,
+  disk_generation: u64,
+  pending_reload_scroll_anchor: Option<ScrollAnchor>,
   pending_untitled_save_completion: Option<SaveCompletion>,
   pub optimistic_unstaged_groups: HashSet<Arc<str>>,
 
@@ -1305,7 +1313,14 @@ impl Editor {
       file_mtime: None,
       index_mtime: None,
     };
-    Self::new_with_loaded_file_internal(repo_root, None, loaded, cx)
+    let mut editor = Self::new_with_loaded_file_internal(repo_root, None, loaded, cx);
+    if !editor.document.read(cx).is_empty() {
+      editor
+        .document
+        .update(cx, |document, _| document.buffer.mark_unsaved());
+      editor.refresh_dirty(cx);
+    }
+    editor
   }
 
   pub fn load_file_for_editor(repo_root: &Path, workdir_path: &Path) -> EditorFileLoad {
@@ -1495,6 +1510,13 @@ impl Editor {
       index_mtime: loaded.index_mtime,
       is_dirty: false,
       save_task: None,
+      save_in_flight: false,
+      disk_contents: loaded
+        .file_mtime
+        .map(|_| Arc::from(loaded.content.as_str())),
+      disk_conflict: false,
+      disk_generation: 0,
+      pending_reload_scroll_anchor: None,
       pending_untitled_save_completion: None,
       optimistic_unstaged_groups: HashSet::new(),
       diff_view_mode: DiffViewMode::Inline,
@@ -4525,7 +4547,8 @@ impl Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let selection_before = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
+    let selection_before = self.selection_snapshot(cx);
+    self.finalize_transaction(cx);
     let ranges = ranges
       .iter()
       .cloned()
@@ -4565,9 +4588,9 @@ impl Editor {
     self.selection_reversed = false;
     self.display_selection = None;
     let selection_after = self.selected_range.clone();
-    self.record_transaction(transaction_id, selection_before, selection_after);
-
-    self.is_dirty = true;
+    self.record_transaction(transaction_id, selection_before, selection_after, cx);
+    self.finalize_transaction(cx);
+    self.refresh_dirty(cx);
     let _ = window;
     self.ensure_cursor_visible_when_hidden(cx);
     self.refresh_find_matches_after_document_edit(cx);
@@ -6694,12 +6717,10 @@ impl Editor {
   }
 
   fn init(&mut self, cx: &mut Context<Self>) {
-    if self.repo_file.is_some() {
-      if self.git_diff_enabled {
-        self.reload_git_bases(cx);
-      }
-      self.start_polling(cx);
+    if self.repo_file.is_some() && self.git_diff_enabled {
+      self.reload_git_bases(cx);
     }
+    self.start_polling(cx);
   }
 
   pub fn set_git_diff_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -6939,7 +6960,10 @@ impl Editor {
     doc_line_count: usize,
     cx: &mut Context<Self>,
   ) {
-    let scroll_anchor = self.capture_scroll_anchor(doc_line_count);
+    let scroll_anchor = self
+      .pending_reload_scroll_anchor
+      .take()
+      .or_else(|| self.capture_scroll_anchor(doc_line_count));
     self.set_projection(Some(projection));
     if let Some(projection) = self.projection.as_ref() {
       self.word_diff_cache = build_word_diff_cache(projection, self.document.read(cx));
@@ -6986,7 +7010,10 @@ impl Editor {
   fn rebuild_projection(&mut self, cx: &mut Context<Self>) {
     let doc_line_count = self.document.read(cx).len_lines();
     if self.diffs.is_none() {
-      let scroll_anchor = self.capture_scroll_anchor(doc_line_count);
+      let scroll_anchor = self
+        .pending_reload_scroll_anchor
+        .take()
+        .or_else(|| self.capture_scroll_anchor(doc_line_count));
       self.invalidate_projection_builds();
       self.set_projection(None);
       self.virtual_line_layouts.clear();
@@ -7187,142 +7214,6 @@ impl Editor {
 
   pub fn is_untitled(&self) -> bool {
     self.workdir_path.is_none()
-  }
-
-  pub fn save(&mut self, cx: &mut Context<Self>) {
-    self.save_with_completion(cx, None);
-  }
-
-  pub fn save_with_completion(&mut self, cx: &mut Context<Self>, on_saved: Option<SaveCompletion>) {
-    if self.is_read_only {
-      return;
-    }
-    let Some(workdir_path) = self.workdir_path.clone() else {
-      self.pending_untitled_save_completion = on_saved;
-      cx.emit(EditorEvent::SavePathRequested);
-      return;
-    };
-    let contents = {
-      let document = self.document.read(cx);
-      document.slice_to_string(0..document.len())
-    };
-    let repo_file = self.repo_file.clone();
-    let index_text = self
-      .git_state
-      .bases
-      .as_ref()
-      .and_then(|bases| bases.index.clone());
-    let needs_index_write = self.git_state.index_dirty;
-
-    self.save_task = Some(cx.spawn(async move |this, cx| {
-      let result = cx
-        .background_spawn(async move {
-          std::fs::write(&workdir_path, contents)?;
-          let file_mtime = std::fs::metadata(&workdir_path)
-            .and_then(|meta| meta.modified())
-            .ok();
-          let mut index_mtime = None;
-          if needs_index_write && let (Some(repo_file), Some(index_text)) = (repo_file, index_text)
-          {
-            if let Err(err) = git::write_index_content(&repo_file, &index_text) {
-              return Err(std::io::Error::other(err));
-            }
-            index_mtime = std::fs::metadata(git::index_path(&repo_file.repo_root))
-              .and_then(|meta| meta.modified())
-              .ok();
-          }
-          Ok::<_, std::io::Error>((file_mtime, index_mtime))
-        })
-        .await;
-
-      let _ = this.update(cx, |editor, cx| match result {
-        Ok((file_mtime, index_mtime)) => {
-          editor.is_dirty = false;
-          cx.emit(EditorEvent::Saved);
-          editor.file_mtime = file_mtime;
-          if needs_index_write {
-            editor.git_state.index_dirty = false;
-            editor.optimistic_unstaged_groups.clear();
-            if let Some(index_mtime) = index_mtime {
-              editor.index_mtime = Some(index_mtime);
-            }
-            if let Some(store) = editor.git_store.as_ref() {
-              store.bump_op();
-              editor.git_state.op_id = store.op_id();
-            }
-          }
-          if editor.git_diff_enabled {
-            editor.reload_git_bases(cx);
-            editor.schedule_diff_recompute(cx);
-          }
-          cx.notify();
-          if let Some(on_saved) = on_saved {
-            on_saved(cx);
-          }
-        }
-        Err(error) => {
-          log::warn!("[editor] save failed: {error:?}");
-          cx.emit(EditorEvent::SaveFailed {
-            message: Arc::from(error.to_string()),
-          });
-        }
-      });
-    }));
-  }
-
-  pub fn save_as(&mut self, repo_root: PathBuf, workdir_path: PathBuf, cx: &mut Context<Self>) {
-    if self.is_read_only {
-      return;
-    }
-    let contents = {
-      let document = self.document.read(cx);
-      document.slice_to_string(0..document.len())
-    };
-    let saved_path = workdir_path.clone();
-
-    self.save_task = Some(cx.spawn(async move |this, cx| {
-      let result = cx
-        .background_spawn(async move {
-          std::fs::write(&workdir_path, contents)?;
-          let file_mtime = std::fs::metadata(&workdir_path)
-            .and_then(|metadata| metadata.modified())
-            .ok();
-          Ok::<_, std::io::Error>(file_mtime)
-        })
-        .await;
-
-      let _ = this.update(cx, move |editor, cx| match result {
-        Ok(file_mtime) => {
-          editor.workdir_path = Some(saved_path.clone());
-          editor.repo_file = RepoFile::new(&repo_root, &saved_path).ok();
-          editor.git_store = editor
-            .repo_file
-            .as_ref()
-            .map(|repo_file| GitStore::new(repo_file.repo_root.clone()));
-          editor.file_mtime = file_mtime;
-          editor.is_dirty = false;
-          let language_hint = Self::language_hint_for_path(&saved_path);
-          editor.document.update(cx, |document, cx| {
-            document.set_language_hint(language_hint.as_deref(), cx)
-          });
-          editor.start_polling(cx);
-          cx.emit(EditorEvent::SavedAs {
-            path: saved_path.clone(),
-          });
-          cx.emit(EditorEvent::Saved);
-          cx.notify();
-          if let Some(on_saved) = editor.pending_untitled_save_completion.take() {
-            on_saved(cx);
-          }
-        }
-        Err(error) => {
-          editor.pending_untitled_save_completion = None;
-          cx.emit(EditorEvent::SaveFailed {
-            message: Arc::from(error.to_string()),
-          });
-        }
-      });
-    }));
   }
 
   pub fn cancel_pending_untitled_save(&mut self) {
@@ -7597,7 +7488,7 @@ impl Editor {
 
       let _ = this.update(cx, |editor, cx| {
         if let Some(contents) = contents {
-          editor.reload_from_disk(contents, cx);
+          editor.observe_disk_contents(Some(Arc::from(contents)), file_mtime, cx);
         }
         editor.file_mtime = file_mtime;
         editor.index_mtime = index_mtime;
@@ -7613,80 +7504,11 @@ impl Editor {
     }));
   }
 
-  fn start_polling(&mut self, cx: &mut Context<Self>) {
-    if self.poll_task.is_some() || self.workdir_path.is_none() {
-      return;
-    }
-
-    self.poll_task = Some(cx.spawn(async move |this, cx| {
-      loop {
-        cx.background_executor()
-          .timer(Duration::from_millis(POLL_INTERVAL_MS))
-          .await;
-
-        let state = this
-          .update(cx, |editor, _| {
-            (
-              editor.repo_file.clone(),
-              editor.workdir_path.clone(),
-              editor.file_mtime,
-              editor.index_mtime,
-            )
-          })
-          .ok();
-        let Some((repo_file, workdir_path, last_file_mtime, last_index_mtime)) = state else {
-          return;
-        };
-        let (Some(repo_file), Some(workdir_path)) = (repo_file, workdir_path) else {
-          continue;
-        };
-
-        let workdir_path_for_meta = workdir_path.clone();
-        let (file_mtime, index_mtime): (Option<SystemTime>, Option<SystemTime>) = cx
-          .background_spawn(async move {
-            let file_mtime = std::fs::metadata(&workdir_path_for_meta)
-              .and_then(|meta| meta.modified())
-              .ok();
-            let index_mtime = std::fs::metadata(git::index_path(&repo_file.repo_root))
-              .ok()
-              .and_then(|meta| meta.modified().ok());
-            (file_mtime, index_mtime)
-          })
-          .await;
-
-        let file_changed = file_mtime.is_some() && file_mtime != last_file_mtime;
-        let index_changed = index_mtime.is_some() && index_mtime != last_index_mtime;
-
-        let new_contents = if file_changed {
-          let workdir_path = workdir_path.clone();
-          cx.background_spawn(async move { std::fs::read_to_string(&workdir_path) })
-            .await
-            .ok()
-        } else {
-          None
-        };
-
-        if new_contents.is_some() || index_changed {
-          let _ = this.update(cx, |editor, cx| {
-            if let Some(contents) = new_contents {
-              editor.reload_from_disk(contents, cx);
-              editor.file_mtime = file_mtime;
-            }
-            if index_changed {
-              editor.index_mtime = index_mtime;
-              if editor.git_diff_enabled {
-                editor.reload_git_bases(cx);
-              }
-            } else if editor.git_diff_enabled {
-              editor.schedule_diff_recompute(cx);
-            }
-          });
-        }
-      }
-    }));
-  }
-
   fn reload_from_disk(&mut self, contents: String, cx: &mut Context<Self>) {
+    self.disk_contents = Some(Arc::from(contents.as_str()));
+    self.disk_conflict = false;
+    self.disk_generation += 1;
+    self.pending_reload_scroll_anchor = None;
     self.is_read_only = false;
     self.invalidate_projection_builds();
     self.document.update(cx, |doc, cx| {
@@ -8108,7 +7930,8 @@ impl Editor {
       replacement.push('\n');
     }
 
-    let selection_before = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
+    let selection_before = self.selection_snapshot(cx);
+    self.finalize_transaction(cx);
     let line_height = self.measured_editor_line_height();
     let total_display_lines = self.display_line_count(doc_line_count);
     let display_viewport = self.viewport_range(line_height, total_display_lines);
@@ -8149,13 +7972,14 @@ impl Editor {
     self.selected_range = new_cursor..new_cursor;
 
     let selection_after = self.selected_range.clone();
-    self.record_transaction(transaction_id, selection_before, selection_after);
+    self.record_transaction(transaction_id, selection_before, selection_after, cx);
+    self.finalize_transaction(cx);
 
     self.hovered_group_id = None;
     self.hovered_conflict_start_line = None;
     self.selected_conflict_start_line = None;
     self.last_mouse_position = None;
-    self.is_dirty = true;
+    self.refresh_dirty(cx);
     self.schedule_diff_recompute(cx);
     self.rebuild_projection(cx);
     cx.notify();
@@ -8832,9 +8656,18 @@ impl Editor {
   pub(crate) fn record_transaction(
     &mut self,
     id: TransactionId,
-    selection_before: Range<usize>,
+    selection_before: SelectionSnapshot,
     selection_after: Range<usize>,
+    cx: &App,
   ) {
+    if self.document.read(cx).buffer.last_transaction_id() != Some(id) {
+      return;
+    }
+    self.redo_stack.clear();
+    let selection_after = SelectionSnapshot {
+      range: selection_after,
+      reversed: false,
+    };
     if let Some(transaction) = self.undo_stack.iter_mut().find(|t| t.id == id) {
       transaction.selection_after = selection_after;
     } else {
@@ -8843,11 +8676,11 @@ impl Editor {
         selection_before,
         selection_after,
       });
-      self.redo_stack.clear();
     }
   }
 
   pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.finalize_transaction(cx);
     let offset = self.clamp_offset_to_doc_len(offset, cx);
     self.selected_range = offset..offset;
     if !self.is_selecting {
@@ -8869,6 +8702,9 @@ impl Editor {
   }
 
   pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    if !self.is_selecting {
+      self.finalize_transaction(cx);
+    }
     let offset = self.clamp_offset_to_doc_len(offset, cx);
     if self.selection_reversed {
       self.selected_range.start = offset
@@ -9048,6 +8884,7 @@ impl Editor {
   }
 
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
+    self.finalize_transaction(cx);
     if !self.is_selecting {
       self.mouse_selection = None;
     }
@@ -9080,6 +8917,7 @@ impl Editor {
     cx: &mut Context<Self>,
   ) {
     if !self.is_selecting {
+      self.finalize_transaction(cx);
       self.mouse_selection = None;
     }
     self.display_selection = Some(DisplaySelection {
@@ -9948,8 +9786,9 @@ impl EntityInputHandler for Editor {
       .map(|range| self.range_to_utf16(&range, cx))
   }
 
-  fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+  fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
     self.marked_range = None;
+    self.finalize_transaction(cx);
   }
 
   fn replace_text_in_range(
@@ -9975,9 +9814,17 @@ impl EntityInputHandler for Editor {
       .or(self.marked_range.clone())
       .unwrap_or(self.selected_range.clone());
     let range = self.clamp_range_to_doc_len(range, cx);
-    let range = self.clamp_range_to_doc_len(range, cx);
+    let was_composing = self.marked_range.is_some();
+    let standalone = !was_composing
+      && (new_text.contains('\n')
+        || !self.selected_range.is_empty()
+        || new_text.graphemes(true).count() > 1
+        || (!range.is_empty() && !new_text.is_empty()));
+    if standalone {
+      self.finalize_transaction(cx);
+    }
 
-    let selection_before = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
+    let selection_before = self.selection_snapshot(cx);
     let start_line = self.document.read(cx).char_to_line(range.start);
     let end_line = self.document.read(cx).char_to_line(range.end);
 
@@ -9993,9 +9840,19 @@ impl EntityInputHandler for Editor {
     self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
 
     let transaction_id = self.document.update(cx, |doc, cx| {
-      let id = doc.buffer.transaction(Instant::now(), |buffer, tx| {
-        buffer.replace(tx, range.clone(), new_text);
-      });
+      let id = if was_composing {
+        doc
+          .buffer
+          .continue_transaction(Instant::now(), |buffer, transaction| {
+            buffer.replace(transaction, range.clone(), new_text);
+          })
+      } else {
+        doc
+          .buffer
+          .transaction(Instant::now(), |buffer, transaction| {
+            buffer.replace(transaction, range.clone(), new_text);
+          })
+      };
 
       if !doc.should_defer_full_highlight() {
         doc.schedule_recompute_highlights(cx);
@@ -10024,13 +9881,16 @@ impl EntityInputHandler for Editor {
     let doc_len_after = self.document.read(cx).len();
     let new_cursor = (range.start + new_text_chars).min(doc_len_after);
     self.selected_range = new_cursor..new_cursor;
+    self.selection_reversed = false;
     self.marked_range.take();
 
     let selection_after = self.selected_range.clone();
 
-    self.record_transaction(transaction_id, selection_before, selection_after);
-
-    self.is_dirty = true;
+    self.record_transaction(transaction_id, selection_before, selection_after, cx);
+    if standalone || was_composing {
+      self.finalize_transaction(cx);
+    }
+    self.refresh_dirty(cx);
     let _ = window;
     self.ensure_cursor_visible_when_hidden(cx);
     self.refresh_find_matches_after_document_edit(cx);
@@ -10062,6 +9922,12 @@ impl EntityInputHandler for Editor {
       .unwrap_or(self.selected_range.clone());
     let range = self.clamp_range_to_doc_len(range, cx);
 
+    let selection_before = self.selection_snapshot(cx);
+    let continuing_composition = self.marked_range.is_some();
+    if !continuing_composition {
+      self.finalize_transaction(cx);
+    }
+    self.display_selection = None;
     let start_line = self.document.read(cx).char_to_line(range.start);
 
     let line_height = self.measured_editor_line_height();
@@ -10076,8 +9942,17 @@ impl EntityInputHandler for Editor {
 
     self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
 
-    self.document.update(cx, |doc, cx| {
-      doc.replace(range.clone(), new_text, cx);
+    let transaction_id = self.document.update(cx, |doc, cx| {
+      let id = if continuing_composition {
+        doc
+          .buffer
+          .continue_transaction(Instant::now(), |buffer, transaction| {
+            buffer.replace(transaction, range.clone(), new_text);
+          })
+      } else {
+        doc.replace(range.clone(), new_text, cx)
+      };
+      cx.notify();
       if !doc.should_defer_full_highlight() {
         doc.schedule_recompute_highlights(cx);
       }
@@ -10087,6 +9962,7 @@ impl EntityInputHandler for Editor {
         crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
         cx,
       );
+      id
     });
     self.mark_conflict_cache_dirty();
 
@@ -10108,8 +9984,14 @@ impl EntityInputHandler for Editor {
       .map(|new_range| new_range.start + range.start..new_range.end + range.start)
       .unwrap_or_else(|| range.start + new_text_chars..range.start + new_text_chars);
     self.selected_range = Self::clamp_range_to_len(selected_range, doc_len_after);
-
-    self.is_dirty = true;
+    self.selection_reversed = false;
+    self.record_transaction(
+      transaction_id,
+      selection_before,
+      self.selected_range.clone(),
+      cx,
+    );
+    self.refresh_dirty(cx);
     let _ = window;
     self.ensure_cursor_visible_when_hidden(cx);
     self.refresh_find_matches_after_document_edit(cx);
@@ -10556,6 +10438,8 @@ impl Render for Editor {
       )
       .when(editor_actions_enabled, |el| {
         el.on_action(cx.listener(crate::actions::select_all))
+          .on_action(cx.listener(crate::actions::reload_from_disk))
+          .on_action(cx.listener(crate::actions::overwrite_disk))
           .on_action(cx.listener(crate::actions::copy))
           .on_action(cx.listener(crate::actions::find))
           .on_action(cx.listener(crate::actions::find_next))
@@ -10573,6 +10457,9 @@ impl Render for Editor {
       )
       .flex()
       .flex_col()
+      .when(self.disk_conflict, |el| {
+        el.child(self.render_disk_conflict(cx))
+      })
       .when_some(find_panel, |el, panel| el.child(panel))
       .child(content)
   }
@@ -11988,6 +11875,11 @@ pub mod tests {
           index_mtime: None,
           is_dirty: false,
           save_task: None,
+          save_in_flight: false,
+          disk_contents: None,
+          disk_conflict: false,
+          disk_generation: 0,
+          pending_reload_scroll_anchor: None,
           pending_untitled_save_completion: None,
           diff_view_mode: DiffViewMode::Inline,
           ignore_whitespace: false,

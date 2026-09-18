@@ -2,6 +2,7 @@ use std::{
   borrow::Cow,
   collections::VecDeque,
   ops::Range,
+  sync::atomic::{AtomicU64, Ordering},
   time::{Duration, Instant},
 };
 
@@ -10,6 +11,17 @@ use ropey::Rope;
 const DEFAULT_GROUP_INTERVAL_MS: u64 = 300;
 
 pub type TransactionId = usize;
+
+static NEXT_VERSION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BufferVersion(u64);
+
+impl BufferVersion {
+  fn next() -> Self {
+    Self(NEXT_VERSION.fetch_add(1, Ordering::Relaxed))
+  }
+}
 
 /// Context passed to transaction closures to collect operations
 pub struct TransactionContext {
@@ -35,7 +47,7 @@ pub struct TextOperation {
 impl TextOperation {
   pub fn undo(&self) -> Self {
     TextOperation {
-      range: self.range.start..(self.range.start + self.after.len()),
+      range: self.range.start..(self.range.start + self.after.chars().count()),
       before: self.after.clone(),
       after: self.before.clone(),
     }
@@ -48,6 +60,8 @@ struct Transaction {
   id: TransactionId,
   timestamp: Instant,
   operations: Vec<TextOperation>,
+  before_version: BufferVersion,
+  after_version: BufferVersion,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +71,9 @@ pub struct TextBuffer {
   undo_stack: VecDeque<Transaction>,
   redo_stack: VecDeque<Transaction>,
   group_interval: Duration,
+  version: BufferVersion,
+  saved_version: BufferVersion,
+  grouping_allowed: bool,
 }
 
 impl Default for TextBuffer {
@@ -67,25 +84,48 @@ impl Default for TextBuffer {
 
 impl TextBuffer {
   pub fn new() -> Self {
-    Self {
-      text: Rope::new(),
-      next_transaction_id: 0,
-      undo_stack: VecDeque::new(),
-      redo_stack: VecDeque::new(),
-      group_interval: Duration::from_millis(DEFAULT_GROUP_INTERVAL_MS),
-    }
+    Self::from_text("")
   }
 
   pub fn from_text(text: &str) -> Self {
     let mut rope = Rope::new();
     rope.insert(0, text);
+    let version = BufferVersion::next();
     Self {
       text: rope,
       next_transaction_id: 0,
       undo_stack: VecDeque::new(),
       redo_stack: VecDeque::new(),
       group_interval: Duration::from_millis(DEFAULT_GROUP_INTERVAL_MS),
+      version,
+      saved_version: version,
+      grouping_allowed: false,
     }
+  }
+
+  pub fn version(&self) -> BufferVersion {
+    self.version
+  }
+
+  pub fn is_dirty(&self) -> bool {
+    self.version != self.saved_version
+  }
+
+  pub fn mark_unsaved(&mut self) {
+    self.saved_version = BufferVersion::next();
+  }
+
+  pub fn mark_saved(&mut self, version: BufferVersion) {
+    self.saved_version = version;
+    self.finalize_transaction();
+  }
+
+  pub fn finalize_transaction(&mut self) {
+    self.grouping_allowed = false;
+  }
+
+  pub fn last_transaction_id(&self) -> Option<TransactionId> {
+    self.undo_stack.back().map(|transaction| transaction.id)
   }
 
   pub fn len(&self) -> usize {
@@ -158,6 +198,9 @@ impl TextBuffer {
 
   /// Insert text with transaction context
   pub fn insert(&mut self, tx: &mut TransactionContext, offset: usize, text: &str) {
+    if text.is_empty() {
+      return;
+    }
     tx.operations.push(TextOperation {
       range: offset..offset,
       before: String::new(),
@@ -169,6 +212,9 @@ impl TextBuffer {
 
   /// Remove text with transaction context
   pub fn remove(&mut self, tx: &mut TransactionContext, range: Range<usize>) {
+    if range.is_empty() {
+      return;
+    }
     let before = self.slice_to_string(range.clone());
 
     tx.operations.push(TextOperation {
@@ -182,6 +228,9 @@ impl TextBuffer {
 
   /// Replace text with transaction context
   pub fn replace(&mut self, tx: &mut TransactionContext, range: Range<usize>, text: &str) {
+    if self.text.slice(range.clone()) == text {
+      return;
+    }
     self.remove(tx, range.clone());
     self.insert(tx, range.start, text);
   }
@@ -191,28 +240,52 @@ impl TextBuffer {
   where
     F: FnOnce(&mut Self, &mut TransactionContext),
   {
+    self.transact(now, false, f)
+  }
+
+  pub fn continue_transaction<F>(&mut self, now: Instant, f: F) -> TransactionId
+  where
+    F: FnOnce(&mut Self, &mut TransactionContext),
+  {
+    self.transact(now, true, f)
+  }
+
+  fn transact<F>(&mut self, now: Instant, continue_group: bool, f: F) -> TransactionId
+  where
+    F: FnOnce(&mut Self, &mut TransactionContext),
+  {
     let transaction_id = self.next_transaction_id;
     let mut tx = TransactionContext::new();
 
     f(self, &mut tx);
 
     if !tx.operations.is_empty() {
-      self.commit_transaction(tx.operations, now)
+      self.commit_transaction(tx.operations, now, continue_group)
     } else {
       transaction_id
     }
   }
 
-  fn commit_transaction(&mut self, operations: Vec<TextOperation>, now: Instant) -> TransactionId {
+  fn commit_transaction(
+    &mut self,
+    operations: Vec<TextOperation>,
+    now: Instant,
+    continue_group: bool,
+  ) -> TransactionId {
     let transaction_id = self.next_transaction_id;
     self.next_transaction_id += 1;
+    let before_version = self.version;
+    self.version = BufferVersion::next();
 
     if let Some(last) = self.undo_stack.back_mut()
-      && !self.group_interval.is_zero()
-      && now.saturating_duration_since(last.timestamp) < self.group_interval
+      && self.grouping_allowed
+      && (continue_group
+        || (!self.group_interval.is_zero()
+          && now.saturating_duration_since(last.timestamp) < self.group_interval))
     {
       last.operations.extend(operations);
       last.timestamp = now;
+      last.after_version = self.version;
       self.redo_stack.clear();
       return last.id;
     }
@@ -221,7 +294,10 @@ impl TextBuffer {
       id: transaction_id,
       timestamp: now,
       operations,
+      before_version,
+      after_version: self.version,
     });
+    self.grouping_allowed = true;
     self.redo_stack.clear();
     transaction_id
   }
@@ -244,6 +320,8 @@ impl TextBuffer {
       self.exec_operation(&operation.undo());
     }
 
+    self.version = tx.before_version;
+    self.finalize_transaction();
     let id = tx.id;
     self.redo_stack.push_back(tx);
     Some(id)
@@ -256,6 +334,8 @@ impl TextBuffer {
       self.exec_operation(operation);
     }
 
+    self.version = tx.after_version;
+    self.finalize_transaction();
     let id = tx.id;
     self.undo_stack.push_back(tx);
     Some(id)
@@ -277,6 +357,109 @@ impl TextBuffer {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn unicode_operations_roundtrip_without_touching_neighbors() {
+    for inserted in ["é", "🙂", "e\u{301}", "👩‍💻", "日本語", "\r\n"] {
+      for range in [0..0, 1..3, 0..5] {
+        let mut buffer = TextBuffer::from_text("hello");
+        buffer.transaction(Instant::now(), |buffer, transaction| {
+          buffer.replace(transaction, range.clone(), inserted)
+        });
+        let changed = buffer.slice_to_string(0..buffer.len());
+        buffer.undo();
+        assert_eq!(
+          buffer.slice_to_string(0..buffer.len()),
+          "hello",
+          "{inserted:?} {range:?}"
+        );
+        buffer.redo();
+        assert_eq!(buffer.slice_to_string(0..buffer.len()), changed);
+      }
+    }
+  }
+
+  #[test]
+  fn saved_versions_follow_undo_redo_and_split_typing_groups() {
+    let mut buffer = TextBuffer::new();
+    let now = Instant::now();
+    buffer.transaction(now, |buffer, transaction| {
+      buffer.insert(transaction, 0, "a")
+    });
+    let saved = buffer.version();
+    buffer.mark_saved(saved);
+    buffer.transaction(now, |buffer, transaction| {
+      buffer.insert(transaction, 1, "b")
+    });
+    assert!(buffer.is_dirty());
+    buffer.undo();
+    assert_eq!(buffer.slice_to_string(0..buffer.len()), "a");
+    assert!(!buffer.is_dirty());
+    buffer.redo();
+    assert!(buffer.is_dirty());
+    buffer.mark_saved(saved);
+    assert!(buffer.is_dirty());
+  }
+
+  #[test]
+  fn edits_after_undo_do_not_merge_into_older_history() {
+    let mut buffer = TextBuffer::new();
+    let now = Instant::now();
+    buffer.transaction(now, |buffer, transaction| {
+      buffer.insert(transaction, 0, "a")
+    });
+    buffer.finalize_transaction();
+    buffer.transaction(now, |buffer, transaction| {
+      buffer.insert(transaction, 1, "b")
+    });
+    buffer.undo();
+    buffer.transaction(now, |buffer, transaction| {
+      buffer.insert(transaction, 1, "c")
+    });
+    buffer.undo();
+    assert_eq!(buffer.slice_to_string(0..buffer.len()), "a");
+  }
+
+  #[test]
+  fn composition_continues_across_delays_but_not_save_boundaries() {
+    let mut buffer = TextBuffer::new();
+    let now = Instant::now();
+    let first = buffer.transaction(now, |buffer, transaction| {
+      buffer.insert(transaction, 0, "e")
+    });
+    let second = buffer
+      .continue_transaction(now + Duration::from_secs(2), |buffer, transaction| {
+        buffer.replace(transaction, 0..1, "é")
+      });
+    assert_eq!(first, second);
+    buffer.mark_saved(buffer.version());
+    let third = buffer.continue_transaction(now + Duration::from_secs(4), |buffer, transaction| {
+      buffer.insert(transaction, 1, "!")
+    });
+    assert_ne!(first, third);
+    buffer.undo();
+    assert_eq!(buffer.slice_to_string(0..buffer.len()), "é");
+    assert!(!buffer.is_dirty());
+    buffer.undo();
+    assert!(buffer.is_empty());
+  }
+
+  #[test]
+  fn no_op_edits_preserve_version_and_redo_history() {
+    let mut buffer = TextBuffer::from_text("é");
+    let now = Instant::now();
+    buffer.transaction(now, |buffer, transaction| {
+      buffer.insert(transaction, 1, "!")
+    });
+    buffer.undo();
+    let version = buffer.version();
+    buffer.transaction(now, |buffer, transaction| {
+      buffer.replace(transaction, 0..1, "é")
+    });
+    assert_eq!(buffer.version(), version);
+    assert!(!buffer.is_dirty());
+    assert!(buffer.can_redo());
+  }
 
   #[test]
   fn test_new_buffer() {

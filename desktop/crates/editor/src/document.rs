@@ -121,11 +121,17 @@ impl Document {
     cx.notify();
   }
 
-  pub fn replace(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
-    self.buffer.transaction(Instant::now(), |buffer, tx| {
+  pub fn replace(
+    &mut self,
+    range: Range<usize>,
+    text: &str,
+    cx: &mut Context<Self>,
+  ) -> buffer::TransactionId {
+    let id = self.buffer.transaction(Instant::now(), |buffer, tx| {
       buffer.replace(tx, range, text);
     });
     cx.notify();
+    id
   }
 
   pub fn replace_all(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -150,7 +156,7 @@ impl Document {
     should_defer_full_highlight(self.buffer.len_lines(), self.buffer.len())
   }
 
-  fn schedule_initial_highlights(&mut self, cx: &mut Context<Self>) {
+  pub(crate) fn schedule_initial_highlights(&mut self, cx: &mut Context<Self>) {
     if self.highlighter.is_none() {
       return;
     }

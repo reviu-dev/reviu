@@ -126,6 +126,7 @@ impl Editor {
     if self.selection_line_text(cursor.line, view, cx).is_none() {
       return;
     }
+    self.finalize_transaction(cx);
     let extending = event.modifiers.shift && self.selection_view == view;
     let anchor = self.current_display_anchor(cx).unwrap_or(cursor);
     let previous = self

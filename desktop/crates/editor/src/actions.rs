@@ -46,6 +46,8 @@ actions!(
     Undo,
     Redo,
     Save,
+    ReloadFromDisk,
+    OverwriteDisk,
     Find,
     FindNext,
     FindPrevious,
@@ -85,13 +87,13 @@ pub fn backspace(
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty() {
-    editor.select_to(
-      boundaries::previous_boundary(editor, editor.cursor_offset(), cx),
-      cx,
-    )
-  }
-  editor.replace_text_in_range(None, "", window, cx)
+  let range = if editor.selected_range.is_empty() {
+    boundaries::previous_boundary(editor, editor.cursor_offset(), cx)..editor.cursor_offset()
+  } else {
+    editor.selected_range.clone()
+  };
+  let range = editor.range_to_utf16(&range, cx);
+  editor.replace_text_in_range(Some(range), "", window, cx)
 }
 
 pub fn backspace_word(
@@ -101,19 +103,25 @@ pub fn backspace_word(
   cx: &mut Context<Editor>,
 ) {
   editor.target_column = None;
-  if editor.selected_range.is_empty() {
+  editor.finalize_transaction(cx);
+  let range = if editor.selected_range.is_empty() {
     let document = editor.document.read(cx);
     let cursor = editor.cursor_offset();
     let line = document.char_to_line(cursor);
-    let line_start = document.line_to_char(line);
-
-    if cursor == line_start && document.line_content(line).unwrap_or_default().is_empty() {
-      editor.select_to(boundaries::previous_boundary(editor, cursor, cx), cx);
+    let start = if cursor == document.line_to_char(line)
+      && document.line_content(line).unwrap_or_default().is_empty()
+    {
+      boundaries::previous_boundary(editor, cursor, cx)
     } else {
-      editor.select_to(boundaries::previous_word_boundary(editor, cursor, cx), cx);
-    }
-  }
-  editor.replace_text_in_range(None, "", window, cx)
+      boundaries::previous_word_boundary(editor, cursor, cx)
+    };
+    start..cursor
+  } else {
+    editor.selected_range.clone()
+  };
+  let range = editor.range_to_utf16(&range, cx);
+  editor.replace_text_in_range(Some(range), "", window, cx);
+  editor.finalize_transaction(cx);
 }
 
 pub fn backspace_all(
@@ -123,30 +131,36 @@ pub fn backspace_all(
   cx: &mut Context<Editor>,
 ) {
   editor.target_column = None;
-  if editor.selected_range.is_empty() {
+  editor.finalize_transaction(cx);
+  let range = if editor.selected_range.is_empty() {
     let document = editor.document.read(cx);
     let cursor = editor.cursor_offset();
     let line = document.char_to_line(cursor);
     let line_start = document.line_to_char(line);
-
-    if cursor == line_start && document.line_content(line).unwrap_or_default().is_empty() {
-      editor.select_to(boundaries::previous_boundary(editor, cursor, cx), cx);
-    } else {
-      editor.select_to(line_start, cx);
-    }
-  }
-  editor.replace_text_in_range(None, "", window, cx)
+    let start =
+      if cursor == line_start && document.line_content(line).unwrap_or_default().is_empty() {
+        boundaries::previous_boundary(editor, cursor, cx)
+      } else {
+        line_start
+      };
+    start..cursor
+  } else {
+    editor.selected_range.clone()
+  };
+  let range = editor.range_to_utf16(&range, cx);
+  editor.replace_text_in_range(Some(range), "", window, cx);
+  editor.finalize_transaction(cx);
 }
 
 pub fn delete(editor: &mut Editor, _: &Delete, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
-  if editor.selected_range.is_empty() {
-    editor.select_to(
-      boundaries::next_boundary(editor, editor.cursor_offset(), cx),
-      cx,
-    )
-  }
-  editor.replace_text_in_range(None, "", window, cx)
+  let range = if editor.selected_range.is_empty() {
+    editor.cursor_offset()..boundaries::next_boundary(editor, editor.cursor_offset(), cx)
+  } else {
+    editor.selected_range.clone()
+  };
+  let range = editor.range_to_utf16(&range, cx);
+  editor.replace_text_in_range(Some(range), "", window, cx)
 }
 
 pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Editor>) {
@@ -648,6 +662,7 @@ pub fn select_all(editor: &mut Editor, _: &SelectAll, _: &mut Window, cx: &mut C
 }
 
 pub fn paste(editor: &mut Editor, _: &Paste, window: &mut Window, cx: &mut Context<Editor>) {
+  editor.finalize_transaction(cx);
   editor.target_column = None;
   if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
     let cursor = editor.cursor_offset();
@@ -655,6 +670,7 @@ pub fn paste(editor: &mut Editor, _: &Paste, window: &mut Window, cx: &mut Conte
     editor.replace_text_in_range(None, &text, window, cx);
     // Invalidate cache from current line onwards since paste may add multiple lines
     editor.invalidate_lines_from(current_line);
+    editor.finalize_transaction(cx);
   }
 }
 
@@ -665,6 +681,10 @@ pub fn copy(editor: &mut Editor, _: &Copy, _: &mut Window, cx: &mut Context<Edit
 }
 
 pub fn cut(editor: &mut Editor, _: &Cut, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.selection_is_read_only() {
+    return;
+  }
+  editor.finalize_transaction(cx);
   editor.target_column = None;
   if !editor.selected_range.is_empty() {
     let cursor = editor.cursor_offset();
@@ -678,67 +698,34 @@ pub fn cut(editor: &mut Editor, _: &Cut, window: &mut Window, cx: &mut Context<E
     editor.replace_text_in_range(None, "", window, cx);
     // Invalidate cache from current line onwards since cut may affect multiple lines
     editor.invalidate_lines_from(current_line);
+    editor.finalize_transaction(cx);
   }
 }
 
-pub fn undo(editor: &mut Editor, _: &Undo, _window: &mut Window, cx: &mut Context<Editor>) {
-  if let Some(transaction) = editor.undo_stack.pop_back() {
-    let buffer_tx_id = editor.document.update(cx, |doc, cx| {
-      let result = doc.undo(cx);
-
-      if result.is_some() {
-        doc.schedule_recompute_highlights(cx);
-      }
-
-      result
-    });
-
-    if buffer_tx_id.is_some() {
-      editor.selected_range = transaction.selection_before.clone();
-      editor.selection_reversed = false;
-
-      editor.line_layouts.clear();
-
-      editor.redo_stack.push_back(transaction);
-      editor.is_dirty = true;
-
-      editor.refresh_find_matches_after_document_edit(cx);
-      cx.notify();
-      editor.schedule_diff_recompute(cx);
-    } else {
-      editor.undo_stack.push_back(transaction);
-    }
-  }
+pub fn undo(editor: &mut Editor, _: &Undo, window: &mut Window, cx: &mut Context<Editor>) {
+  editor.undo_edit(false, window, cx);
 }
 
-pub fn redo(editor: &mut Editor, _: &Redo, _window: &mut Window, cx: &mut Context<Editor>) {
-  if let Some(transaction) = editor.redo_stack.pop_back() {
-    let buffer_tx_id = editor.document.update(cx, |doc, cx| {
-      let result = doc.redo(cx);
+pub fn redo(editor: &mut Editor, _: &Redo, window: &mut Window, cx: &mut Context<Editor>) {
+  editor.undo_edit(true, window, cx);
+}
 
-      if result.is_some() {
-        doc.schedule_recompute_highlights(cx);
-      }
+pub fn reload_from_disk(
+  editor: &mut Editor,
+  _: &ReloadFromDisk,
+  _: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.reload_changed_file(cx);
+}
 
-      result
-    });
-
-    if buffer_tx_id.is_some() {
-      editor.selected_range = transaction.selection_after.clone();
-      editor.selection_reversed = false;
-
-      editor.line_layouts.clear();
-
-      editor.undo_stack.push_back(transaction);
-      editor.is_dirty = true;
-
-      editor.refresh_find_matches_after_document_edit(cx);
-      cx.notify();
-      editor.schedule_diff_recompute(cx);
-    } else {
-      editor.redo_stack.push_back(transaction);
-    }
-  }
+pub fn overwrite_disk(
+  editor: &mut Editor,
+  _: &OverwriteDisk,
+  _: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.overwrite_changed_file(cx);
 }
 
 pub fn save(editor: &mut Editor, _: &Save, _window: &mut Window, cx: &mut Context<Editor>) {

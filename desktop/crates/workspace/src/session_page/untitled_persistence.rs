@@ -174,6 +174,13 @@ impl SessionPage {
         editor.selected_range = start..snapshot.selection.end.clamp(start, length);
         editor.selection_reversed = snapshot.selection_reversed;
         editor.is_dirty = snapshot.dirty;
+        editor.document.update(cx, |document, _| {
+          if snapshot.dirty {
+            document.buffer.mark_unsaved();
+          } else {
+            document.buffer.mark_saved(document.buffer.version());
+          }
+        });
         editor.set_git_diff_enabled(false, cx);
         editor
       });
