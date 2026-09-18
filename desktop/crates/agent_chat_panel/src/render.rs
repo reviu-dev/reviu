@@ -1739,6 +1739,18 @@ pub(crate) fn permission_header_subtitle(item: &PermissionItem) -> Option<String
   }
 }
 
+pub(crate) fn permission_option_display_label(
+  option: &agent_acp::PermissionPromptOption,
+) -> SharedString {
+  match &option.kind {
+    PermissionOptionKind::AllowOnce => "Yes".into(),
+    PermissionOptionKind::AllowAlways => "Always allow similar".into(),
+    PermissionOptionKind::RejectOnce => "No".into(),
+    PermissionOptionKind::RejectAlways => "Always deny similar".into(),
+    _ => option.label.clone().into(),
+  }
+}
+
 fn permission_option_button(
   prompt_id: u64,
   option: &agent_acp::PermissionPromptOption,
@@ -1746,8 +1758,13 @@ fn permission_option_button(
 ) -> Button {
   let option_id = option.option_id.clone();
   let button_id = format!("perm-{}-{}", prompt_id, option.option_id);
+  let display_label = permission_option_display_label(option);
+  let full_label = SharedString::from(option.label.clone());
   let button = Button::new(SharedString::from(button_id))
-    .label(option.label.clone())
+    .label(display_label.clone())
+    .accessibility_label(full_label.clone())
+    .tooltip(full_label)
+    .max_w(px(168.))
     .small()
     .on_click(cx.listener(move |panel, _, _, cx| {
       panel.answer_permission(prompt_id, Some(option_id.clone()), cx);

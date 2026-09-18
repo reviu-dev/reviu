@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.3.0
 
+### Compact Permission Actions
+
+Permission prompts now keep approval buttons short and stable, with long agent-provided labels available as tooltips so the primary action no longer shifts around.
+
 ### Softer Ignored Files
 
 The Files panel now keeps visible gitignored files visually quieter, so generated folders stay available without competing with regular project files.

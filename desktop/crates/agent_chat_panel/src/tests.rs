@@ -467,6 +467,32 @@ fn auto_approve_picks_allow_once_then_allow_always_and_never_reject() {
   assert_eq!(auto_approve_option(&reject_only), None);
 }
 
+#[test]
+fn permission_option_labels_keep_actions_compact() {
+  let opt = |label: &str, kind: PermissionOptionKind| PermissionPromptOption {
+    option_id: label.into(),
+    label: label.into(),
+    kind,
+  };
+
+  assert_eq!(
+    permission_option_display_label(&opt(
+      "Yes, and allow access to a very long path and similar commands",
+      PermissionOptionKind::AllowAlways,
+    ))
+    .as_ref(),
+    "Always allow similar",
+  );
+  assert_eq!(
+    permission_option_display_label(&opt("Allow Once", PermissionOptionKind::AllowOnce)).as_ref(),
+    "Yes",
+  );
+  assert_eq!(
+    permission_option_display_label(&opt("Reject", PermissionOptionKind::RejectOnce)).as_ref(),
+    "No",
+  );
+}
+
 fn bench_diff_tool(id: &str, lines: usize) -> ChatItem {
   let arc: std::sync::Arc<str> = std::sync::Arc::from(id);
   let diff_lines: Vec<crate::diff::DiffLine> = (0..lines)
