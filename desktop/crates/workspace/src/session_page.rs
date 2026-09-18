@@ -316,7 +316,7 @@ pub struct SessionPage {
   editor_states: HashMap<CenterTab, CenterEditorState>,
   terminal_views: HashMap<u64, TerminalPane>,
   next_terminal_id: u64,
-  next_untitled_id: u64,
+  untitled_buffers: HashMap<u64, untitled_persistence::UntitledBuffer>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   project_search_view: Option<Entity<ProjectSearchView>>,
   _interactive_rebase_task: Option<Task<()>>,
@@ -384,6 +384,7 @@ mod review_github;
 mod terminal_viewer;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod untitled_persistence;
 
 impl SessionPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -673,7 +674,7 @@ impl SessionPage {
       editor_states: HashMap::new(),
       terminal_views: HashMap::new(),
       next_terminal_id: 1,
-      next_untitled_id: 1,
+      untitled_buffers: HashMap::new(),
       interactive_rebase_todo_view: None,
       project_search_view: None,
       _interactive_rebase_task: None,
@@ -717,6 +718,13 @@ impl SessionPage {
       _poll_task: None,
     };
     SessionPageHandle::register(cx);
+    cx.on_app_quit(|page, cx| {
+      if let Err(error) = page.flush_untitled_buffers(cx) {
+        page.report_untitled_error(error, cx);
+      }
+      async {}
+    })
+    .detach();
     // Bounded aggregation: the recent projects get their stores up front so the
     // sidebar can list them without touching anything else.
     for project in page.initial_session_sidebar_projects() {
@@ -1130,6 +1138,7 @@ impl SessionPage {
       return;
     }
     if let Some(previous_checkout) = self.synced_checkout.clone() {
+      self.save_active_center_layout();
       self.persist_center_workspace(&previous_checkout, cx);
       let tabs = self
         .center_tabs
@@ -1173,13 +1182,13 @@ impl SessionPage {
       .unwrap_or_else(CenterTab::chat);
 
     self.synced_checkout = checkout.clone();
-    self.close_diff(window, cx);
     self.center = CenterView::Conversation;
     self.center_tabs = restored_tabs;
     self.center_tab_history = CenterTab::default_tabs();
-    self.set_active_center_tab(CenterTab::chat());
+    self.center_layout = CenterLayout::single(CenterSurface::from_tab(CenterTab::chat()));
+    self.active_center_tab = None;
     self.editor_tab = None;
-    self.editor_states.clear();
+    self.editor_states.retain(|tab, _| tab.is_untitled());
     self.open_file_task = None;
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     self.repo_snapshot.update(cx, |snapshot, cx| {
@@ -1439,6 +1448,10 @@ impl SessionPage {
         .conversation_id()
         .and_then(|id| self.session_checkout_for_id(id, cx))
         .is_none_or(|path| path == checkout),
+      CenterTabKind::File if tab.is_untitled() => tab
+        .untitled_id()
+        .and_then(|id| self.untitled_buffers.get(&id))
+        .is_some_and(|buffer| buffer.checkout_root == Self::canonical_repo(checkout)),
       CenterTabKind::File | CenterTabKind::Diff | CenterTabKind::ProjectSearch => true,
       CenterTabKind::InteractiveRebase => false,
       CenterTabKind::Terminal => tab

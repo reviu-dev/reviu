@@ -13,6 +13,9 @@ pub(super) enum PersistedCenterTab {
   File {
     path: std::path::PathBuf,
   },
+  Untitled {
+    id: u64,
+  },
   Diff {
     path: std::path::PathBuf,
     snapshot: Option<CenterTabSnapshot>,
@@ -569,6 +572,9 @@ pub(super) fn persisted_center_tab(
   match tab.kind {
     CenterTabKind::Chat => Some(PersistedCenterTab::Chat {
       conversation_id: tab.conversation_id.clone(),
+    }),
+    CenterTabKind::File if tab.is_untitled() => Some(PersistedCenterTab::Untitled {
+      id: tab.untitled_id()?,
     }),
     CenterTabKind::File => Some(PersistedCenterTab::File {
       path: tab.path.clone()?,

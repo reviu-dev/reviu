@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.3.0
 
+### Untitled Draft Recovery
+
+Untitled tabs now keep their contents, selection and split placement across restarts, with automatic local backups for crash recovery. Quit without naming your drafts and pick up where you left off; saving or explicitly discarding a tab removes its backup without creating placeholder files in your project.
+
 ### Dock Shortcut Hints
 
 Hovering a dock tab now shows its keyboard shortcut alongside its name, including any shortcut you have customized in Settings.

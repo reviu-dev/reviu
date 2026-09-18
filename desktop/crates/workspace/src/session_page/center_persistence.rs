@@ -81,6 +81,15 @@ impl SessionPage {
         terminal_id: None,
         untitled_id: None,
       }),
+      PersistedCenterTab::Untitled { id } => {
+        let tab = CenterTab::untitled(*id);
+        self
+          .untitled_buffers
+          .get(id)
+          .filter(|buffer| buffer.checkout_root == Self::canonical_repo(checkout_root))
+          .filter(|_| self.editor_states.contains_key(&tab))
+          .map(|_| tab)
+      }
       PersistedCenterTab::ProjectSearch => Some(CenterTab::project_search()),
       PersistedCenterTab::Terminal { key } => terminals.get(key).cloned(),
     }
@@ -95,20 +104,35 @@ impl SessionPage {
     if self.center_tabs_by_checkout.contains_key(checkout_root) {
       return;
     }
-    let Some(state) = ConfigStore::load_center_workspace(checkout_root) else {
-      return;
-    };
-    let Ok(state) = serde_json::from_str::<PersistedCenterWorkspace>(&state) else {
-      log::warn!(
-        "Failed to parse persisted center workspace for {}",
-        checkout_root.display()
-      );
-      ConfigStore::forget_center_workspace(checkout_root);
-      return;
-    };
-    if state.version != CENTER_WORKSPACE_VERSION {
-      ConfigStore::forget_center_workspace(checkout_root);
-      return;
+    let untitled_tabs = self.restore_untitled_buffers(checkout_root, window, cx);
+    let mut state = ConfigStore::load_center_workspace(checkout_root)
+      .and_then(
+        |state| match serde_json::from_str::<PersistedCenterWorkspace>(&state) {
+          Ok(state) if state.version == CENTER_WORKSPACE_VERSION => Some(state),
+          _ => {
+            log::warn!(
+              "Ignoring invalid center workspace for {}",
+              checkout_root.display()
+            );
+            ConfigStore::forget_center_workspace(checkout_root);
+            None
+          }
+        },
+      )
+      .unwrap_or_else(|| PersistedCenterWorkspace {
+        version: CENTER_WORKSPACE_VERSION,
+        terminals: Vec::new(),
+        tabs: Vec::new(),
+        layouts: Vec::new(),
+        active_tab: None,
+      });
+    let known_tabs = collect_workspace_tabs(&state);
+    for tab in &untitled_tabs {
+      if let Some(tab) = persisted_center_tab(tab, &HashMap::new())
+        && !known_tabs.contains(&tab)
+      {
+        state.tabs.push(tab);
+      }
     }
 
     let project_root = self
@@ -158,6 +182,15 @@ impl SessionPage {
         tabs.push(representative.clone());
       }
       restored_layouts.insert(representative, layout);
+    }
+    for tab in untitled_tabs {
+      if !tabs.contains(&tab)
+        && !restored_layouts
+          .values()
+          .any(|layout| layout.contains_tab(&tab))
+      {
+        tabs.push(tab);
+      }
     }
     if tabs.is_empty() {
       ConfigStore::forget_center_workspace(checkout_root);
@@ -259,7 +292,11 @@ impl SessionPage {
         conversation_id: None
       }]
     );
-    if tabs.is_empty() || (only_placeholder && terminals.is_empty()) {
+    let has_untitled_buffers = self
+      .untitled_buffers
+      .values()
+      .any(|buffer| buffer.checkout_root == checkout_root);
+    if tabs.is_empty() || (only_placeholder && terminals.is_empty() && !has_untitled_buffers) {
       ConfigStore::forget_center_workspace(checkout_root);
       return;
     }

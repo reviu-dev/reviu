@@ -76,14 +76,20 @@ const CENTER_WORKSPACES_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS center_workspaces (checkout_path TEXT PRIMARY KEY, project_path TEXT NOT NULL, state TEXT NOT NULL)",
 };
 
+const UNTITLED_BUFFERS_TABLE: ConfigTable = ConfigTable {
+  name: "untitled_buffers",
+  create_sql: "CREATE TABLE IF NOT EXISTS untitled_buffers (id INTEGER PRIMARY KEY AUTOINCREMENT, checkout_path TEXT NOT NULL, state TEXT NOT NULL)",
+};
+
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 5] = [
+const CONFIG_TABLES: [ConfigTable; 6] = [
   PROJECTS_TABLE,
   COMMAND_USAGES_TABLE,
   ANALYTICS_META_TABLE,
   MERGE_METHODS_TABLE,
   CENTER_WORKSPACES_TABLE,
+  UNTITLED_BUFFERS_TABLE,
 ];
 
 type Migration = fn(&Connection) -> rusqlite::Result<()>;
@@ -101,6 +107,7 @@ const MIGRATIONS: &[Migration] = [
   migrate_v7_drop_retired_github_home_tables,
   migrate_v8_ensure_final_config_tables,
   migrate_v9_center_workspaces,
+  migrate_v10_untitled_buffers,
 ]
 .as_slice();
 
@@ -240,6 +247,11 @@ fn migrate_v8_ensure_final_config_tables(conn: &Connection) -> rusqlite::Result<
 
 fn migrate_v9_center_workspaces(conn: &Connection) -> rusqlite::Result<()> {
   conn.execute(CENTER_WORKSPACES_TABLE.create_sql, [])?;
+  Ok(())
+}
+
+fn migrate_v10_untitled_buffers(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(UNTITLED_BUFFERS_TABLE.create_sql, [])?;
   Ok(())
 }
 
@@ -847,6 +859,55 @@ impl ConfigStore {
     ) {
       log::warn!("Failed to persist merge method: {}", err);
     }
+  }
+
+  pub fn create_untitled_buffer(checkout_path: &Path, state: &str) -> anyhow::Result<u64> {
+    let store = Self::open_with_tables()
+      .ok_or_else(|| anyhow::anyhow!("Could not open the local draft database"))?;
+    store.conn.execute(
+      "INSERT INTO untitled_buffers (checkout_path, state) VALUES (?1, ?2)",
+      params![checkout_path.to_string_lossy().as_ref(), state],
+    )?;
+    Ok(store.conn.last_insert_rowid().try_into()?)
+  }
+
+  pub fn load_untitled_buffers(checkout_path: &Path) -> anyhow::Result<Vec<(u64, String)>> {
+    let store = Self::open_with_tables()
+      .ok_or_else(|| anyhow::anyhow!("Could not open the local draft database"))?;
+    let mut statement = store
+      .conn
+      .prepare("SELECT id, state FROM untitled_buffers WHERE checkout_path = ?1 ORDER BY id")?;
+    statement
+      .query_map(params![checkout_path.to_string_lossy().as_ref()], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+      })?
+      .collect::<rusqlite::Result<Vec<_>>>()?
+      .into_iter()
+      .map(|(id, state)| Ok((id.try_into()?, state)))
+      .collect()
+  }
+
+  pub fn persist_untitled_buffer(id: u64, state: &str) -> anyhow::Result<()> {
+    let store = Self::open_with_tables()
+      .ok_or_else(|| anyhow::anyhow!("Could not open the local draft database"))?;
+    anyhow::ensure!(
+      store.conn.execute(
+        "UPDATE untitled_buffers SET state = ?2 WHERE id = ?1",
+        params![i64::try_from(id)?, state],
+      )? == 1,
+      "The local draft no longer exists"
+    );
+    Ok(())
+  }
+
+  pub fn forget_untitled_buffer(id: u64) -> anyhow::Result<()> {
+    let store = Self::open_with_tables()
+      .ok_or_else(|| anyhow::anyhow!("Could not open the local draft database"))?;
+    store.conn.execute(
+      "DELETE FROM untitled_buffers WHERE id = ?1",
+      params![i64::try_from(id)?],
+    )?;
+    Ok(())
   }
 
   pub fn load_center_workspace(checkout_path: &Path) -> Option<String> {
@@ -1792,6 +1853,7 @@ mod tests {
     "analytics_meta",
     "merge_methods",
     "center_workspaces",
+    "untitled_buffers",
   ];
 
   const LEGACY_PROJECT_TABLES: &[&str] = &[

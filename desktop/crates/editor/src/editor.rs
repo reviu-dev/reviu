@@ -1278,8 +1278,16 @@ impl Editor {
   }
 
   pub fn new_untitled(repo_root: PathBuf, cx: &mut Context<Self>) -> Self {
+    Self::new_untitled_with_content(repo_root, String::new(), cx)
+  }
+
+  pub fn new_untitled_with_content(
+    repo_root: PathBuf,
+    content: String,
+    cx: &mut Context<Self>,
+  ) -> Self {
     let loaded = EditorFileLoad {
-      content: String::new(),
+      content,
       binary_bytes: None,
       is_read_only: false,
       language_hint: None,
