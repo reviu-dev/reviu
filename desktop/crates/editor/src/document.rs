@@ -162,6 +162,15 @@ impl Document {
     cx.notify();
   }
 
+  pub(crate) fn line_ending(&self) -> &'static str {
+    let end = self.line_range(0).map_or(0, |range| range.end);
+    if self.slice_to_string(end.saturating_sub(2)..end) == "\r\n" {
+      "\r\n"
+    } else {
+      "\n"
+    }
+  }
+
   pub(crate) fn language_config(&self) -> Option<&'static syntax::LanguageConfig> {
     self
       .highlighter

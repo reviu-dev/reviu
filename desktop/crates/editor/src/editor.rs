@@ -77,6 +77,8 @@ use mouse_selection::MouseSelection;
 mod document_lifecycle;
 #[path = "editing.rs"]
 mod editing;
+#[path = "line_actions.rs"]
+mod line_actions;
 use document_lifecycle::SelectionSnapshot;
 
 #[derive(Clone, Debug)]
@@ -10392,7 +10394,11 @@ impl Render for Editor {
       .child(EditorScrollbarElement::vertical(editor_entity));
 
     div()
-      .key_context("Editor")
+      .key_context(if self.git_diff_enabled {
+        "Editor"
+      } else {
+        "Editor CodeEditor"
+      })
       .track_focus(&self.focus_handle(cx))
       .cursor(CursorStyle::IBeam)
       .size_full()
@@ -10404,6 +10410,14 @@ impl Render for Editor {
           el.on_action(cx.listener(crate::actions::enter))
             .on_action(cx.listener(crate::actions::tab))
             .on_action(cx.listener(crate::actions::outdent))
+            .on_action(cx.listener(crate::actions::move_line_up))
+            .on_action(cx.listener(crate::actions::move_line_down))
+            .on_action(cx.listener(crate::actions::duplicate_line_up))
+            .on_action(cx.listener(crate::actions::duplicate_line_down))
+            .on_action(cx.listener(crate::actions::delete_line))
+            .on_action(cx.listener(crate::actions::newline_above))
+            .on_action(cx.listener(crate::actions::newline_below))
+            .on_action(cx.listener(crate::actions::toggle_comments))
             .on_action(cx.listener(crate::actions::backspace))
             .on_action(cx.listener(crate::actions::backspace_word))
             .on_action(cx.listener(crate::actions::backspace_all))

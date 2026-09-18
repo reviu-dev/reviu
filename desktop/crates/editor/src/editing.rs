@@ -6,12 +6,12 @@ use syntax::{SyntaxHighlighter, TokenType};
 #[path = "editing_tests.rs"]
 mod tests;
 
-struct Edit {
-  range: Range<usize>,
-  text: String,
+pub(super) struct TextEdit {
+  pub range: Range<usize>,
+  pub text: String,
 }
 
-fn map_offset(offset: usize, edits: &[Edit]) -> usize {
+pub(super) fn map_offset(offset: usize, edits: &[TextEdit]) -> usize {
   let mut removed = 0;
   let mut inserted = 0;
   for edit in edits {
@@ -129,7 +129,7 @@ fn non_code_at_end(source: &str, highlights: &[syntax::HighlightSpan], language:
   depth > 0 || quote.is_some()
 }
 
-fn block_opener(document: &Document, prefix: &str, line_start: usize) -> Option<char> {
+pub(super) fn block_opener(document: &Document, prefix: &str, line_start: usize) -> Option<char> {
   let config = document.language_config()?;
   if !prefix.trim_end().ends_with(['{', '[', '(', ':'])
     && !["//", "/*", "#"]
@@ -186,14 +186,14 @@ fn block_opener(document: &Document, prefix: &str, line_start: usize) -> Option<
 }
 
 impl Editor {
-  fn can_indent(&self, cx: &App) -> bool {
+  pub(super) fn can_edit_text(&self, cx: &App) -> bool {
     !self.selection_is_read_only()
       && !(self.selected_range.is_empty() && self.is_read_only_display_cursor(cx))
   }
 
-  fn apply_indentation_edits(
+  pub(super) fn apply_text_edits(
     &mut self,
-    edits: Vec<Edit>,
+    edits: Vec<TextEdit>,
     selection: SelectionSnapshot,
     cx: &mut Context<Self>,
   ) {
@@ -203,6 +203,15 @@ impl Editor {
     let before = self.selection_snapshot(cx);
     self.finalize_transaction(cx);
     let document = self.document.read(cx);
+    if edits
+      .iter()
+      .all(|edit| document.slice_to_string(edit.range.clone()) == edit.text)
+    {
+      self.restore_selection(selection, cx);
+      self.ensure_cursor_visible_when_hidden(cx);
+      cx.notify();
+      return;
+    }
     let start_line = document.char_to_line(edits.first().map_or(0, |edit| edit.range.start));
     let end_line = document.char_to_line(edits.last().map_or(0, |edit| edit.range.end));
     self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
@@ -230,7 +239,7 @@ impl Editor {
   }
 
   pub(crate) fn insert_indented_newline(&mut self, cx: &mut Context<Self>) {
-    if !self.can_indent(cx) {
+    if !self.can_edit_text(cx) {
       return;
     }
     let document = self.document.read(cx);
@@ -246,9 +255,7 @@ impl Editor {
         .map_or(0, |line| line.chars().count()))
     .max(range.end);
     let suffix = document.slice_to_string(range.end..suffix_end);
-    let first_line_end = document.line_range(0).map_or(0, |range| range.end);
-    let ending = document.slice_to_string(first_line_end.saturating_sub(2)..first_line_end);
-    let newline = if ending == "\r\n" { "\r\n" } else { "\n" };
+    let newline = document.line_ending();
     let opener = block_opener(document, &prefix, line_start);
     let extra_indent = opener
       .map(|_| document.indentation.unit())
@@ -276,8 +283,8 @@ impl Editor {
     if paired {
       text.push_str(&format!("{newline}{indent}"));
     }
-    self.apply_indentation_edits(
-      vec![Edit { range, text }],
+    self.apply_text_edits(
+      vec![TextEdit { range, text }],
       SelectionSnapshot {
         range: cursor..cursor,
         reversed: false,
@@ -287,7 +294,7 @@ impl Editor {
   }
 
   pub(crate) fn indent_selection(&mut self, outdent: bool, cx: &mut Context<Self>) {
-    if !self.can_indent(cx) {
+    if !self.can_edit_text(cx) {
       return;
     }
     let document = self.document.read(cx);
@@ -299,8 +306,8 @@ impl Editor {
         document.slice_to_string(document.line_to_char(first_line)..selection.range.start);
       let text = indentation.tab_at(indentation.columns(&prefix));
       let cursor = selection.range.start + text.chars().count();
-      self.apply_indentation_edits(
-        vec![Edit {
+      self.apply_text_edits(
+        vec![TextEdit {
           range: selection.range,
           text,
         }],
@@ -341,13 +348,13 @@ impl Editor {
             column <= target
           })
           .count();
-        edits.push(Edit {
+        edits.push(TextEdit {
           range: start + kept..start + prefix.chars().count(),
           text: String::new(),
         });
       } else {
         let offset = start + prefix.chars().count();
-        edits.push(Edit {
+        edits.push(TextEdit {
           range: offset..offset,
           text: indentation.tab_at(columns),
         });
@@ -357,6 +364,6 @@ impl Editor {
       range: map_offset(selection.range.start, &edits)..map_offset(selection.range.end, &edits),
       reversed: selection.reversed,
     };
-    self.apply_indentation_edits(edits, after, cx);
+    self.apply_text_edits(edits, after, cx);
   }
 }

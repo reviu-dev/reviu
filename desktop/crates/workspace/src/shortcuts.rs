@@ -2,11 +2,12 @@ use std::{borrow::Cow, collections::HashMap};
 
 use editor::{
   AltLeft, AltRight, Backspace, BackspaceAll, BackspaceWord, CloseFind, CmdDown, CmdLeft, CmdRight,
-  CmdUp, Copy, Cut, Delete, Down, End, Enter, Find, FindNext, FindPrevious, Home, Left, Outdent,
-  Paste, Quit, Redo, Right, Save, SelectAll, SelectCmdDown, SelectCmdLeft, SelectCmdRight,
+  CmdUp, Copy, Cut, Delete, DeleteLine, Down, DuplicateLineDown, DuplicateLineUp, End, Enter, Find,
+  FindNext, FindPrevious, Home, Left, MoveLineDown, MoveLineUp, NewlineAbove, NewlineBelow,
+  Outdent, Paste, Quit, Redo, Right, Save, SelectAll, SelectCmdDown, SelectCmdLeft, SelectCmdRight,
   SelectCmdUp, SelectDown, SelectLeft, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
-  ShowCharacterPalette, Tab, ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, Undo,
-  Up,
+  ShowCharacterPalette, Tab, ToggleComments, ToggleFindCaseSensitive, ToggleFindRegex,
+  ToggleFindWholeWord, Undo, Up,
 };
 use gpui::{Action, App, Global, KeyBinding, KeyContext, Keystroke, Window};
 use ui::{COMMAND_PALETTE_CONTEXT, CommandPaletteCommand, CommandPaletteCommandId};
@@ -60,7 +61,7 @@ const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceSession";
 const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_SESSION_CONTEXT: &str = "WorkspaceSession";
-const HUNK_OR_CONFLICT_ACTION_FOCUS: &str = "List || Editor";
+const HUNK_OR_CONFLICT_ACTION_FOCUS: &str = "List || (Editor && !CodeEditor)";
 const FILE_ACTION_FOCUS: &str = "List";
 const COMMENT_HUNK_CONTEXT: &str = "WorkspaceSession";
 const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
@@ -693,7 +694,7 @@ struct ReservedAppBinding {
   keystroke: &'static str,
 }
 
-const RESERVED_APP_BINDINGS: [ReservedAppBinding; 39] = [
+const RESERVED_APP_BINDINGS: &[ReservedAppBinding] = &[
   ReservedAppBinding {
     title: "Confirm",
     keystroke: "enter",
@@ -843,6 +844,38 @@ const RESERVED_APP_BINDINGS: [ReservedAppBinding; 39] = [
     keystroke: "end",
   },
   ReservedAppBinding {
+    title: "Move Line Up",
+    keystroke: "alt-up",
+  },
+  ReservedAppBinding {
+    title: "Move Line Down",
+    keystroke: "alt-down",
+  },
+  ReservedAppBinding {
+    title: "Duplicate Line Up",
+    keystroke: "alt-shift-up",
+  },
+  ReservedAppBinding {
+    title: "Duplicate Line Down",
+    keystroke: "alt-shift-down",
+  },
+  ReservedAppBinding {
+    title: "Delete Line",
+    keystroke: "cmd-shift-k",
+  },
+  ReservedAppBinding {
+    title: "Insert Line Below",
+    keystroke: "ctrl-enter",
+  },
+  ReservedAppBinding {
+    title: "Insert Line Above",
+    keystroke: "ctrl-shift-enter",
+  },
+  ReservedAppBinding {
+    title: "Toggle Comments",
+    keystroke: "ctrl-/",
+  },
+  ReservedAppBinding {
     title: "Character Palette",
     keystroke: "ctrl-cmd-space",
   },
@@ -854,7 +887,12 @@ const RESERVED_APP_BINDINGS: [ReservedAppBinding; 39] = [
 
 impl ShortcutDefinition {
   fn key_binding_with_keystroke(self, keystroke: &str, generation: u32) -> KeyBinding {
-    let base = shortcut_binding_context(&guarded_shortcut_context(self.context), generation);
+    let context = if self.id == ShortcutId::ToggleDiffView {
+      format!("{} && !CodeEditor", self.context)
+    } else {
+      self.context.to_string()
+    };
+    let base = shortcut_binding_context(&guarded_shortcut_context(&context), generation);
     let context = if let Some(descendant_focus) = self.descendant_focus() {
       format!("({}) > ({})", base, descendant_focus)
     } else {
@@ -1252,6 +1290,25 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("enter", Enter, None),
     KeyBinding::new("tab", Tab, None),
     KeyBinding::new("shift-tab", Outdent, Some("Editor && !Input")),
+    KeyBinding::new("alt-up", MoveLineUp, Some("Editor && !Input")),
+    KeyBinding::new("alt-down", MoveLineDown, Some("Editor && !Input")),
+    KeyBinding::new("alt-shift-up", DuplicateLineUp, Some("Editor && !Input")),
+    KeyBinding::new(
+      "alt-shift-down",
+      DuplicateLineDown,
+      Some("Editor && !Input"),
+    ),
+    KeyBinding::new("cmd-shift-k", DeleteLine, Some("Editor && !Input")),
+    KeyBinding::new("cmd-enter", NewlineBelow, Some("CodeEditor && !Input")),
+    KeyBinding::new(
+      "cmd-shift-enter",
+      NewlineAbove,
+      Some("CodeEditor && !Input"),
+    ),
+    KeyBinding::new("cmd-/", ToggleComments, Some("CodeEditor && !Input")),
+    KeyBinding::new("ctrl-enter", NewlineBelow, Some("Editor && !Input")),
+    KeyBinding::new("ctrl-shift-enter", NewlineAbove, Some("Editor && !Input")),
+    KeyBinding::new("ctrl-/", ToggleComments, Some("Editor && !Input")),
     KeyBinding::new("backspace", Backspace, None),
     KeyBinding::new("alt-backspace", BackspaceWord, None),
     KeyBinding::new("cmd-backspace", BackspaceAll, None),
@@ -1670,6 +1727,73 @@ mod tests {
         .map(|(id, keystroke)| (*id, (*keystroke).to_string()))
         .collect(),
     }
+  }
+
+  #[test]
+  fn line_editing_shortcuts_are_scoped_and_preserve_review_commands() {
+    for (key, action) in [
+      ("alt-up", MoveLineUp::name_for_type()),
+      ("alt-down", MoveLineDown::name_for_type()),
+      ("alt-shift-up", DuplicateLineUp::name_for_type()),
+      ("alt-shift-down", DuplicateLineDown::name_for_type()),
+      ("cmd-shift-k", DeleteLine::name_for_type()),
+      ("cmd-enter", NewlineBelow::name_for_type()),
+      ("cmd-shift-enter", NewlineAbove::name_for_type()),
+      ("cmd-/", ToggleComments::name_for_type()),
+      ("ctrl-enter", NewlineBelow::name_for_type()),
+      ("ctrl-shift-enter", NewlineAbove::name_for_type()),
+      ("ctrl-/", ToggleComments::name_for_type()),
+    ] {
+      assert_eq!(
+        first_binding_action_name(
+          "workspace",
+          &["Editor CodeEditor"],
+          key,
+          app_and_workspace_key_bindings()
+        ),
+        Some(action),
+        "{key}"
+      );
+      for contexts in [
+        &["Editor CodeEditor", "Input"][..],
+        &["Input"][..],
+        &["Terminal"][..],
+        &["List"][..],
+      ] {
+        assert_ne!(
+          first_binding_action_name("workspace", contexts, key, app_and_workspace_key_bindings()),
+          Some(action),
+          "{key}: {contexts:?}"
+        );
+      }
+    }
+    assert_eq!(
+      first_binding_action_name(
+        "workspace",
+        &["Editor"],
+        "cmd-/",
+        app_and_workspace_key_bindings()
+      ),
+      Some(ToggleDiffView::name_for_type())
+    );
+    assert_eq!(
+      first_binding_action_name(
+        "workspace",
+        &["Editor"],
+        "cmd-shift-enter",
+        app_and_workspace_key_bindings()
+      ),
+      Some(AcceptBothConflict::name_for_type())
+    );
+    assert_eq!(
+      first_binding_action_name(
+        "workspace",
+        &["List"],
+        "cmd-enter",
+        app_and_workspace_key_bindings()
+      ),
+      Some(ToggleFileStage::name_for_type())
+    );
   }
 
   #[test]

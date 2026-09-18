@@ -13,6 +13,14 @@ actions!(
     Enter,
     Tab,
     Outdent,
+    MoveLineUp,
+    MoveLineDown,
+    DuplicateLineUp,
+    DuplicateLineDown,
+    DeleteLine,
+    NewlineAbove,
+    NewlineBelow,
+    ToggleComments,
     Backspace,
     BackspaceWord,
     BackspaceAll,
@@ -74,6 +82,81 @@ pub fn tab(editor: &mut Editor, _: &Tab, _window: &mut Window, cx: &mut Context<
 
 pub fn outdent(editor: &mut Editor, _: &Outdent, _window: &mut Window, cx: &mut Context<Editor>) {
   editor.indent_selection(true, cx);
+}
+
+pub fn move_line_up(
+  editor: &mut Editor,
+  _: &MoveLineUp,
+  _window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.move_lines(false, cx);
+}
+
+pub fn move_line_down(
+  editor: &mut Editor,
+  _: &MoveLineDown,
+  _window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.move_lines(true, cx);
+}
+
+pub fn duplicate_line_up(
+  editor: &mut Editor,
+  _: &DuplicateLineUp,
+  _window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.duplicate_lines(false, cx);
+}
+
+pub fn duplicate_line_down(
+  editor: &mut Editor,
+  _: &DuplicateLineDown,
+  _window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.duplicate_lines(true, cx);
+}
+
+pub fn delete_line(
+  editor: &mut Editor,
+  _: &DeleteLine,
+  _window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.delete_lines(cx);
+}
+
+pub fn newline_above(
+  editor: &mut Editor,
+  _: &NewlineAbove,
+  _window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.insert_line(false, cx);
+}
+
+pub fn newline_below(
+  editor: &mut Editor,
+  _: &NewlineBelow,
+  _window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.insert_line(true, cx);
+}
+
+pub fn toggle_comments(
+  editor: &mut Editor,
+  _: &ToggleComments,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  use gpui_component::{WindowExt, notification::Notification};
+  if let Err(message) = editor.toggle_line_comments(cx) {
+    window.push_notification(Notification::warning(message), cx);
+  }
 }
 
 pub fn backspace(
