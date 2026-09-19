@@ -3,7 +3,7 @@
 //! This module contains all the action handlers for the editor,
 //! including text editing, cursor movement, and selection operations.
 
-use gpui::{ClipboardItem, Context, EntityInputHandler, Window, actions};
+use gpui::{Context, EntityInputHandler, Window, actions};
 
 use crate::{
   boundaries,
@@ -635,45 +635,16 @@ pub fn select_all(editor: &mut Editor, _: &SelectAll, _: &mut Window, cx: &mut C
   editor.select_all_display_lines(cx);
 }
 
-pub fn paste(editor: &mut Editor, _: &Paste, _window: &mut Window, cx: &mut Context<Editor>) {
-  editor.finalize_transaction(cx);
-  editor.vertical_goal_x = None;
-  if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-    let cursor = editor.cursor_offset();
-    let current_line = editor.document.read(cx).char_to_line(cursor);
-    editor.replace_literal_text_in_range(None, &text, cx);
-    // Invalidate cache from current line onwards since paste may add multiple lines
-    editor.invalidate_lines_from(current_line);
-    editor.finalize_transaction(cx);
-  }
+pub fn paste(editor: &mut Editor, _: &Paste, _: &mut Window, cx: &mut Context<Editor>) {
+  editor.paste_from_clipboard(cx);
 }
 
 pub fn copy(editor: &mut Editor, _: &Copy, _: &mut Window, cx: &mut Context<Editor>) {
-  if let Some(text) = editor.selected_text_for_copy(cx) {
-    cx.write_to_clipboard(ClipboardItem::new_string(text));
-  }
+  editor.copy_to_clipboard(cx);
 }
 
 pub fn cut(editor: &mut Editor, _: &Cut, window: &mut Window, cx: &mut Context<Editor>) {
-  if editor.selection_is_read_only() {
-    return;
-  }
-  editor.finalize_transaction(cx);
-  editor.vertical_goal_x = None;
-  if !editor.selected_range.is_empty() {
-    let cursor = editor.cursor_offset();
-    let current_line = editor.document.read(cx).char_to_line(cursor);
-    cx.write_to_clipboard(ClipboardItem::new_string(
-      editor
-        .document
-        .read(cx)
-        .slice_to_string(editor.selected_range.clone()),
-    ));
-    editor.replace_text_in_range(None, "", window, cx);
-    // Invalidate cache from current line onwards since cut may affect multiple lines
-    editor.invalidate_lines_from(current_line);
-    editor.finalize_transaction(cx);
-  }
+  editor.cut_to_clipboard(window, cx);
 }
 
 pub fn undo(editor: &mut Editor, _: &Undo, window: &mut Window, cx: &mut Context<Editor>) {

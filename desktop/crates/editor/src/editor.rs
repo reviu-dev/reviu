@@ -75,6 +75,8 @@ mod mouse_selection;
 use mouse_selection::MouseSelection;
 #[path = "auto_pairs.rs"]
 mod auto_pairs;
+#[path = "clipboard.rs"]
+mod clipboard;
 #[path = "document_lifecycle.rs"]
 mod document_lifecycle;
 #[path = "editing.rs"]
