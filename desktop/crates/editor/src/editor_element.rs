@@ -306,6 +306,35 @@ pub struct PositionMap {
 }
 
 impl PositionMap {
+  pub(crate) fn bounds_for_range(
+    &self,
+    range: Range<usize>,
+    document: &Document,
+  ) -> Option<Bounds<Pixels>> {
+    let start = range.start.min(document.len());
+    let doc_line = document.char_to_line(start);
+    let display_line = match &self.projection {
+      Some(projection) => projection.doc_to_display_line(doc_line)?,
+      None => doc_line,
+    };
+    let shaped = &self
+      .shaped_lines
+      .iter()
+      .find(|(line, _)| *line == display_line)?
+      .1;
+    let text = self.line_texts.get(&display_line)?;
+    let line_start = document.line_to_char(doc_line);
+    let start_column = char_offset_to_byte_offset(text, start - line_start);
+    // Native candidate windows anchor to the first visual line of a composed range.
+    let end_column = char_offset_to_byte_offset(text, range.end.max(start) - line_start);
+    let left = self.bounds.left() + shaped.x_for_index(start_column);
+    let right = (self.bounds.left() + shaped.x_for_index(end_column)).max(left + px(1.0));
+    let top = self.bounds.top() + self.line_height * (display_line as f32 - self.scroll_offset);
+    let bounds = Bounds::from_corners(point(left, top), point(right, top + self.line_height))
+      .intersect(&self.viewport_bounds);
+    (bounds.size.width > px(0.0) && bounds.size.height > px(0.0)).then_some(bounds)
+  }
+
   pub fn display_line_for_position(&self, position: Point<Pixels>) -> Option<usize> {
     if !self.bounds.contains(&position) {
       return None;

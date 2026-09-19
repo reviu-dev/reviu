@@ -89,6 +89,10 @@ mod line_actions;
 pub(crate) mod navigation;
 use document_lifecycle::SelectionSnapshot;
 
+#[cfg(test)]
+#[path = "input_geometry_tests.rs"]
+mod input_geometry_tests;
+
 #[derive(Clone, Debug)]
 pub struct Transaction {
   pub id: TransactionId,
@@ -9828,21 +9832,39 @@ impl EntityInputHandler for Editor {
 
   fn bounds_for_range(
     &mut self,
-    _range_utf16: Range<usize>,
+    range_utf16: Range<usize>,
     _bounds: Bounds<Pixels>,
     _window: &mut Window,
-    _cx: &mut Context<Self>,
+    cx: &mut Context<Self>,
   ) -> Option<Bounds<Pixels>> {
-    None
+    let position_map = self.selection_position_map.as_ref()?;
+    if position_map.view != self.selection_view || self.selection_view == DiffElementView::SplitLeft
+    {
+      return None;
+    }
+    let range = self.range_from_utf16(&range_utf16, cx);
+    position_map.bounds_for_range(range, self.document.read(cx))
   }
 
   fn character_index_for_point(
     &mut self,
-    _point: Point<Pixels>,
+    point: Point<Pixels>,
     _window: &mut Window,
-    _cx: &mut Context<Self>,
+    cx: &mut Context<Self>,
   ) -> Option<usize> {
-    None
+    let position_map = self.selection_position_map.as_ref()?;
+    if position_map.view != self.selection_view
+      || self.selection_view == DiffElementView::SplitLeft
+      || !position_map.viewport_bounds.contains(&point)
+    {
+      return None;
+    }
+    if let Some(projection) = &position_map.projection {
+      let cursor = position_map.display_cursor_for_position(point)?;
+      projection.display_to_doc_line(cursor.line)?;
+    }
+    let offset = position_map.point_for_position(point, self.document.read(cx))?;
+    Some(self.offset_to_utf16(offset, cx))
   }
 }
 
