@@ -79,8 +79,12 @@ mod auto_pairs;
 mod document_lifecycle;
 #[path = "editing.rs"]
 mod editing;
+#[path = "go_to_line.rs"]
+mod go_to_line;
 #[path = "line_actions.rs"]
 mod line_actions;
+#[path = "navigation.rs"]
+pub(crate) mod navigation;
 use document_lifecycle::SelectionSnapshot;
 
 #[derive(Clone, Debug)]
@@ -808,7 +812,7 @@ fn editor_actions_enabled(
     && !external_input_focused
 }
 
-fn editor_caret_actions_enabled(editor_actions_enabled: bool, is_read_only: bool) -> bool {
+fn editor_edit_actions_enabled(editor_actions_enabled: bool, is_read_only: bool) -> bool {
   editor_actions_enabled && !is_read_only
 }
 
@@ -885,7 +889,7 @@ pub struct Editor {
 
   pub(crate) max_cache_size: usize,
 
-  pub(crate) target_column: Option<usize>,
+  pub(crate) vertical_goal_x: Option<Pixels>,
 
   auto_pairs: auto_pairs::AutoPairs,
   pub(crate) undo_stack: VecDeque<Transaction>,
@@ -901,6 +905,7 @@ pub struct Editor {
   pub hovered_conflict_start_line: Option<usize>,
   selected_conflict_start_line: Option<usize>,
   pending_conflict_reveal_start_line: Option<usize>,
+  pending_navigation_line: Option<usize>,
   conflict_cache: RwLock<ConflictCache>,
   pub last_mouse_position: Option<Point<Pixels>>,
   pub expanded_gaps: HashMap<GapId, GapReveal>,
@@ -1420,7 +1425,7 @@ impl Editor {
       last_scroll_time: None,
       last_scroll_x: px(0.0),
       max_cache_size: MAX_CACHE_SIZE,
-      target_column: None,
+      vertical_goal_x: None,
       auto_pairs: auto_pairs::AutoPairs::default(),
       undo_stack: VecDeque::new(),
       redo_stack: VecDeque::new(),
@@ -1433,6 +1438,7 @@ impl Editor {
       hovered_conflict_start_line: None,
       selected_conflict_start_line: None,
       pending_conflict_reveal_start_line: None,
+      pending_navigation_line: None,
       conflict_cache: RwLock::new(ConflictCache::default()),
       last_mouse_position: None,
       expanded_gaps: HashMap::new(),
@@ -1845,6 +1851,8 @@ impl Editor {
   }
 
   pub fn reset_after_replace(&mut self) {
+    self.pending_navigation_line = None;
+    self.vertical_goal_x = None;
     self.line_layouts.clear();
     self.virtual_line_layouts.clear();
     self.word_diff_cache = WordDiffCache::default();
@@ -4444,7 +4452,7 @@ impl Editor {
       self.selection_reversed = false;
       self.display_selection = None;
     }
-    self.target_column = Some(found.column_end);
+    self.vertical_goal_x = None;
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
@@ -6978,6 +6986,12 @@ impl Editor {
       self.word_diff_cache = build_word_diff_cache(projection, self.document.read(cx));
     }
 
+    if let Some(line) = self.pending_navigation_line.take() {
+      self.reveal_source_line(line, cx);
+      self.schedule_visible_viewport_highlights(cx);
+      return;
+    }
+
     if let Some(conflict_start_line) = self.pending_conflict_reveal_start_line.take() {
       self.reveal_conflict_start_line(conflict_start_line, cx);
       self.schedule_visible_viewport_highlights(cx);
@@ -8528,13 +8542,30 @@ impl Editor {
     policy: CursorRevealPolicy,
     cx: &mut Context<Self>,
   ) {
+    self.ensure_cursor_visible_with_layout(policy, None, cx);
+  }
+
+  fn ensure_cursor_visible_with_layout(
+    &mut self,
+    policy: CursorRevealPolicy,
+    layout: Option<ShapedLine>,
+    cx: &mut Context<Self>,
+  ) {
     let document = self.document.read(cx);
     let cursor_offset = self.cursor_offset();
     let doc_line_count = document.len_lines();
     let display_cursor = self.current_display_cursor(cx);
     let (cursor_line, cursor_column, cursor_doc_line) = if let Some(display_cursor) = display_cursor
     {
-      let doc_line = self.display_to_doc_line(display_cursor.line);
+      let doc_line = if self.selection_view == DiffElementView::SplitLeft
+        && matches!(
+          self.display_line(display_cursor.line, doc_line_count),
+          Some(DisplayLine::Modified { .. })
+        ) {
+        None
+      } else {
+        self.display_to_doc_line(display_cursor.line)
+      };
       (display_cursor.line, display_cursor.column, doc_line)
     } else {
       let cursor_doc_line = document.char_to_line(cursor_offset);
@@ -8578,19 +8609,11 @@ impl Editor {
       }
     }
 
-    let shaped_line = match cursor_doc_line {
+    let shaped_line = layout.map(Arc::new).or_else(|| match cursor_doc_line {
       Some(doc_line) => self.line_layouts.get(&doc_line).cloned(),
       None => self.virtual_line_layouts.get(&cursor_line).cloned(),
-    };
-    let line_text = match cursor_doc_line {
-      Some(doc_line) => Some(
-        document
-          .line_content(doc_line)
-          .map(|cow| cow.into_owned())
-          .unwrap_or_default(),
-      ),
-      None => self.display_line_text(cursor_line, cx),
-    };
+    });
+    let line_text = self.selection_line_text(cursor_line, self.selection_view, cx);
 
     if let Some(line_text) = line_text {
       let line_len = line_text.chars().count();
@@ -8603,9 +8626,10 @@ impl Editor {
         })
         .unwrap_or_else(|| self.estimated_cursor_x(cursor_in_line));
 
-      let horizontal_padding = self.gutter_width() + px(EXTRA_EDITOR_WIDTH);
       let current_scroll_x = self.scroll_handle.offset().x;
       let viewport_width = self.horizontal_viewport_width();
+      let horizontal_padding =
+        (self.gutter_width() + px(EXTRA_EDITOR_WIDTH)).min(viewport_width / 4.0);
 
       // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
       // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + viewport_width]
@@ -8633,8 +8657,14 @@ impl Editor {
       self.clamp_vertical_scroll(self.scroll_offset_y, line_height, total_lines);
   }
 
-  pub(crate) fn ensure_cursor_visible(&mut self, _window: &Window, cx: &mut Context<Self>) {
-    self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
+  pub(crate) fn ensure_cursor_visible(&mut self, window: &Window, cx: &mut Context<Self>) {
+    let layout = self
+      .current_display_cursor(cx)
+      .and_then(|cursor| self.navigation_layout(cursor.line, window, cx));
+    if let Some(layout) = &layout {
+      self.max_line_width = self.max_line_width.max(layout.width());
+    }
+    self.ensure_cursor_visible_with_layout(CursorRevealPolicy::WhenHidden, layout, cx);
   }
 
   fn ensure_cursor_visible_when_hidden(&mut self, cx: &mut Context<Self>) {
@@ -8695,6 +8725,8 @@ impl Editor {
   }
 
   pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.vertical_goal_x = None;
+    self.pending_navigation_line = None;
     self.finalize_transaction(cx);
     let offset = self.clamp_offset_to_doc_len(offset, cx);
     self.selected_range = offset..offset;
@@ -8717,6 +8749,8 @@ impl Editor {
   }
 
   pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.vertical_goal_x = None;
+    self.pending_navigation_line = None;
     if !self.is_selecting {
       self.finalize_transaction(cx);
     }
@@ -8762,6 +8796,11 @@ impl Editor {
   }
 
   fn display_line_len(&self, display_line: usize, cx: &App) -> usize {
+    if self.selection_view == DiffElementView::SplitLeft {
+      return self
+        .selection_line_text(display_line, self.selection_view, cx)
+        .map_or(0, |text| text.chars().count());
+    }
     if self.is_ui_block_display_line(display_line) {
       return 0;
     }
@@ -8780,28 +8819,6 @@ impl Editor {
       Some(DisplayLine::Removed { text, .. }) => text.chars().count(),
       Some(DisplayLine::NoNewline { .. }) => NO_NEWLINE_MARKER_TEXT.chars().count(),
       _ => 0,
-    }
-  }
-
-  fn display_line_text(&self, display_line: usize, cx: &App) -> Option<String> {
-    let document = self.document.read(cx);
-    let doc_line_count = document.len_lines();
-    match self.display_line(display_line, doc_line_count) {
-      Some(DisplayLine::Doc { doc_line, .. }) => Some(
-        document
-          .line_content(doc_line)
-          .map(|cow| cow.into_owned())
-          .unwrap_or_default(),
-      ),
-      Some(DisplayLine::Modified { doc_line, .. }) => Some(
-        document
-          .line_content(doc_line)
-          .map(|cow| cow.into_owned())
-          .unwrap_or_default(),
-      ),
-      Some(DisplayLine::Removed { text, .. }) => Some(text.to_string()),
-      Some(DisplayLine::NoNewline { .. }) => Some(NO_NEWLINE_MARKER_TEXT.to_string()),
-      _ => None,
     }
   }
 
@@ -8899,6 +8916,9 @@ impl Editor {
   }
 
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
+    self.vertical_goal_x = None;
+    self.pending_navigation_line = None;
+    self.selection_reversed = false;
     self.finalize_transaction(cx);
     if !self.is_selecting {
       self.mouse_selection = None;
@@ -8917,10 +8937,6 @@ impl Editor {
     cx.notify();
   }
 
-  fn is_gap_block_display_line(&self, display_line: usize) -> bool {
-    self.block_map.is_gap_display_line(display_line)
-  }
-
   fn is_ui_block_display_line(&self, display_line: usize) -> bool {
     self.block_map.is_ui_block_display_line(display_line)
   }
@@ -8931,6 +8947,8 @@ impl Editor {
     cursor: DisplayCursor,
     cx: &mut Context<Self>,
   ) {
+    self.vertical_goal_x = None;
+    self.pending_navigation_line = None;
     if !self.is_selecting {
       self.finalize_transaction(cx);
       self.mouse_selection = None;
@@ -8957,89 +8975,6 @@ impl Editor {
     cx.notify();
   }
 
-  fn next_selectable_display_line(&self, start: usize, direction: i32) -> Option<usize> {
-    let projection = self.projection.as_ref()?;
-    let mut line = start as i32 + direction;
-    let max_line = projection.lines.len() as i32;
-    while line >= 0 && line < max_line {
-      let display_line = line as usize;
-      if self.is_gap_block_display_line(display_line) {
-        line += direction;
-        continue;
-      }
-      return Some(display_line);
-    }
-    None
-  }
-
-  pub(crate) fn move_display_cursor_vertical(
-    &mut self,
-    direction: i32,
-    cx: &mut Context<Self>,
-  ) -> bool {
-    if self.projection.is_none() {
-      return false;
-    }
-    let Some(cursor) = self.current_display_cursor(cx) else {
-      return false;
-    };
-
-    if self.target_column.is_none() {
-      self.target_column = Some(cursor.column);
-    }
-    let target_column = self.target_column.unwrap_or(cursor.column);
-    let Some(target_line) = self.next_selectable_display_line(cursor.line, direction) else {
-      return true;
-    };
-
-    let line_len = self.display_line_len(target_line, cx);
-    let column = target_column.min(line_len);
-    self.set_display_cursor(
-      DisplayCursor {
-        line: target_line,
-        column,
-      },
-      cx,
-    );
-    true
-  }
-
-  pub(crate) fn select_display_cursor_vertical(
-    &mut self,
-    direction: i32,
-    cx: &mut Context<Self>,
-  ) -> bool {
-    if self.projection.is_none() {
-      return false;
-    }
-    let Some(anchor) = self.current_display_anchor(cx) else {
-      return false;
-    };
-    let Some(cursor) = self.current_display_cursor(cx) else {
-      return false;
-    };
-
-    if self.target_column.is_none() {
-      self.target_column = Some(cursor.column);
-    }
-    let target_column = self.target_column.unwrap_or(cursor.column);
-    let Some(target_line) = self.next_selectable_display_line(cursor.line, direction) else {
-      return true;
-    };
-
-    let line_len = self.display_line_len(target_line, cx);
-    let column = target_column.min(line_len);
-    self.set_display_selection_with_anchor(
-      anchor,
-      DisplayCursor {
-        line: target_line,
-        column,
-      },
-      cx,
-    );
-    true
-  }
-
   pub(crate) fn move_display_cursor_horizontal(
     &mut self,
     delta: i32,
@@ -9052,9 +8987,9 @@ impl Editor {
 
     if self.projection.is_some() {
       if delta < 0 && cursor.column == 0 {
-        if let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) {
+        if let Some(target_line) = self.next_selectable_display_line(cursor.line, -1, cx) {
           let column = self.display_line_len(target_line, cx);
-          self.target_column = Some(column);
+          self.vertical_goal_x = None;
           self.set_display_cursor(
             DisplayCursor {
               line: target_line,
@@ -9068,8 +9003,8 @@ impl Editor {
         return true;
       }
       if delta > 0 && cursor.column == line_len {
-        if let Some(target_line) = self.next_selectable_display_line(cursor.line, 1) {
-          self.target_column = Some(0);
+        if let Some(target_line) = self.next_selectable_display_line(cursor.line, 1, cx) {
+          self.vertical_goal_x = None;
           self.set_display_cursor(
             DisplayCursor {
               line: target_line,
@@ -9094,7 +9029,7 @@ impl Editor {
     if column == cursor.column {
       return false;
     }
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_cursor(
       DisplayCursor {
         line: cursor.line,
@@ -9125,7 +9060,7 @@ impl Editor {
           continue;
         }
 
-        let previous_line = self.next_selectable_display_line(cursor.line, -1)?;
+        let previous_line = self.next_selectable_display_line(cursor.line, -1, cx)?;
         cursor.line = previous_line;
         cursor.column = self.display_line_len(previous_line, cx);
       } else {
@@ -9135,7 +9070,7 @@ impl Editor {
           continue;
         }
 
-        let next_line = self.next_selectable_display_line(cursor.line, 1)?;
+        let next_line = self.next_selectable_display_line(cursor.line, 1, cx)?;
         cursor.line = next_line;
         cursor.column = 0;
       }
@@ -9165,7 +9100,7 @@ impl Editor {
       if next_cursor == cursor {
         return true;
       }
-      self.target_column = Some(next_cursor.column);
+      self.vertical_goal_x = None;
       self.set_display_selection_with_anchor(anchor, next_cursor, cx);
       return true;
     }
@@ -9174,9 +9109,9 @@ impl Editor {
 
     if self.projection.is_some() {
       if delta < 0 && cursor.column == 0 {
-        if let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) {
+        if let Some(target_line) = self.next_selectable_display_line(cursor.line, -1, cx) {
           let column = self.display_line_len(target_line, cx);
-          self.target_column = Some(column);
+          self.vertical_goal_x = None;
           self.set_display_selection_with_anchor(
             anchor,
             DisplayCursor {
@@ -9191,8 +9126,8 @@ impl Editor {
         return true;
       }
       if delta > 0 && cursor.column == line_len {
-        if let Some(target_line) = self.next_selectable_display_line(cursor.line, 1) {
-          self.target_column = Some(0);
+        if let Some(target_line) = self.next_selectable_display_line(cursor.line, 1, cx) {
+          self.vertical_goal_x = None;
           self.set_display_selection_with_anchor(
             anchor,
             DisplayCursor {
@@ -9218,7 +9153,7 @@ impl Editor {
     if column == cursor.column {
       return false;
     }
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_selection_with_anchor(
       anchor,
       DisplayCursor {
@@ -9253,7 +9188,7 @@ impl Editor {
     if column == cursor.column {
       return false;
     }
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_cursor(
       DisplayCursor {
         line: cursor.line,
@@ -9290,7 +9225,7 @@ impl Editor {
     if column == cursor.column {
       return false;
     }
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_selection_with_anchor(
       anchor,
       DisplayCursor {
@@ -9315,7 +9250,7 @@ impl Editor {
     }
     let line_len = self.display_line_len(cursor.line, cx);
     let column = if to_start { 0 } else { line_len };
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_cursor(
       DisplayCursor {
         line: cursor.line,
@@ -9362,11 +9297,11 @@ impl Editor {
     if !self.is_removed_display_line(cursor.line, cx) {
       return false;
     }
-    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) else {
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1, cx) else {
       return false;
     };
     let column = self.display_line_len(target_line, cx);
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_cursor(
       DisplayCursor {
         line: target_line,
@@ -9393,11 +9328,11 @@ impl Editor {
     if !self.is_removed_display_line(cursor.line, cx) {
       return false;
     }
-    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) else {
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1, cx) else {
       return false;
     };
     let column = self.display_line_len(target_line, cx);
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_selection_with_anchor(
       anchor,
       DisplayCursor {
@@ -9419,14 +9354,14 @@ impl Editor {
     if cursor.column != 0 || cursor.line == 0 {
       return false;
     }
-    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) else {
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1, cx) else {
       return false;
     };
     if !self.is_removed_display_line(target_line, cx) {
       return false;
     }
     let column = self.display_line_len(target_line, cx);
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_cursor(
       DisplayCursor {
         line: target_line,
@@ -9450,14 +9385,14 @@ impl Editor {
     if cursor.column != 0 || cursor.line == 0 {
       return false;
     }
-    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) else {
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1, cx) else {
       return false;
     };
     if !self.is_removed_display_line(target_line, cx) {
       return false;
     }
     let column = self.display_line_len(target_line, cx);
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_selection_with_anchor(
       anchor,
       DisplayCursor {
@@ -9489,7 +9424,7 @@ impl Editor {
         // falling back to doc-only selection (which drops removed lines).
         return true;
       }
-      self.target_column = Some(column);
+      self.vertical_goal_x = None;
       self.set_display_selection_with_anchor(
         anchor,
         DisplayCursor {
@@ -9506,56 +9441,11 @@ impl Editor {
     }
     let line_len = self.display_line_len(cursor.line, cx);
     let column = if to_start { 0 } else { line_len };
-    self.target_column = Some(column);
+    self.vertical_goal_x = None;
     self.set_display_selection_with_anchor(
       anchor,
       DisplayCursor {
         line: cursor.line,
-        column,
-      },
-      cx,
-    );
-    true
-  }
-
-  fn first_selectable_display_line(&self) -> Option<usize> {
-    let projection = self.projection.as_ref()?;
-    (0..projection.lines.len()).find(|display_line| !self.is_gap_block_display_line(*display_line))
-  }
-
-  fn last_selectable_display_line(&self) -> Option<usize> {
-    let projection = self.projection.as_ref()?;
-    (0..projection.lines.len())
-      .rev()
-      .find(|display_line| !self.is_gap_block_display_line(*display_line))
-  }
-
-  pub(crate) fn select_display_cursor_to_display_boundary(
-    &mut self,
-    to_start: bool,
-    cx: &mut Context<Self>,
-  ) -> bool {
-    let Some(anchor) = self.current_display_anchor(cx) else {
-      return false;
-    };
-    let target_line = if to_start {
-      self.first_selectable_display_line()
-    } else {
-      self.last_selectable_display_line()
-    };
-    let Some(target_line) = target_line else {
-      return false;
-    };
-    let column = if to_start {
-      0
-    } else {
-      self.display_line_len(target_line, cx)
-    };
-    self.target_column = Some(column);
-    self.set_display_selection_with_anchor(
-      anchor,
-      DisplayCursor {
-        line: target_line,
         column,
       },
       cx,
@@ -10337,7 +10227,7 @@ impl Render for Editor {
       .relative()
       .overflow_hidden()
       .when(
-        editor_caret_actions_enabled(editor_actions_enabled, self.selection_is_read_only()),
+        editor_edit_actions_enabled(editor_actions_enabled, self.selection_is_read_only()),
         |el| {
           el.on_action(cx.listener(crate::actions::enter))
             .on_action(cx.listener(crate::actions::tab))
@@ -10354,28 +10244,6 @@ impl Render for Editor {
             .on_action(cx.listener(crate::actions::backspace_word))
             .on_action(cx.listener(crate::actions::backspace_all))
             .on_action(cx.listener(crate::actions::delete))
-            .on_action(cx.listener(crate::actions::up))
-            .on_action(cx.listener(crate::actions::down))
-            .on_action(cx.listener(crate::actions::left))
-            .on_action(cx.listener(crate::actions::alt_left))
-            .on_action(cx.listener(crate::actions::cmd_left))
-            .on_action(cx.listener(crate::actions::right))
-            .on_action(cx.listener(crate::actions::alt_right))
-            .on_action(cx.listener(crate::actions::cmd_right))
-            .on_action(cx.listener(crate::actions::cmd_up))
-            .on_action(cx.listener(crate::actions::cmd_down))
-            .on_action(cx.listener(crate::actions::select_cmd_left))
-            .on_action(cx.listener(crate::actions::select_cmd_right))
-            .on_action(cx.listener(crate::actions::select_cmd_up))
-            .on_action(cx.listener(crate::actions::select_cmd_down))
-            .on_action(cx.listener(crate::actions::select_up))
-            .on_action(cx.listener(crate::actions::select_down))
-            .on_action(cx.listener(crate::actions::select_left))
-            .on_action(cx.listener(crate::actions::select_word_left))
-            .on_action(cx.listener(crate::actions::select_right))
-            .on_action(cx.listener(crate::actions::select_word_right))
-            .on_action(cx.listener(crate::actions::home))
-            .on_action(cx.listener(crate::actions::end))
             .on_action(cx.listener(crate::actions::show_character_palette))
             .on_action(cx.listener(crate::actions::paste))
             .on_action(cx.listener(crate::actions::cut))
@@ -10385,7 +10253,34 @@ impl Render for Editor {
         },
       )
       .when(editor_actions_enabled, |el| {
-        el.on_action(cx.listener(crate::actions::select_all))
+        el.on_action(cx.listener(crate::actions::up))
+          .on_action(cx.listener(crate::actions::down))
+          .on_action(cx.listener(crate::actions::page_up))
+          .on_action(cx.listener(crate::actions::page_down))
+          .on_action(cx.listener(crate::actions::select_page_up))
+          .on_action(cx.listener(crate::actions::select_page_down))
+          .on_action(cx.listener(crate::actions::go_to_line))
+          .on_action(cx.listener(crate::actions::left))
+          .on_action(cx.listener(crate::actions::alt_left))
+          .on_action(cx.listener(crate::actions::cmd_left))
+          .on_action(cx.listener(crate::actions::right))
+          .on_action(cx.listener(crate::actions::alt_right))
+          .on_action(cx.listener(crate::actions::cmd_right))
+          .on_action(cx.listener(crate::actions::cmd_up))
+          .on_action(cx.listener(crate::actions::cmd_down))
+          .on_action(cx.listener(crate::actions::select_cmd_left))
+          .on_action(cx.listener(crate::actions::select_cmd_right))
+          .on_action(cx.listener(crate::actions::select_cmd_up))
+          .on_action(cx.listener(crate::actions::select_cmd_down))
+          .on_action(cx.listener(crate::actions::select_up))
+          .on_action(cx.listener(crate::actions::select_down))
+          .on_action(cx.listener(crate::actions::select_left))
+          .on_action(cx.listener(crate::actions::select_word_left))
+          .on_action(cx.listener(crate::actions::select_right))
+          .on_action(cx.listener(crate::actions::select_word_right))
+          .on_action(cx.listener(crate::actions::home))
+          .on_action(cx.listener(crate::actions::end))
+          .on_action(cx.listener(crate::actions::select_all))
           .on_action(cx.listener(crate::actions::reload_from_disk))
           .on_action(cx.listener(crate::actions::overwrite_disk))
           .on_action(cx.listener(crate::actions::copy))
@@ -11377,10 +11272,10 @@ pub mod tests {
   }
 
   #[gpui::test]
-  fn test_read_only_disables_caret_actions(_cx: &mut TestAppContext) {
-    assert!(editor_caret_actions_enabled(true, false));
-    assert!(!editor_caret_actions_enabled(true, true));
-    assert!(!editor_caret_actions_enabled(false, false));
+  fn test_read_only_disables_edit_actions(_cx: &mut TestAppContext) {
+    assert!(editor_edit_actions_enabled(true, false));
+    assert!(!editor_edit_actions_enabled(true, true));
+    assert!(!editor_edit_actions_enabled(false, false));
   }
 
   #[gpui::test]
@@ -11789,7 +11684,7 @@ pub mod tests {
           last_scroll_time: None,
           last_scroll_x: px(0.0),
           max_cache_size: MAX_CACHE_SIZE,
-          target_column: None,
+          vertical_goal_x: None,
           auto_pairs: auto_pairs::AutoPairs::default(),
           undo_stack: VecDeque::new(),
           redo_stack: VecDeque::new(),
@@ -11802,6 +11697,7 @@ pub mod tests {
           hovered_conflict_start_line: None,
           selected_conflict_start_line: None,
           pending_conflict_reveal_start_line: None,
+          pending_navigation_line: None,
           conflict_cache: RwLock::new(ConflictCache::default()),
           last_mouse_position: None,
           expanded_gaps: HashMap::new(),

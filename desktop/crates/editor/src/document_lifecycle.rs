@@ -116,7 +116,8 @@ impl Editor {
     self.mouse_selection = None;
     self.is_selecting = false;
     self.selection_autoscroll_task = None;
-    self.target_column = None;
+    self.vertical_goal_x = None;
+    self.pending_navigation_line = None;
     self.selection_view = match self.diff_view_mode {
       DiffViewMode::Inline => DiffElementView::Inline,
       DiffViewMode::Split => DiffElementView::SplitRight,

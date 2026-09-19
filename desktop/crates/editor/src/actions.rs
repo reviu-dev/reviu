@@ -5,7 +5,10 @@
 
 use gpui::{ClipboardItem, Context, EntityInputHandler, Window, actions};
 
-use crate::{boundaries, editor::Editor};
+use crate::{
+  boundaries,
+  editor::{Editor, navigation::HorizontalMotion},
+};
 
 actions!(
   editor,
@@ -27,6 +30,11 @@ actions!(
     Delete,
     Up,
     Down,
+    PageUp,
+    PageDown,
+    SelectPageUp,
+    SelectPageDown,
+    GoToLine,
     Left,
     AltLeft,
     CmdLeft,
@@ -165,7 +173,7 @@ pub fn backspace(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  editor.target_column = None;
+  editor.vertical_goal_x = None;
   if should_handle_backspace_in_display_space(editor, cx)
     && editor.move_display_cursor_horizontal(-1, cx)
   {
@@ -190,7 +198,7 @@ pub fn backspace_word(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  editor.target_column = None;
+  editor.vertical_goal_x = None;
   editor.finalize_transaction(cx);
   let range = if editor.selected_range.is_empty() {
     let document = editor.document.read(cx);
@@ -218,7 +226,7 @@ pub fn backspace_all(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  editor.target_column = None;
+  editor.vertical_goal_x = None;
   editor.finalize_transaction(cx);
   let range = if editor.selected_range.is_empty() {
     let document = editor.document.read(cx);
@@ -241,7 +249,7 @@ pub fn backspace_all(
 }
 
 pub fn delete(editor: &mut Editor, _: &Delete, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
+  editor.vertical_goal_x = None;
   let range = if editor.selected_range.is_empty() {
     editor.cursor_offset()..boundaries::next_boundary(editor, editor.cursor_offset(), cx)
   } else {
@@ -252,76 +260,53 @@ pub fn delete(editor: &mut Editor, _: &Delete, window: &mut Window, cx: &mut Con
 }
 
 pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Editor>) {
-  if editor.move_display_cursor_vertical(-1, cx) {
-    editor.ensure_cursor_visible(window, cx);
-    return;
-  }
-  let new_cursor = {
-    let document = editor.document.read(cx);
-    let cursor_offset = editor.cursor_offset();
-    let current_line = document.char_to_line(cursor_offset);
-
-    if current_line > 0 {
-      let target_column = *editor
-        .target_column
-        .get_or_insert_with(|| cursor_offset - document.line_to_char(current_line));
-
-      let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
-      let target_start = document.line_to_char(target_line);
-      let target_len = document
-        .line_content(target_line)
-        .map(|line| line.chars().count())
-        .unwrap_or(0);
-
-      target_start + target_column.min(target_len)
-    } else {
-      editor.target_column = None;
-      0
-    }
-  };
-
-  editor.move_to(new_cursor, cx);
-  editor.ensure_cursor_visible(window, cx);
+  editor.navigate_vertical(-1, false, false, window, cx);
 }
 
 pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context<Editor>) {
-  if editor.move_display_cursor_vertical(1, cx) {
-    editor.ensure_cursor_visible(window, cx);
-    return;
-  }
-  let new_cursor = {
-    let document = editor.document.read(cx);
-    let cursor_offset = editor.cursor_offset();
-    let current_line = document.char_to_line(cursor_offset);
-    let doc_line_count = document.len_lines();
+  editor.navigate_vertical(1, false, false, window, cx);
+}
 
-    if current_line < doc_line_count.saturating_sub(1) {
-      let target_column = *editor
-        .target_column
-        .get_or_insert_with(|| cursor_offset - document.line_to_char(current_line));
+pub fn page_up(editor: &mut Editor, _: &PageUp, window: &mut Window, cx: &mut Context<Editor>) {
+  editor.navigate_vertical(-1, false, true, window, cx);
+}
 
-      let target_line = editor
-        .next_visible_doc_line(current_line, doc_line_count)
-        .unwrap_or(current_line);
-      let target_start = document.line_to_char(target_line);
-      let target_len = document
-        .line_content(target_line)
-        .map(|line| line.chars().count())
-        .unwrap_or(0);
+pub fn page_down(editor: &mut Editor, _: &PageDown, window: &mut Window, cx: &mut Context<Editor>) {
+  editor.navigate_vertical(1, false, true, window, cx);
+}
 
-      target_start + target_column.min(target_len)
-    } else {
-      editor.target_column = None;
-      document.len()
-    }
-  };
+pub fn select_page_up(
+  editor: &mut Editor,
+  _: &SelectPageUp,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.navigate_vertical(-1, true, true, window, cx);
+}
 
-  editor.move_to(new_cursor, cx);
-  editor.ensure_cursor_visible(window, cx);
+pub fn select_page_down(
+  editor: &mut Editor,
+  _: &SelectPageDown,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.navigate_vertical(1, true, true, window, cx);
+}
+
+pub fn go_to_line(
+  editor: &mut Editor,
+  _: &GoToLine,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.open_go_to_line(window, cx);
 }
 
 pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::Character(-1), false, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.collapse_removed_selection(true, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -352,7 +337,10 @@ pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context
 }
 
 pub fn alt_left(editor: &mut Editor, _: &AltLeft, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::Word(-1), false, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.collapse_removed_selection(true, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -373,7 +361,10 @@ pub fn alt_left(editor: &mut Editor, _: &AltLeft, window: &mut Window, cx: &mut 
 }
 
 pub fn cmd_left(editor: &mut Editor, _: &CmdLeft, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::LineBoundary(true), false, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.collapse_removed_selection(true, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -391,7 +382,10 @@ pub fn cmd_left(editor: &mut Editor, _: &CmdLeft, window: &mut Window, cx: &mut 
 }
 
 pub fn right(editor: &mut Editor, _: &Right, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::Character(1), false, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.collapse_removed_selection(false, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -412,7 +406,10 @@ pub fn right(editor: &mut Editor, _: &Right, window: &mut Window, cx: &mut Conte
 }
 
 pub fn alt_right(editor: &mut Editor, _: &AltRight, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::Word(1), false, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.collapse_removed_selection(false, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -433,7 +430,10 @@ pub fn alt_right(editor: &mut Editor, _: &AltRight, window: &mut Window, cx: &mu
 }
 
 pub fn cmd_right(editor: &mut Editor, _: &CmdRight, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::LineBoundary(false), false, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.collapse_removed_selection(false, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -453,89 +453,23 @@ pub fn cmd_right(editor: &mut Editor, _: &CmdRight, window: &mut Window, cx: &mu
 }
 
 pub fn cmd_up(editor: &mut Editor, _: &CmdUp, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
-  let document = editor.document.read(cx);
-  let target_line = editor
-    .projection()
-    .and_then(|projection| projection.visible_doc_lines.first().copied())
-    .unwrap_or(0);
-  let target = document.line_to_char(target_line);
-  editor.move_to(target, cx);
-  editor.ensure_cursor_visible(window, cx);
+  editor.navigate_document_boundary(true, false, window, cx);
 }
 
 pub fn cmd_down(editor: &mut Editor, _: &CmdDown, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
-  let document = editor.document.read(cx);
-  let doc_line_count = document.len_lines();
-  let target_line = editor
-    .projection()
-    .and_then(|projection| projection.visible_doc_lines.last().copied())
-    .unwrap_or_else(|| doc_line_count.saturating_sub(1));
-  let line_start = document.line_to_char(target_line);
-  let line_content = document.line_content(target_line).unwrap_or_default();
-  let line_end = line_start + line_content.chars().count();
-  editor.move_to(line_end, cx);
-  editor.ensure_cursor_visible(window, cx);
+  editor.navigate_document_boundary(false, false, window, cx);
 }
 
 pub fn home(editor: &mut Editor, _: &Home, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
-  editor.move_to(0, cx);
-  editor.ensure_cursor_visible(window, cx);
+  editor.navigate_document_boundary(true, false, window, cx);
 }
 
 pub fn end(editor: &mut Editor, _: &End, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
-  let doc_len = editor.document.read(cx).len();
-  editor.move_to(doc_len, cx);
-  editor.ensure_cursor_visible(window, cx);
+  editor.navigate_document_boundary(false, false, window, cx);
 }
 
 pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mut Context<Editor>) {
-  if editor.select_display_cursor_vertical(-1, cx) {
-    editor.ensure_cursor_visible(window, cx);
-    return;
-  }
-  let anchor = if editor.selection_reversed {
-    editor.selected_range.end
-  } else {
-    editor.selected_range.start
-  };
-
-  let cursor = {
-    let document = editor.document.read(cx);
-    let cursor_offset = editor.cursor_offset();
-    let current_line = document.char_to_line(cursor_offset);
-
-    if current_line > 0 {
-      let target_column = *editor
-        .target_column
-        .get_or_insert_with(|| cursor_offset - document.line_to_char(current_line));
-
-      let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
-      let target_start = document.line_to_char(target_line);
-      let target_len = document
-        .line_content(target_line)
-        .map(|line| line.chars().count())
-        .unwrap_or(0);
-
-      target_start + target_column.min(target_len)
-    } else {
-      editor.target_column = None;
-      0
-    }
-  };
-
-  if anchor <= cursor {
-    editor.selected_range = anchor..cursor;
-    editor.selection_reversed = false;
-  } else {
-    editor.selected_range = cursor..anchor;
-    editor.selection_reversed = true;
-  }
-  editor.ensure_cursor_visible(window, cx);
-  cx.notify();
+  editor.navigate_vertical(-1, true, false, window, cx);
 }
 
 pub fn select_down(
@@ -544,69 +478,31 @@ pub fn select_down(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  if editor.select_display_cursor_vertical(1, cx) {
-    editor.ensure_cursor_visible(window, cx);
-    return;
-  }
-  let anchor = if editor.selection_reversed {
-    editor.selected_range.end
-  } else {
-    editor.selected_range.start
-  };
-
-  let cursor = {
-    let document = editor.document.read(cx);
-    let cursor_offset = editor.cursor_offset();
-    let current_line = document.char_to_line(cursor_offset);
-    let total_lines = document.len_lines();
-
-    if current_line + 1 < total_lines {
-      let target_column = *editor
-        .target_column
-        .get_or_insert_with(|| cursor_offset - document.line_to_char(current_line));
-
-      let target_line = editor
-        .next_visible_doc_line(current_line, total_lines)
-        .unwrap_or(current_line);
-      let target_start = document.line_to_char(target_line);
-      let target_len = document
-        .line_content(target_line)
-        .map(|line| line.chars().count())
-        .unwrap_or(0);
-
-      target_start + target_column.min(target_len)
-    } else {
-      editor.target_column = None;
-      document.len()
-    }
-  };
-
-  if anchor <= cursor {
-    editor.selected_range = anchor..cursor;
-    editor.selection_reversed = false;
-  } else {
-    editor.selected_range = cursor..anchor;
-    editor.selection_reversed = true;
-  }
-  editor.ensure_cursor_visible(window, cx);
-  cx.notify();
+  editor.navigate_vertical(1, true, false, window, cx);
 }
 
-pub fn select_left(editor: &mut Editor, _: &SelectLeft, _: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
-  if editor.select_display_cursor_prev_removed_line_end_from_boundary(cx) {
+pub fn select_left(
+  editor: &mut Editor,
+  _: &SelectLeft,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  if editor.navigate_old_side(HorizontalMotion::Character(-1), true, window, cx) {
     return;
   }
-  if editor.select_display_cursor_prev_display_line_end(cx) {
-    return;
-  }
-  if editor.select_display_cursor_horizontal(-1, cx) {
+  editor.vertical_goal_x = None;
+  if editor.select_display_cursor_prev_removed_line_end_from_boundary(cx)
+    || editor.select_display_cursor_prev_display_line_end(cx)
+    || editor.select_display_cursor_horizontal(-1, cx)
+  {
+    editor.ensure_cursor_visible(window, cx);
     return;
   }
   editor.select_to(
     boundaries::previous_boundary(editor, editor.cursor_offset(), cx),
     cx,
   );
+  editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn select_word_left(
@@ -615,7 +511,10 @@ pub fn select_word_left(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::Word(-1), true, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.select_display_cursor_word_horizontal(-1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -633,7 +532,10 @@ pub fn select_right(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::Character(1), true, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.select_display_cursor_horizontal(1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -651,7 +553,10 @@ pub fn select_word_right(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  editor.target_column = None;
+  if editor.navigate_old_side(HorizontalMotion::Word(1), true, window, cx) {
+    return;
+  }
+  editor.vertical_goal_x = None;
   if editor.select_display_cursor_word_horizontal(1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -669,6 +574,9 @@ pub fn select_cmd_left(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_old_side(HorizontalMotion::LineBoundary(true), true, window, cx) {
+    return;
+  }
   if editor.select_display_cursor_line_boundary(true, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -687,6 +595,9 @@ pub fn select_cmd_right(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_old_side(HorizontalMotion::LineBoundary(false), true, window, cx) {
+    return;
+  }
   if editor.select_display_cursor_line_boundary(false, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -707,18 +618,7 @@ pub fn select_cmd_up(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  if editor.select_display_cursor_to_display_boundary(true, cx) {
-    editor.ensure_cursor_visible(window, cx);
-    return;
-  }
-  let document = editor.document.read(cx);
-  let target_line = editor
-    .projection()
-    .and_then(|projection| projection.visible_doc_lines.first().copied())
-    .unwrap_or(0);
-  let target = document.line_to_char(target_line);
-  editor.select_to(target, cx);
-  editor.ensure_cursor_visible(window, cx);
+  editor.navigate_document_boundary(true, true, window, cx);
 }
 
 pub fn select_cmd_down(
@@ -727,31 +627,17 @@ pub fn select_cmd_down(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  if editor.select_display_cursor_to_display_boundary(false, cx) {
-    editor.ensure_cursor_visible(window, cx);
-    return;
-  }
-  let document = editor.document.read(cx);
-  let doc_line_count = document.len_lines();
-  let target_line = editor
-    .projection()
-    .and_then(|projection| projection.visible_doc_lines.last().copied())
-    .unwrap_or_else(|| doc_line_count.saturating_sub(1));
-  let line_start = document.line_to_char(target_line);
-  let line_content = document.line_content(target_line).unwrap_or_default();
-  let line_end = line_start + line_content.chars().count();
-  editor.select_to(line_end, cx);
-  editor.ensure_cursor_visible(window, cx);
+  editor.navigate_document_boundary(false, true, window, cx);
 }
 
 pub fn select_all(editor: &mut Editor, _: &SelectAll, _: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
+  editor.vertical_goal_x = None;
   editor.select_all_display_lines(cx);
 }
 
 pub fn paste(editor: &mut Editor, _: &Paste, _window: &mut Window, cx: &mut Context<Editor>) {
   editor.finalize_transaction(cx);
-  editor.target_column = None;
+  editor.vertical_goal_x = None;
   if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
     let cursor = editor.cursor_offset();
     let current_line = editor.document.read(cx).char_to_line(cursor);
@@ -773,7 +659,7 @@ pub fn cut(editor: &mut Editor, _: &Cut, window: &mut Window, cx: &mut Context<E
     return;
   }
   editor.finalize_transaction(cx);
-  editor.target_column = None;
+  editor.vertical_goal_x = None;
   if !editor.selected_range.is_empty() {
     let cursor = editor.cursor_offset();
     let current_line = editor.document.read(cx).char_to_line(cursor);

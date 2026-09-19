@@ -134,7 +134,7 @@ impl Editor {
       .clone()
       .filter(|_| self.display_selection.is_some());
     self.selection_view = view;
-    self.target_column = None;
+    self.vertical_goal_x = None;
     self.is_selecting = true;
     self.selection_autoscroll_task = None;
     self.last_mouse_position = Some(event.position);

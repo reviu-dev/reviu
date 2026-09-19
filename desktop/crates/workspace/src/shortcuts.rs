@@ -3,9 +3,10 @@ use std::{borrow::Cow, collections::HashMap};
 use editor::{
   AltLeft, AltRight, Backspace, BackspaceAll, BackspaceWord, CloseFind, CmdDown, CmdLeft, CmdRight,
   CmdUp, Copy, Cut, Delete, DeleteLine, Down, DuplicateLineDown, DuplicateLineUp, End, Enter, Find,
-  FindNext, FindPrevious, Home, Left, MoveLineDown, MoveLineUp, NewlineAbove, NewlineBelow,
-  Outdent, Paste, Quit, Redo, Right, Save, SelectAll, SelectCmdDown, SelectCmdLeft, SelectCmdRight,
-  SelectCmdUp, SelectDown, SelectLeft, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
+  FindNext, FindPrevious, GoToLine, Home, Left, MoveLineDown, MoveLineUp, NewlineAbove,
+  NewlineBelow, Outdent, PageDown, PageUp, Paste, Quit, Redo, Right, Save, SelectAll,
+  SelectCmdDown, SelectCmdLeft, SelectCmdRight, SelectCmdUp, SelectDown, SelectLeft,
+  SelectPageDown, SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
   ShowCharacterPalette, Tab, ToggleComments, ToggleFindCaseSensitive, ToggleFindRegex,
   ToggleFindWholeWord, Undo, Up,
 };
@@ -1315,6 +1316,11 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("delete", Delete, None),
     KeyBinding::new("up", Up, None),
     KeyBinding::new("down", Down, None),
+    KeyBinding::new("pageup", PageUp, Some("Editor && !Input")),
+    KeyBinding::new("pagedown", PageDown, Some("Editor && !Input")),
+    KeyBinding::new("shift-pageup", SelectPageUp, Some("Editor && !Input")),
+    KeyBinding::new("shift-pagedown", SelectPageDown, Some("Editor && !Input")),
+    KeyBinding::new("ctrl-g", GoToLine, Some("Editor && !Input")),
     KeyBinding::new("left", Left, None),
     KeyBinding::new("alt-left", AltLeft, None),
     KeyBinding::new("cmd-left", CmdLeft, None),
@@ -1793,6 +1799,49 @@ mod tests {
         app_and_workspace_key_bindings()
       ),
       Some(ToggleFileStage::name_for_type())
+    );
+  }
+
+  #[test]
+  fn navigation_shortcuts_stay_in_editors_and_leave_inputs_and_git_commands_alone() {
+    for (key, action) in [
+      ("pageup", PageUp::name_for_type()),
+      ("pagedown", PageDown::name_for_type()),
+      ("shift-pageup", SelectPageUp::name_for_type()),
+      ("shift-pagedown", SelectPageDown::name_for_type()),
+      ("ctrl-g", GoToLine::name_for_type()),
+    ] {
+      for editor_context in ["Editor", "Editor CodeEditor"] {
+        assert_eq!(
+          first_binding_action_name(
+            "workspace",
+            &[editor_context],
+            key,
+            app_and_workspace_key_bindings()
+          ),
+          Some(action)
+        );
+      }
+      for contexts in [
+        &["Editor", "Input"][..],
+        &["Input"][..],
+        &["Terminal"][..],
+        &["List"][..],
+      ] {
+        assert_ne!(
+          first_binding_action_name("workspace", contexts, key, app_and_workspace_key_bindings()),
+          Some(action)
+        );
+      }
+    }
+    assert_eq!(
+      first_binding_action_name(
+        "workspace",
+        &["Editor"],
+        "cmd-g",
+        app_and_workspace_key_bindings()
+      ),
+      Some(FindNext::name_for_type())
     );
   }
 

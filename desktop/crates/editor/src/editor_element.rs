@@ -49,7 +49,11 @@ const EDITOR_CHAR_WIDTH_SAMPLE: &str =
 const REVIEW_COMMENT_CHAR_WIDTH_SAMPLE: &str =
   "the quick brown fox jumps over the lazy dog, with spaces and punctuation. ";
 
-fn expand_tab_stops(mut line: ShapedLine, source: &str, tab_width: Pixels) -> ShapedLine {
+pub(crate) fn expand_tab_stops(
+  mut line: ShapedLine,
+  source: &str,
+  tab_width: Pixels,
+) -> ShapedLine {
   let mut shifts = Vec::new();
   let mut shift = px(0.0);
   for (byte, character) in source.char_indices() {
@@ -282,13 +286,8 @@ fn conflict_kind_for_display_line(
   conflict_line_kinds.get(&doc_line).copied()
 }
 
-fn should_paint_text_caret(
-  is_primary: bool,
-  is_focused: bool,
-  cursor_visible: bool,
-  is_read_only: bool,
-) -> bool {
-  is_primary && is_focused && cursor_visible && !is_read_only
+fn should_paint_text_caret(selection_active: bool, is_focused: bool, cursor_visible: bool) -> bool {
+  selection_active && is_focused && cursor_visible
 }
 
 /// Encapsulates layout information for mouse position -> text offset conversion
@@ -1059,7 +1058,6 @@ impl Element for EditorElement {
       viewport_lines,
       projection,
       block_map,
-      is_read_only,
       find_highlights,
     ) = {
       let editor = self.editor.read(cx);
@@ -1133,7 +1131,6 @@ impl Element for EditorElement {
         viewport_lines,
         projection,
         block_map,
-        editor.is_read_only,
         find_highlights,
       )
     };
@@ -1993,11 +1990,7 @@ impl Element for EditorElement {
     }
 
     let selection_active = self.editor.read(cx).selection_view == self.diff_view;
-    let cursor_quad = if is_primary && selection_active && !is_read_only {
-      cursor_quad
-    } else {
-      None
-    };
+    let cursor_quad = if selection_active { cursor_quad } else { None };
     let selection_quads = if selection_active {
       selection_quads
     } else {
@@ -2320,8 +2313,8 @@ impl Element for EditorElement {
 
     let editor = self.editor.read(cx);
     let cursor_visible = editor.cursor_blink.read(cx).visible();
-    let is_read_only = editor.is_read_only;
-    if should_paint_text_caret(is_primary, is_focused, cursor_visible, is_read_only)
+    let selection_active = editor.selection_view == self.diff_view;
+    if should_paint_text_caret(selection_active, is_focused, cursor_visible)
       && let Some(cursor_quad) = &prepaint.cursor_quad
     {
       window.paint_quad(cursor_quad.clone());
@@ -2498,12 +2491,11 @@ mod tests {
   }
 
   #[test]
-  fn read_only_editor_does_not_paint_text_caret() {
-    assert!(should_paint_text_caret(true, true, true, false));
-    assert!(!should_paint_text_caret(true, true, true, true));
-    assert!(!should_paint_text_caret(false, true, true, false));
-    assert!(!should_paint_text_caret(true, false, true, false));
-    assert!(!should_paint_text_caret(true, true, false, false));
+  fn caret_follows_the_active_side_even_when_read_only() {
+    assert!(should_paint_text_caret(true, true, true));
+    assert!(!should_paint_text_caret(false, true, true));
+    assert!(!should_paint_text_caret(true, false, true));
+    assert!(!should_paint_text_caret(true, true, false));
   }
 
   #[test]
