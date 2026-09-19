@@ -111,7 +111,7 @@ fn newline_indents_blocks_and_places_caret_between_paired_delimiters(cx: &mut Te
     assert_eq!(text(&editor, cx), after, "{language}: {before}");
     let cursor = cursor_prefix.chars().count();
     assert_eq!(
-      editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+      editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
       cursor..cursor
     );
     undo(&editor, false, cx);
@@ -119,7 +119,7 @@ fn newline_indents_blocks_and_places_caret_between_paired_delimiters(cx: &mut Te
     undo(&editor, true, cx);
     assert_eq!(text(&editor, cx), after);
     assert_eq!(
-      editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+      editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
       cursor..cursor
     );
   }
@@ -152,15 +152,15 @@ fn newline_does_not_treat_comments_or_strings_as_blocks(cx: &mut TestAppContext)
 fn newline_replaces_selection_and_restores_it_on_undo(cx: &mut TestAppContext) {
   let (editor, cx) = setup(cx, "fn main() {|old}", Some("rs"));
   editor.update(cx, |editor, cx| {
-    editor.selected_range = 11..14;
-    editor.selection_reversed = true;
+    editor.selections.primary_mut().range = 11..14;
+    editor.selections.primary_mut().reversed = true;
     editor.insert_indented_newline(cx);
   });
   assert_eq!(text(&editor, cx), "fn main() {\n    \n}");
   undo(&editor, false, cx);
   editor.read_with(cx, |editor, _| {
-    assert_eq!(editor.selected_range, 11..14);
-    assert!(editor.selection_reversed);
+    assert_eq!(editor.selections.primary().range, 11..14);
+    assert!(editor.selections.primary().reversed);
   });
   assert_eq!(text(&editor, cx), "fn main() {old}");
 }
@@ -208,17 +208,17 @@ fn tab_uses_file_style_and_next_stop_instead_of_fixed_spaces(cx: &mut TestAppCon
 fn indent_selection_keeps_text_direction_and_excludes_final_line_start(cx: &mut TestAppContext) {
   let (editor, cx) = setup(cx, "|é\n  two\nlast", None);
   editor.update(cx, |editor, _| {
-    editor.selected_range = 0..8;
-    editor.selection_reversed = true;
+    editor.selections.primary_mut().range = 0..8;
+    editor.selections.primary_mut().reversed = true;
   });
   editor.update(cx, |editor, cx| editor.indent_selection(false, cx));
   assert_eq!(text(&editor, cx), "  é\n    two\nlast");
-  assert!(editor.read_with(cx, |editor, _| editor.selection_reversed));
+  assert!(editor.read_with(cx, |editor, _| editor.selections.primary().reversed));
   undo(&editor, false, cx);
   assert_eq!(text(&editor, cx), "é\n  two\nlast");
   editor.read_with(cx, |editor, _| {
-    assert_eq!(editor.selected_range, 0..8);
-    assert!(editor.selection_reversed);
+    assert_eq!(editor.selections.primary().range, 0..8);
+    assert!(editor.selections.primary().reversed);
   });
   undo(&editor, true, cx);
   editor.update(cx, |editor, cx| editor.indent_selection(true, cx));
@@ -229,12 +229,12 @@ fn indent_selection_keeps_text_direction_and_excludes_final_line_start(cx: &mut 
 fn single_line_selection_is_indented_not_replaced(cx: &mut TestAppContext) {
   let (editor, cx) = setup(cx, "|hello", None);
   editor.update(cx, |editor, cx| {
-    editor.selected_range = 1..4;
+    editor.selections.primary_mut().range = 1..4;
     editor.indent_selection(false, cx);
   });
   assert_eq!(text(&editor, cx), "    hello");
   assert_eq!(
-    editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+    editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
     5..8
   );
 }
@@ -250,7 +250,7 @@ fn outdent_handles_partial_indentation_tabs_and_no_op(cx: &mut TestAppContext) {
   undo(&editor, false, cx);
   editor.update(cx, |editor, cx| {
     let length = editor.document.read(cx).len();
-    editor.selected_range = 0..length;
+    editor.selections.primary_mut().range = 0..length;
     editor.indent_selection(true, cx);
   });
   assert_eq!(text(&editor, cx), "first\n    second\n\tthird");

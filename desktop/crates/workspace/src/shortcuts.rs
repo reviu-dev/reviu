@@ -1,14 +1,14 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use editor::{
-  AltLeft, AltRight, Backspace, BackspaceAll, BackspaceWord, CloseFind, CmdDown, CmdLeft, CmdRight,
-  CmdUp, Copy, Cut, Delete, DeleteLine, Down, DuplicateLineDown, DuplicateLineUp, End, Enter, Find,
-  FindNext, FindPrevious, GoToLine, Home, Left, MoveLineDown, MoveLineUp, NewlineAbove,
-  NewlineBelow, Outdent, PageDown, PageUp, Paste, Quit, Redo, Right, Save, SelectAll,
-  SelectCmdDown, SelectCmdLeft, SelectCmdRight, SelectCmdUp, SelectDown, SelectLeft,
-  SelectPageDown, SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
-  ShowCharacterPalette, Tab, ToggleComments, ToggleFindCaseSensitive, ToggleFindRegex,
-  ToggleFindWholeWord, Undo, Up,
+  AddSelectionAbove, AddSelectionBelow, AltLeft, AltRight, Backspace, BackspaceAll, BackspaceWord,
+  CloseFind, CmdDown, CmdLeft, CmdRight, CmdUp, Copy, Cut, Delete, DeleteLine, Down,
+  DuplicateLineDown, DuplicateLineUp, End, Enter, Find, FindNext, FindPrevious, GoToLine, Home,
+  Left, MoveLineDown, MoveLineUp, NewlineAbove, NewlineBelow, Outdent, PageDown, PageUp, Paste,
+  Quit, Redo, Right, Save, SelectAll, SelectAllOccurrences, SelectCmdDown, SelectCmdLeft,
+  SelectCmdRight, SelectCmdUp, SelectDown, SelectLeft, SelectNextOccurrence, SelectPageDown,
+  SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShowCharacterPalette, Tab,
+  ToggleComments, ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, Undo, Up,
 };
 use gpui::{Action, App, Global, KeyBinding, KeyContext, Keystroke, Window};
 use ui::{COMMAND_PALETTE_CONTEXT, CommandPaletteCommand, CommandPaletteCommandId};
@@ -861,6 +861,22 @@ const RESERVED_APP_BINDINGS: &[ReservedAppBinding] = &[
     keystroke: "alt-shift-down",
   },
   ReservedAppBinding {
+    title: "Add Cursor Above",
+    keystroke: "ctrl-shift-up",
+  },
+  ReservedAppBinding {
+    title: "Add Cursor Below",
+    keystroke: "ctrl-shift-down",
+  },
+  ReservedAppBinding {
+    title: "Select Next Occurrence",
+    keystroke: "cmd-d",
+  },
+  ReservedAppBinding {
+    title: "Select All Occurrences",
+    keystroke: "ctrl-cmd-g",
+  },
+  ReservedAppBinding {
     title: "Delete Line",
     keystroke: "cmd-shift-k",
   },
@@ -1321,6 +1337,14 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("shift-pageup", SelectPageUp, Some("Editor && !Input")),
     KeyBinding::new("shift-pagedown", SelectPageDown, Some("Editor && !Input")),
     KeyBinding::new("ctrl-g", GoToLine, Some("Editor && !Input")),
+    KeyBinding::new("ctrl-shift-up", AddSelectionAbove, Some("Editor && !Input")),
+    KeyBinding::new(
+      "ctrl-shift-down",
+      AddSelectionBelow,
+      Some("Editor && !Input"),
+    ),
+    KeyBinding::new("cmd-d", SelectNextOccurrence, Some("Editor && !Input")),
+    KeyBinding::new("ctrl-cmd-g", SelectAllOccurrences, Some("Editor && !Input")),
     KeyBinding::new("left", Left, None),
     KeyBinding::new("alt-left", AltLeft, None),
     KeyBinding::new("cmd-left", CmdLeft, None),
@@ -1749,6 +1773,10 @@ mod tests {
       ("ctrl-enter", NewlineBelow::name_for_type()),
       ("ctrl-shift-enter", NewlineAbove::name_for_type()),
       ("ctrl-/", ToggleComments::name_for_type()),
+      ("ctrl-shift-up", AddSelectionAbove::name_for_type()),
+      ("ctrl-shift-down", AddSelectionBelow::name_for_type()),
+      ("cmd-d", SelectNextOccurrence::name_for_type()),
+      ("ctrl-cmd-g", SelectAllOccurrences::name_for_type()),
     ] {
       assert_eq!(
         first_binding_action_name(

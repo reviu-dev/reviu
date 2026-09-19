@@ -196,77 +196,125 @@ impl Editor {
     }
     let document = self.document.read(cx);
     self.auto_pairs.validate(document.buffer.version());
-    let selection = self.selection_snapshot(cx);
-    let cursor = selection.range.start;
-    if selection.range.is_empty()
-      && !escaped_at(document, cursor)
-      && let Some(index) = self.auto_pairs.pairs.iter().rposition(|pair| {
-        pair.closing == cursor
-          && pair.closer == character
-          && document.slice_to_string(cursor..cursor + 1) == text
-      })
-    {
-      self.auto_pairs.pairs.remove(index);
-      self.move_to(cursor + 1, cx);
-      self.selection_reversed = false;
-      self.ensure_cursor_visible_when_hidden(cx);
-      return true;
-    }
-    let Some(closer) = closing_character(
+    let before_pairs = self.auto_pairs.pairs.clone();
+    let before_version = document.buffer.version();
+    let closer = closing_character(
       character,
       document.language_config().map(|config| config.name),
-    ) else {
-      return false;
-    };
-    if !selection.range.is_empty() {
-      let end = selection.range.end;
-      self.apply_text_edits(
-        vec![
-          TextEdit {
-            range: cursor..cursor,
-            text: character.to_string(),
-          },
-          TextEdit {
-            range: end..end,
-            text: closer.to_string(),
-          },
-        ],
-        SelectionSnapshot {
-          range: cursor + 1..end + 1,
-          reversed: selection.reversed,
-        },
-        cx,
-      );
-      return true;
-    }
-    if !allows_pair(document, cursor, character) {
-      return false;
-    }
-    self.apply_text_edits(
-      vec![TextEdit {
-        range: cursor..cursor,
-        text: format!("{character}{closer}"),
-      }],
-      SelectionSnapshot {
-        range: cursor + 1..cursor + 1,
-        reversed: false,
-      },
-      cx,
     );
-    self.auto_pairs.pairs.push(AutoPair {
-      opening: cursor,
-      closing: cursor + 1,
-      opener: character,
-      closer,
-    });
-    if let Some(transaction) = self.undo_stack.back_mut() {
+    let mut special = false;
+    let mut additions = Vec::new();
+    let mut skipped = Vec::new();
+    let plans = self
+      .selections
+      .iter()
+      .map(|selection| {
+        let cursor = selection.range.start;
+        let plan = if selection.range.is_empty()
+          && !escaped_at(document, cursor)
+          && let Some(index) = self.auto_pairs.pairs.iter().rposition(|pair| {
+            pair.closing == cursor
+              && pair.closer == character
+              && document.slice_to_string(cursor..cursor + 1) == text
+          }) {
+          special = true;
+          skipped.push(index);
+          multicursor::EditPlan::new(
+            Vec::new(),
+            SelectionSnapshot {
+              range: cursor + 1..cursor + 1,
+              reversed: false,
+            },
+          )
+        } else if let Some(closer) =
+          closer.filter(|_| !selection.range.is_empty() || allows_pair(document, cursor, character))
+        {
+          special = true;
+          if selection.range.is_empty() {
+            additions.push((selection.id, character, closer));
+            multicursor::EditPlan::new(
+              vec![TextEdit {
+                range: cursor..cursor,
+                text: format!("{character}{closer}"),
+              }],
+              SelectionSnapshot {
+                range: cursor + 1..cursor + 1,
+                reversed: false,
+              },
+            )
+          } else {
+            let end = selection.range.end;
+            multicursor::EditPlan::new(
+              vec![TextEdit {
+                range: selection.range.clone(),
+                text: format!(
+                  "{character}{}{closer}",
+                  document.slice_to_string(selection.range.clone())
+                ),
+              }],
+              SelectionSnapshot {
+                range: cursor + 1..end + 1,
+                reversed: selection.reversed,
+              },
+            )
+          }
+        } else {
+          multicursor::EditPlan::replace(selection.range.clone(), text.to_string())
+        };
+        (selection.id, plan)
+      })
+      .collect();
+    if !special {
+      return false;
+    }
+    skipped.sort_unstable();
+    for index in skipped.into_iter().rev() {
+      self.auto_pairs.pairs.remove(index);
+    }
+    self.apply_selection_plans(plans, cx);
+    for (id, opener, closer) in additions {
+      if let Some(selection) = self.selections.iter().find(|selection| selection.id == id) {
+        let closing = selection.head();
+        self.auto_pairs.pairs.push(AutoPair {
+          opening: closing.saturating_sub(1),
+          closing,
+          opener,
+          closer,
+        });
+      }
+    }
+    if self.document.read(cx).buffer.version() != before_version
+      && let Some(transaction) = self.undo_stack.back_mut()
+    {
+      transaction.pairs_before = before_pairs;
       transaction.pairs_after = self.auto_pairs.pairs.clone();
     }
     true
   }
 
+  pub(super) fn auto_pair_deletion(&self, cursor: usize, cx: &App) -> Option<Range<usize>> {
+    let document = self.document.read(cx);
+    if self.auto_pairs.version != Some(document.buffer.version()) {
+      return None;
+    }
+    self
+      .auto_pairs
+      .pairs
+      .iter()
+      .find(|pair| {
+        pair.opening + 1 == cursor
+          && pair.closing == cursor
+          && document.slice_to_string(pair.opening..pair.closing + 1)
+            == format!("{}{}", pair.opener, pair.closer)
+      })
+      .map(|pair| pair.opening..pair.closing + 1)
+  }
+
   pub(crate) fn backspace_auto_pair(&mut self, cx: &mut Context<Self>) -> bool {
-    if !self.can_edit_text(cx) || !self.selected_range.is_empty() || self.marked_range.is_some() {
+    if !self.can_edit_text(cx)
+      || !self.selections.primary().range.is_empty()
+      || self.marked_range.is_some()
+    {
       return false;
     }
     let document = self.document.read(cx);

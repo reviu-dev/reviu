@@ -58,7 +58,8 @@ fn typescript_typing_accepts_native_explicit_selection_ranges(cx: &mut TestAppCo
     for character in "const test = (".chars() {
       cx.update(|window, cx| {
         editor.update(cx, |editor, cx| {
-          let range = explicit.then(|| editor.range_to_utf16(&editor.selected_range, cx));
+          let range =
+            explicit.then(|| editor.range_to_utf16(&editor.selections.primary().range, cx));
           editor.replace_text_in_range(range, &character.to_string(), window, cx);
         })
       });
@@ -66,7 +67,7 @@ fn typescript_typing_accepts_native_explicit_selection_ranges(cx: &mut TestAppCo
     assert_text(&editor, "// 🦀\nconst test = (|)", cx);
     cx.update(|window, cx| {
       editor.update(cx, |editor, cx| {
-        let range = explicit.then(|| editor.range_to_utf16(&editor.selected_range, cx));
+        let range = explicit.then(|| editor.range_to_utf16(&editor.selections.primary().range, cx));
         editor.replace_text_in_range(range, ")", window, cx);
       })
     });
@@ -79,11 +80,11 @@ fn native_selected_text_is_surrounded_but_literal_replacements_are_not(cx: &mut 
   let (editor, cx) = setup(cx, "|é🦀", Some("ts"));
   cx.update(|window, cx| {
     editor.update(cx, |editor, cx| {
-      editor.selected_range = 0..2;
-      editor.selection_reversed = true;
+      editor.selections.primary_mut().range = 0..2;
+      editor.selections.primary_mut().reversed = true;
       editor.replace_text_in_range(Some(0..3), "(", window, cx);
-      assert_eq!(editor.selected_range, 1..3);
-      assert!(editor.selection_reversed);
+      assert_eq!(editor.selections.primary().range, 1..3);
+      assert!(editor.selections.primary().reversed);
     })
   });
   undo(&editor, false, cx);
@@ -200,8 +201,8 @@ fn surround_keeps_unicode_selection_direction_and_undo(cx: &mut TestAppContext) 
   for reversed in [false, true] {
     let (editor, cx) = setup(cx, "|é🦀\ntext", Some("ts"));
     editor.update(cx, |editor, _| {
-      editor.selected_range = 0..7;
-      editor.selection_reversed = reversed;
+      editor.selections.primary_mut().range = 0..7;
+      editor.selections.primary_mut().reversed = reversed;
     });
     input(&editor, "[", cx);
     editor.read_with(cx, |editor, cx| {
@@ -209,18 +210,18 @@ fn surround_keeps_unicode_selection_direction_and_undo(cx: &mut TestAppContext) 
         editor.document.read(cx).slice_to_string(0..9),
         "[é🦀\ntext]"
       );
-      assert_eq!(editor.selected_range, 1..8);
-      assert_eq!(editor.selection_reversed, reversed);
+      assert_eq!(editor.selections.primary().range, 1..8);
+      assert_eq!(editor.selections.primary().reversed, reversed);
     });
     undo(&editor, false, cx);
     editor.read_with(cx, |editor, _| {
-      assert_eq!(editor.selected_range, 0..7);
-      assert_eq!(editor.selection_reversed, reversed);
+      assert_eq!(editor.selections.primary().range, 0..7);
+      assert_eq!(editor.selections.primary().reversed, reversed);
     });
     undo(&editor, true, cx);
     editor.read_with(cx, |editor, _| {
-      assert_eq!(editor.selected_range, 1..8);
-      assert_eq!(editor.selection_reversed, reversed);
+      assert_eq!(editor.selections.primary().range, 1..8);
+      assert_eq!(editor.selections.primary().reversed, reversed);
     });
   }
 }
@@ -333,7 +334,7 @@ fn paste_replaces_selection_and_composition_without_surrounding(cx: &mut TestApp
   cx.update(|window, cx| {
     cx.write_to_clipboard(ClipboardItem::new_string("(".to_string()));
     editor.update(cx, |editor, cx| {
-      editor.selected_range = 0..3;
+      editor.selections.primary_mut().range = 0..3;
       actions::paste(editor, &actions::Paste, window, cx);
     });
   });

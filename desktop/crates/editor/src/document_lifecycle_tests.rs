@@ -70,15 +70,15 @@ fn unicode_undo_redo_restores_text_selection_and_saved_state(cx: &mut TestAppCon
   assert_eq!(text(&editor, cx), "éhello");
   assert!(editor.read_with(cx, |editor, _| editor.is_dirty));
   editor.update(cx, |editor, _| {
-    editor.selected_range = 0..2;
-    editor.selection_reversed = true;
+    editor.selections.primary_mut().range = 0..2;
+    editor.selections.primary_mut().reversed = true;
   });
   type_text(&editor, "🙂", cx);
   undo(&editor, false, cx);
   assert_eq!(text(&editor, cx), "éhello");
   editor.read_with(cx, |editor, _| {
-    assert_eq!(editor.selected_range, 0..2);
-    assert!(editor.selection_reversed);
+    assert_eq!(editor.selections.primary().range, 0..2);
+    assert!(editor.selections.primary().reversed);
     assert!(editor.display_selection.is_none());
   });
 }
@@ -114,14 +114,46 @@ fn clean_reload_keeps_selection_and_viewport_instead_of_resetting(cx: &mut TestA
   let (editor, cx) = setup(cx, &original);
   editor.update(cx, |editor, cx| {
     editor.disk_contents = Some(Arc::from(original.as_str()));
-    editor.selected_range = 40..44;
-    editor.selection_reversed = true;
+    editor.selections.primary_mut().range = 40..44;
+    editor.selections.primary_mut().reversed = true;
     editor.scroll_offset_y = 20.0;
     editor.observe_disk_contents(Some(Arc::from(format!("{original}extra\n"))), None, cx);
-    assert_eq!(editor.selected_range, 40..44);
-    assert!(editor.selection_reversed);
+    assert_eq!(editor.selections.primary().range, 40..44);
+    assert!(editor.selections.primary().reversed);
     assert_eq!(editor.scroll_offset_y, 20.0);
     assert!(!editor.is_dirty);
+  });
+}
+
+#[gpui::test]
+fn reload_rebases_every_selection_and_undo_restores_their_anchors(cx: &mut TestAppContext) {
+  let (editor, cx) = setup(cx, "abc def ghi");
+  editor.update(cx, |editor, cx| {
+    editor.selections.primary_mut().range = 4..7;
+    editor.selections.add(8..11, true);
+    editor.apply_disk_contents("abc NEW def ghi", cx);
+    assert_eq!(
+      editor
+        .selections
+        .iter()
+        .map(|selection| selection.range.clone())
+        .collect::<Vec<_>>(),
+      vec![8..11, 12..15]
+    );
+    assert!(editor.selections.primary().reversed);
+  });
+  undo(&editor, false, cx);
+  assert_eq!(text(&editor, cx), "abc def ghi");
+  editor.read_with(cx, |editor, _| {
+    assert_eq!(
+      editor
+        .selections
+        .iter()
+        .map(|selection| selection.range.clone())
+        .collect::<Vec<_>>(),
+      vec![4..7, 8..11]
+    );
+    assert!(editor.selections.primary().reversed);
   });
 }
 
@@ -219,7 +251,7 @@ fn keyboard_deletion_restores_the_original_caret_and_selection(cx: &mut TestAppC
   undo(&editor, false, cx);
   assert_eq!(text(&editor, cx), "hé🙂");
   assert_eq!(
-    editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+    editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
     3..3
   );
   type_text(&editor, "!", cx);
@@ -233,8 +265,8 @@ fn keyboard_deletion_restores_the_original_caret_and_selection(cx: &mut TestAppC
   undo(&editor, false, cx);
   assert_eq!(text(&editor, cx), "hé🙂!");
   editor.read_with(cx, |editor, _| {
-    assert_eq!(editor.selected_range, 2..4);
-    assert!(editor.selection_reversed);
+    assert_eq!(editor.selections.primary().range, 2..4);
+    assert!(editor.selections.primary().reversed);
   });
 }
 
@@ -256,7 +288,7 @@ fn reload_preserves_reading_position_when_lines_are_inserted_above(cx: &mut Test
       let lines = editor.document.read(cx).len_lines();
       editor.set_projection(projected.then(|| Projection::full(lines)));
       let cursor = editor.document.read(cx).line_to_char(7) + 2;
-      editor.selected_range = cursor..cursor;
+      editor.selections.primary_mut().range = cursor..cursor;
       editor.observe_disk_contents(
         Some(Arc::from(updated.as_str())),
         Some(SystemTime::now()),
@@ -266,7 +298,10 @@ fn reload_preserves_reading_position_when_lines_are_inserted_above(cx: &mut Test
         editor.apply_projection_result(Projection::full(lines + 2), lines + 2, cx);
       }
       assert_eq!(editor.scroll_offset_y, 7.25);
-      assert_eq!(editor.selected_range, cursor + inserted..cursor + inserted);
+      assert_eq!(
+        editor.selections.primary().range,
+        cursor + inserted..cursor + inserted
+      );
     });
   }
 }

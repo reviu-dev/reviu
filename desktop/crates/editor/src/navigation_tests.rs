@@ -39,9 +39,9 @@ fn vertical_motion_preserves_visual_goal_across_short_lines_and_tabs(cx: &mut Te
         Some(DisplayCursor { line: 3, column: 6 })
       );
       actions::select_up(editor, &actions::SelectUp, window, cx);
-      assert!(editor.selection_reversed);
+      assert!(editor.selections.primary().reversed);
       actions::select_down(editor, &actions::SelectDown, window, cx);
-      assert!(editor.selected_range.is_empty());
+      assert!(editor.selections.primary().range.is_empty());
     })
   });
 }
@@ -60,10 +60,10 @@ fn pages_use_viewport_height_and_keep_selection_anchor(cx: &mut TestAppContext) 
         editor.current_display_cursor(cx),
         Some(DisplayCursor { line: 9, column: 3 })
       );
-      assert_eq!(editor.selected_range, 3..66);
+      assert_eq!(editor.selections.primary().range, 3..66);
       assert_eq!(editor.scroll_offset_y, 9.0);
       actions::select_page_up(editor, &actions::SelectPageUp, window, cx);
-      assert_eq!(editor.selected_range, 3..3);
+      assert_eq!(editor.selections.primary().range, 3..3);
       assert_eq!(editor.scroll_offset_y, 0.0);
       editor.viewport_height = px(100.0);
       actions::page_down(editor, &actions::PageDown, window, cx);
@@ -157,7 +157,7 @@ fn projected_pages_skip_review_rows_and_folds_but_include_removed_code(cx: &mut 
         Some(DisplayCursor { line: 4, column: 0 })
       );
       actions::select_cmd_up(editor, &actions::SelectCmdUp, window, cx);
-      assert!(editor.selected_range.is_empty());
+      assert!(editor.selections.primary().range.is_empty());
       assert!(editor.undo_stack.is_empty());
     })
   });

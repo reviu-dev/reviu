@@ -25,8 +25,8 @@ impl UntitledSnapshot {
     Self {
       content: document.slice_to_string(0..document.len()),
       dirty: editor.is_dirty,
-      selection: editor.selected_range.clone(),
-      selection_reversed: editor.selection_reversed,
+      selection: editor.selections.primary().range.clone(),
+      selection_reversed: editor.selections.primary().reversed,
     }
   }
 }
@@ -54,16 +54,16 @@ impl SessionPage {
     let mut selection = {
       let editor = editor.read(cx);
       (
-        editor.selected_range.clone(),
-        editor.selection_reversed,
+        editor.selections.primary().range.clone(),
+        editor.selections.primary().reversed,
         editor.is_dirty,
       )
     };
     let editor_subscription = cx.observe(editor, move |this, editor, cx| {
       let editor = editor.read(cx);
       let current = (
-        editor.selected_range.clone(),
-        editor.selection_reversed,
+        editor.selections.primary().range.clone(),
+        editor.selections.primary().reversed,
         editor.is_dirty,
       );
       if selection != current {
@@ -171,8 +171,8 @@ impl SessionPage {
           Editor::new_untitled_with_content(checkout_root.to_path_buf(), snapshot.content, cx);
         let length = editor.document().read(cx).len();
         let start = snapshot.selection.start.min(length);
-        editor.selected_range = start..snapshot.selection.end.clamp(start, length);
-        editor.selection_reversed = snapshot.selection_reversed;
+        editor.selections.primary_mut().range = start..snapshot.selection.end.clamp(start, length);
+        editor.selections.primary_mut().reversed = snapshot.selection_reversed;
         editor.is_dirty = snapshot.dirty;
         editor.document.update(cx, |document, _| {
           if snapshot.dirty {

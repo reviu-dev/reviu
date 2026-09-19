@@ -9,6 +9,7 @@ mod indentation;
 mod projection;
 mod scrollbar_element;
 mod search;
+mod selections;
 mod settings;
 mod text_offsets;
 
@@ -30,4 +31,5 @@ pub use editor_element::{EditorElement, PositionMap, benchmark_word_diff_ranges}
 pub use gutter_element::GutterElement;
 pub use projection::*;
 pub use search::SearchOptions;
+pub use selections::{Selection, Selections};
 pub use settings::{indent_rainbow_enabled, set_indent_rainbow_enabled};

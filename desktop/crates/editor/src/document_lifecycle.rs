@@ -90,11 +90,10 @@ fn write_file(path: &Path, expected: Option<&str>, contents: &str) -> io::Result
 }
 
 impl Editor {
-  pub(crate) fn selection_snapshot(&self, cx: &App) -> SelectionSnapshot {
-    SelectionSnapshot {
-      range: self.clamp_range_to_doc_len(self.selected_range.clone(), cx),
-      reversed: self.selection_reversed && !self.selected_range.is_empty(),
-    }
+  pub(crate) fn selection_snapshot(&self, cx: &App) -> Selections {
+    let mut selections = self.selections.clone();
+    selections.clamp(self.document.read(cx).len());
+    selections
   }
 
   pub(crate) fn finalize_transaction(&mut self, cx: &mut Context<Self>) {
@@ -108,11 +107,12 @@ impl Editor {
       self.document.read(cx).buffer.is_dirty() || self.git_state.index_dirty || self.disk_conflict;
   }
 
-  pub(super) fn restore_selection(&mut self, selection: SelectionSnapshot, cx: &mut Context<Self>) {
-    self.selected_range = self.clamp_range_to_doc_len(selection.range, cx);
-    self.selection_reversed = selection.reversed;
+  pub(super) fn restore_selections(&mut self, mut selections: Selections, cx: &mut Context<Self>) {
+    selections.clamp(self.document.read(cx).len());
+    self.selections = selections;
     self.display_selection = None;
     self.marked_range = None;
+    self.composition_ranges = None;
     self.mouse_selection = None;
     self.is_selecting = false;
     self.selection_autoscroll_task = None;
@@ -185,7 +185,7 @@ impl Editor {
       },
     );
     self.pending_reload_scroll_anchor = None;
-    self.restore_selection(selection, cx);
+    self.restore_selections(selection, cx);
     if redo {
       self.undo_stack.push_back(transaction);
     } else {
@@ -501,17 +501,20 @@ impl Editor {
         offset.min(new_end)
       }
     };
-    let selection = SelectionSnapshot {
-      range: map_offset(before.range.start)..map_offset(before.range.end),
-      reversed: before.reversed,
-    };
-    self.restore_selection(selection, cx);
-    self.record_transaction(id, before, self.selected_range.clone(), cx);
-    if let Some(transaction) = self.undo_stack.back_mut()
-      && transaction.id == id
-    {
-      transaction.selection_after.reversed = self.selection_reversed;
+    let mut selections = before.clone();
+    for selection in selections.iter_mut() {
+      let start = if !selection.range.is_empty()
+        && old_range.is_empty()
+        && selection.range.start == old_range.start
+      {
+        new_end
+      } else {
+        map_offset(selection.range.start)
+      };
+      selection.range = start..map_offset(selection.range.end);
     }
+    self.restore_selections(selections, cx);
+    self.record_transaction(id, before, cx);
     self.document.update(cx, |document, _| {
       document.buffer.mark_saved(document.buffer.version());
       document.redetect_indentation();

@@ -6,6 +6,7 @@ use syntax::{SyntaxHighlighter, TokenType};
 #[path = "editing_tests.rs"]
 mod tests;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TextEdit {
   pub range: Range<usize>,
   pub text: String,
@@ -249,6 +250,19 @@ impl Editor {
     if !self.can_edit_text(cx) {
       return;
     }
+    if self.selections.len() > 1 && self.marked_range.is_none() {
+      let primary = self.selections.primary().range.clone();
+      let explicit = range_utf16
+        .as_ref()
+        .map(|range| self.range_from_utf16(range, cx));
+      if explicit.as_ref().is_none_or(|range| *range == primary) {
+        self.edit_selections(cx, |_, selection, _| {
+          multicursor::EditPlan::replace(selection.range.clone(), new_text.to_string())
+        });
+        return;
+      }
+      self.retain_primary_selection(cx);
+    }
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
@@ -257,12 +271,12 @@ impl Editor {
       .as_ref()
       .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
       .or(self.marked_range.clone())
-      .unwrap_or(self.selected_range.clone());
+      .unwrap_or(self.selections.primary().range.clone());
     let range = self.clamp_range_to_doc_len(range, cx);
     let was_composing = self.marked_range.is_some();
     let standalone = !was_composing
       && (new_text.contains('\n')
-        || !self.selected_range.is_empty()
+        || !self.selections.primary().range.is_empty()
         || new_text.graphemes(true).count() > 1
         || (!range.is_empty() && !new_text.is_empty()));
     if standalone {
@@ -332,13 +346,11 @@ impl Editor {
     let new_text_chars = new_text.chars().count();
     let doc_len_after = self.document.read(cx).len();
     let new_cursor = (range.start + new_text_chars).min(doc_len_after);
-    self.selected_range = new_cursor..new_cursor;
-    self.selection_reversed = false;
+    self.selections.primary_mut().range = new_cursor..new_cursor;
+    self.selections.primary_mut().reversed = false;
     self.marked_range.take();
 
-    let selection_after = self.selected_range.clone();
-
-    self.record_transaction(transaction_id, selection_before, selection_after, cx);
+    self.record_transaction(transaction_id, selection_before, cx);
     if standalone || was_composing {
       self.finalize_transaction(cx);
     }
@@ -351,7 +363,7 @@ impl Editor {
 
   pub(super) fn can_edit_text(&self, cx: &App) -> bool {
     !self.selection_is_read_only()
-      && !(self.selected_range.is_empty() && self.is_read_only_display_cursor(cx))
+      && !(self.selections.primary().range.is_empty() && self.is_read_only_display_cursor(cx))
   }
 
   pub(super) fn apply_text_edits(
@@ -360,54 +372,24 @@ impl Editor {
     selection: SelectionSnapshot,
     cx: &mut Context<Self>,
   ) {
-    if edits.is_empty() {
-      return;
-    }
-    let before = self.selection_snapshot(cx);
-    self.finalize_transaction(cx);
-    let document = self.document.read(cx);
-    if edits
-      .iter()
-      .all(|edit| document.slice_to_string(edit.range.clone()) == edit.text)
-    {
-      self.restore_selection(selection, cx);
-      self.ensure_cursor_visible_when_hidden(cx);
-      cx.notify();
-      return;
-    }
-    let start_line = document.char_to_line(edits.first().map_or(0, |edit| edit.range.start));
-    let end_line = document.char_to_line(edits.last().map_or(0, |edit| edit.range.end));
-    self.auto_pairs.prepare(document.buffer.version(), &edits);
-    self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
-    let id = self.document.update(cx, |document, cx| {
-      let id = document
-        .buffer
-        .transaction(Instant::now(), |buffer, transaction| {
-          for edit in edits.iter().rev() {
-            buffer.replace(transaction, edit.range.clone(), &edit.text);
-          }
-        });
-      cx.notify();
-      id
-    });
-    self.restore_selection(selection, cx);
-    self.record_transaction(id, before, self.selected_range.clone(), cx);
-    if let Some(transaction) = self.undo_stack.back_mut()
-      && transaction.id == id
-    {
-      transaction.selection_after.reversed = self.selection_reversed;
-    }
-    self.finalize_transaction(cx);
-    self.invalidate_after_history_edit(cx);
-    self.ensure_cursor_visible_when_hidden(cx);
+    self.apply_selection_plans(
+      vec![(
+        self.selections.primary().id,
+        multicursor::EditPlan::new(edits, selection),
+      )],
+      cx,
+    );
   }
 
   pub(crate) fn insert_indented_newline(&mut self, cx: &mut Context<Self>) {
-    if !self.can_edit_text(cx) {
-      return;
-    }
+    self.edit_selections(cx, |editor, selection, cx| {
+      editor.newline_plan(selection, cx)
+    });
+  }
+
+  fn newline_plan(&self, selection: &Selection, cx: &App) -> multicursor::EditPlan {
     let document = self.document.read(cx);
-    let mut range = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
+    let mut range = selection.range.clone();
     let line = document.char_to_line(range.start);
     let line_start = document.line_to_char(line);
     let prefix = document.slice_to_string(line_start..range.start);
@@ -447,22 +429,23 @@ impl Editor {
     if paired {
       text.push_str(&format!("{newline}{indent}"));
     }
-    self.apply_text_edits(
+    multicursor::EditPlan::new(
       vec![TextEdit { range, text }],
       SelectionSnapshot {
         range: cursor..cursor,
         reversed: false,
       },
-      cx,
-    );
+    )
   }
 
   pub(crate) fn indent_selection(&mut self, outdent: bool, cx: &mut Context<Self>) {
-    if !self.can_edit_text(cx) {
-      return;
-    }
+    self.edit_selections(cx, |editor, selection, cx| {
+      editor.indent_plan(selection, outdent, cx)
+    });
+  }
+
+  fn indent_plan(&self, selection: &Selection, outdent: bool, cx: &App) -> multicursor::EditPlan {
     let document = self.document.read(cx);
-    let selection = self.selection_snapshot(cx);
     let indentation = document.indentation;
     let first_line = document.char_to_line(selection.range.start);
     if selection.range.is_empty() && !outdent {
@@ -470,18 +453,16 @@ impl Editor {
         document.slice_to_string(document.line_to_char(first_line)..selection.range.start);
       let text = indentation.tab_at(indentation.columns(&prefix));
       let cursor = selection.range.start + text.chars().count();
-      self.apply_text_edits(
+      return multicursor::EditPlan::new(
         vec![TextEdit {
-          range: selection.range,
+          range: selection.range.clone(),
           text,
         }],
         SelectionSnapshot {
           range: cursor..cursor,
           reversed: false,
         },
-        cx,
       );
-      return;
     }
     let mut last_line = document.char_to_line(selection.range.end);
     if last_line > first_line && selection.range.end == document.line_to_char(last_line) {
@@ -528,6 +509,6 @@ impl Editor {
       range: map_offset(selection.range.start, &edits)..map_offset(selection.range.end, &edits),
       reversed: selection.reversed,
     };
-    self.apply_text_edits(edits, after, cx);
+    multicursor::EditPlan::new(edits, after)
   }
 }

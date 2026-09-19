@@ -281,7 +281,7 @@ impl SessionPage {
             this.finish_editor_save_as(tab, path, cx);
           }
         }
-        EditorEvent::SaveFailed { message } => {
+        EditorEvent::SaveFailed { message } | EditorEvent::EditFailed { message } => {
           window.push_notification(Notification::error(message.clone()), cx)
         }
         EditorEvent::Saved => {
@@ -704,7 +704,7 @@ impl SessionPage {
                 this.finish_editor_save_as(tab, path, cx);
               }
             }
-            EditorEvent::SaveFailed { message } => {
+            EditorEvent::SaveFailed { message } | EditorEvent::EditFailed { message } => {
               let message = message.clone();
               let _ = cx.update_window(this.window_handle, move |_, window, cx| {
                 window.push_notification(Notification::error(message), cx);
@@ -1056,7 +1056,7 @@ impl SessionPage {
                   this.finish_editor_save_as(tab, path, cx);
                 }
               }
-              EditorEvent::SaveFailed { message } => {
+              EditorEvent::SaveFailed { message } | EditorEvent::EditFailed { message } => {
                 let message = message.clone();
                 let _ = cx.update_window(this.window_handle, move |_, window, cx| {
                   window.push_notification(Notification::error(message), cx);

@@ -2572,8 +2572,14 @@ impl SessionPage {
         "scroll_offset_y": editor.scroll_offset_y,
         "cursor_offset": editor.cursor_offset(),
         "cursor_line": document.char_to_line(editor.cursor_offset()),
-        "selection": [editor.selected_range.start, editor.selected_range.end],
-        "selection_reversed": editor.selection_reversed,
+        "selection": [editor.selections.primary().range.start, editor.selections.primary().range.end],
+        "selection_reversed": editor.selections.primary().reversed,
+        "selections": editor.selections.iter().map(|selection| serde_json::json!({
+          "id": selection.id,
+          "range": [selection.range.start, selection.range.end],
+          "reversed": selection.reversed,
+          "primary": selection.id == editor.selections.primary().id,
+        })).collect::<Vec<_>>(),
         "display_cursor": editor.display_selection.as_ref().map(|selection| serde_json::json!({
           "line": selection.end.line,
           "column": selection.end.column,

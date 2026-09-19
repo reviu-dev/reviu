@@ -338,7 +338,7 @@ fn native_geometry_handles_empty_document_and_deleted_only_diff(cx: &mut TestApp
 fn native_composition_geometry_preserves_transactions_and_selection(cx: &mut TestAppContext) {
   let (editor, _, cx) = setup(cx, "😀 ");
   editor.update(cx, |editor, cx| {
-    editor.selected_range = 2..2;
+    editor.selections.primary_mut().range = 2..2;
     cx.notify();
   });
   for text in ["e\u{301}", "にほん", "日本😀"] {
@@ -377,11 +377,11 @@ fn native_composition_geometry_preserves_transactions_and_selection(cx: &mut Tes
       editor.replace_text_in_range(None, "日本😀", window, cx);
       editor.undo_edit(false, window, cx);
       assert_eq!(editor.document.read(cx).slice_to_string(0..2), "😀 ");
-      assert_eq!(editor.selected_range, 2..2);
+      assert_eq!(editor.selections.primary().range, 2..2);
       editor.undo_edit(true, window, cx);
       assert_eq!(editor.document.read(cx).slice_to_string(0..5), "😀 日本😀");
-      editor.selected_range = 1..5;
-      editor.selection_reversed = true;
+      editor.selections.primary_mut().range = 1..5;
+      editor.selections.primary_mut().reversed = true;
       editor.bounds_for_range(1..7, Bounds::default(), window, cx);
       let selection = editor
         .selected_text_range(true, window, cx)

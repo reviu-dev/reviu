@@ -2425,6 +2425,7 @@ dependencies = [
  "log",
  "parking_lot",
  "regex",
+ "serde_json",
  "syntax",
  "ui",
  "unicode-segmentation",

@@ -1,4 +1,5 @@
 use super::editing::{TextEdit, block_opener, map_offset};
+use super::multicursor::EditPlan;
 use super::*;
 use crate::indentation::leading_whitespace;
 
@@ -99,14 +100,22 @@ fn comment_style(language: &str) -> Option<CommentStyle> {
 
 impl Editor {
   pub(crate) fn move_lines(&mut self, down: bool, cx: &mut Context<Self>) {
-    if !self.can_edit_text(cx) {
-      return;
-    }
-    let selection = self.selection_snapshot(cx);
+    self.edit_selections(cx, |editor, selection, cx| {
+      editor.move_lines_plan(selection, down, cx)
+    });
+  }
+
+  fn move_lines_plan(&self, selection: &Selection, down: bool, cx: &App) -> EditPlan {
     let document = self.document.read(cx);
     let rows = selected_rows(document, &selection.range);
     if (!down && rows.start == 0) || (down && rows.end == document.len_lines()) {
-      return;
+      return EditPlan::new(
+        Vec::new(),
+        SelectionSnapshot {
+          range: selection.range.clone(),
+          reversed: selection.reversed,
+        },
+      );
     }
     let region = if down {
       rows.start..rows.end + 1
@@ -134,21 +143,22 @@ impl Editor {
       reversed: selection.reversed,
     };
     let text = block.text();
-    self.apply_text_edits(
+    EditPlan::new(
       vec![TextEdit {
         range: block.range,
         text,
       }],
       after,
-      cx,
-    );
+    )
   }
 
   pub(crate) fn duplicate_lines(&mut self, down: bool, cx: &mut Context<Self>) {
-    if !self.can_edit_text(cx) {
-      return;
-    }
-    let selection = self.selection_snapshot(cx);
+    self.edit_selections(cx, |editor, selection, cx| {
+      editor.duplicate_lines_plan(selection, down, cx)
+    });
+  }
+
+  fn duplicate_lines_plan(&self, selection: &Selection, down: bool, cx: &App) -> EditPlan {
     let document = self.document.read(cx);
     let block = LineBlock::new(document, selected_rows(document, &selection.range));
     let mut text = block.text();
@@ -160,21 +170,22 @@ impl Editor {
       range: selection.range.start + shift..selection.range.end + shift,
       reversed: selection.reversed,
     };
-    self.apply_text_edits(
+    EditPlan::new(
       vec![TextEdit {
         range: block.range.start..block.range.start,
         text,
       }],
       after,
-      cx,
-    );
+    )
   }
 
   pub(crate) fn delete_lines(&mut self, cx: &mut Context<Self>) {
-    if !self.can_edit_text(cx) {
-      return;
-    }
-    let selection = self.selection_snapshot(cx);
+    self.edit_selections(cx, |editor, selection, cx| {
+      editor.delete_lines_plan(selection, cx)
+    });
+  }
+
+  fn delete_lines_plan(&self, selection: &Selection, cx: &App) -> EditPlan {
     let document = self.document.read(cx);
     let rows = selected_rows(document, &selection.range);
     let head = if selection.reversed {
@@ -207,7 +218,7 @@ impl Editor {
           .sum::<usize>()
       });
     let cursor = target_start + target_column;
-    self.apply_text_edits(
+    EditPlan::new(
       vec![TextEdit {
         range,
         text: String::new(),
@@ -216,16 +227,18 @@ impl Editor {
         range: cursor..cursor,
         reversed: false,
       },
-      cx,
-    );
+    )
   }
 
   pub(crate) fn insert_line(&mut self, below: bool, cx: &mut Context<Self>) {
-    if !self.can_edit_text(cx) {
-      return;
-    }
+    self.edit_selections(cx, |editor, selection, cx| {
+      editor.insert_line_plan(selection, below, cx)
+    });
+  }
+
+  fn insert_line_plan(&self, selection: &Selection, below: bool, cx: &App) -> EditPlan {
     let document = self.document.read(cx);
-    let row = document.char_to_line(self.cursor_offset());
+    let row = document.char_to_line(selection.head());
     let current = document.line_content(row).unwrap_or_default();
     let reference_row = if !below && row > 0 && current.trim_start().starts_with(['}', ']', ')']) {
       row - 1
@@ -252,7 +265,7 @@ impl Editor {
       format!("{indent}{newline}")
     };
     let cursor = offset + indent.chars().count() + if at_end { newline.chars().count() } else { 0 };
-    self.apply_text_edits(
+    EditPlan::new(
       vec![TextEdit {
         range: offset..offset,
         text,
@@ -261,8 +274,7 @@ impl Editor {
         range: cursor..cursor,
         reversed: false,
       },
-      cx,
-    );
+    )
   }
 
   pub(crate) fn toggle_line_comments(
@@ -272,7 +284,20 @@ impl Editor {
     if !self.can_edit_text(cx) {
       return Ok(());
     }
-    let selection = self.selection_snapshot(cx);
+    let plans = self
+      .selections
+      .iter()
+      .map(|selection| {
+        self
+          .comment_plan(selection, cx)
+          .map(|plan| (selection.id, plan))
+      })
+      .collect::<Result<Vec<_>, _>>()?;
+    self.apply_selection_plans(plans, cx);
+    Ok(())
+  }
+
+  fn comment_plan(&self, selection: &Selection, cx: &App) -> Result<EditPlan, &'static str> {
     let document = self.document.read(cx);
     let style = document
       .language_config()
@@ -397,7 +422,6 @@ impl Editor {
         after.range.start = after.range.end;
       }
     }
-    self.apply_text_edits(edits, after, cx);
-    Ok(())
+    Ok(EditPlan::new(edits, after))
   }
 }

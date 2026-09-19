@@ -254,7 +254,7 @@ fn text_drag_continues_through_gutter_and_reverses(cx: &mut TestAppContext) {
   drag(cx, gutter);
   assert_eq!(copied(&editor, cx).as_deref(), Some("avo\ncharlie\n"));
   assert_eq!(
-    editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+    editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
     8..20
   );
   gutter.y = position(&editor, 0, 0, cx).y;
@@ -378,7 +378,11 @@ fn triple_click_handles_empty_and_unterminated_lines(cx: &mut TestAppContext) {
   release(empty_cx, empty);
   assert_eq!(copied(&empty_editor, empty_cx), None);
   assert_eq!(
-    empty_editor.read_with(empty_cx, |editor, _| editor.selected_range.clone()),
+    empty_editor.read_with(empty_cx, |editor, _| editor
+      .selections
+      .primary()
+      .range
+      .clone()),
     0..0
   );
 
@@ -454,7 +458,7 @@ fn unicode_mouse_selection_keeps_character_and_document_ranges_in_sync(cx: &mut 
     editor.read_with(cx, |editor, cx| editor
       .document
       .read(cx)
-      .slice_to_string(editor.selected_range.clone())),
+      .slice_to_string(editor.selections.primary().range.clone())),
     "🙂 alpha\n日本"
   );
 }

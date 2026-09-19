@@ -87,7 +87,10 @@ mod go_to_line;
 mod line_actions;
 #[path = "navigation.rs"]
 pub(crate) mod navigation;
+use crate::selections::{Selection, Selections};
 use document_lifecycle::SelectionSnapshot;
+#[path = "multicursor.rs"]
+mod multicursor;
 
 #[cfg(test)]
 #[path = "input_geometry_tests.rs"]
@@ -96,8 +99,8 @@ mod input_geometry_tests;
 #[derive(Clone, Debug)]
 pub struct Transaction {
   pub id: TransactionId,
-  pub(crate) selection_before: SelectionSnapshot,
-  pub(crate) selection_after: SelectionSnapshot,
+  pub(crate) selection_before: Selections,
+  pub(crate) selection_after: Selections,
   pairs_before: Vec<auto_pairs::AutoPair>,
   pairs_after: Vec<auto_pairs::AutoPair>,
 }
@@ -847,9 +850,16 @@ pub enum EditorEvent {
   /// An untitled buffer needs a path before it can be saved.
   SavePathRequested,
   /// An untitled buffer was written and attached to a file.
-  SavedAs { path: PathBuf },
+  SavedAs {
+    path: PathBuf,
+  },
   /// A save failed and should be surfaced by the host.
-  SaveFailed { message: Arc<str> },
+  SaveFailed {
+    message: Arc<str>,
+  },
+  EditFailed {
+    message: Arc<str>,
+  },
   /// A hunk was staged, unstaged or restored: the index moved under the host.
   HunkStagingChanged,
   /// File search options changed and should become the default for future editors.
@@ -861,8 +871,10 @@ impl gpui::EventEmitter<EditorEvent> for Editor {}
 pub struct Editor {
   pub document: Entity<Document>,
   pub focus_handle: FocusHandle,
-  pub selected_range: Range<usize>,
-  pub selection_reversed: bool,
+  pub selections: crate::selections::Selections,
+  occurrence_wordwise: bool,
+  composition_ranges: Option<Selections>,
+  composition_update: bool,
   pub display_selection: Option<DisplaySelection>,
   pub marked_range: Option<Range<usize>>,
   pub is_selecting: bool,
@@ -912,6 +924,7 @@ pub struct Editor {
   selected_conflict_start_line: Option<usize>,
   pending_conflict_reveal_start_line: Option<usize>,
   pending_navigation_line: Option<usize>,
+  pending_selection_reveal: bool,
   conflict_cache: RwLock<ConflictCache>,
   pub last_mouse_position: Option<Point<Pixels>>,
   pub expanded_gaps: HashMap<GapId, GapReveal>,
@@ -1401,8 +1414,10 @@ impl Editor {
     let mut editor = Self {
       document,
       focus_handle: cx.focus_handle(),
-      selected_range: 0..0,
-      selection_reversed: false,
+      selections: crate::selections::Selections::default(),
+      occurrence_wordwise: false,
+      composition_ranges: None,
+      composition_update: false,
       display_selection: None,
       marked_range: None,
       is_selecting: false,
@@ -1445,6 +1460,7 @@ impl Editor {
       selected_conflict_start_line: None,
       pending_conflict_reveal_start_line: None,
       pending_navigation_line: None,
+      pending_selection_reveal: false,
       conflict_cache: RwLock::new(ConflictCache::default()),
       last_mouse_position: None,
       expanded_gaps: HashMap::new(),
@@ -1849,8 +1865,8 @@ impl Editor {
   }
 
   pub fn reset_selection(&mut self, cx: &mut Context<Self>) {
-    self.selected_range = 0..0;
-    self.selection_reversed = false;
+    self.selections = Selections::default();
+    self.selections.primary_mut().reversed = false;
     self.display_selection = None;
     self.marked_range = None;
     cx.notify();
@@ -1858,6 +1874,7 @@ impl Editor {
 
   pub fn reset_after_replace(&mut self) {
     self.pending_navigation_line = None;
+    self.pending_selection_reveal = false;
     self.vertical_goal_x = None;
     self.line_layouts.clear();
     self.virtual_line_layouts.clear();
@@ -4452,10 +4469,10 @@ impl Editor {
     };
 
     self.find.set_active_match(Some(index));
-    if self.selected_range != found.doc_range {
+    if self.selections.primary().range != found.doc_range {
       let cursor = found.doc_range.end;
-      self.selected_range = cursor..cursor;
-      self.selection_reversed = false;
+      self.selections.primary_mut().range = cursor..cursor;
+      self.selections.primary_mut().reversed = false;
       self.display_selection = None;
     }
     self.vertical_goal_x = None;
@@ -4478,12 +4495,12 @@ impl Editor {
       cx.notify();
       return;
     }
-    if !self.selected_range.is_empty()
+    if !self.selections.primary().range.is_empty()
       && let Some(selected_match) = self
         .find
         .matches()
         .iter()
-        .position(|found| found.doc_range == self.selected_range)
+        .position(|found| found.doc_range == self.selections.primary().range)
     {
       self.find.set_active_match(Some(selected_match));
     }
@@ -4537,7 +4554,9 @@ impl Editor {
     };
 
     let replacement = self.replace_input_text(cx);
-    self.selected_range = range;
+    self.selections.single();
+    self.occurrence_wordwise = false;
+    self.selections.primary_mut().range = range;
     self.replace_literal_text_in_range(None, &replacement, cx);
     self.find_next_match_with_line_height(self.measured_editor_line_height(), cx);
   }
@@ -4607,11 +4626,11 @@ impl Editor {
 
     let doc_len_after = self.document.read(cx).len();
     let new_cursor = (first_range.start + replacement.chars().count()).min(doc_len_after);
-    self.selected_range = new_cursor..new_cursor;
-    self.selection_reversed = false;
+    self.selections.single();
+    self.selections.primary_mut().range = new_cursor..new_cursor;
+    self.selections.primary_mut().reversed = false;
     self.display_selection = None;
-    let selection_after = self.selected_range.clone();
-    self.record_transaction(transaction_id, selection_before, selection_after, cx);
+    self.record_transaction(transaction_id, selection_before, cx);
     self.finalize_transaction(cx);
     self.refresh_dirty(cx);
     let _ = window;
@@ -6992,6 +7011,9 @@ impl Editor {
       self.word_diff_cache = build_word_diff_cache(projection, self.document.read(cx));
     }
 
+    if std::mem::take(&mut self.pending_selection_reveal) {
+      self.ensure_cursor_visible_when_hidden(cx);
+    }
     if let Some(line) = self.pending_navigation_line.take() {
       self.reveal_source_line(line, cx);
       self.schedule_visible_viewport_highlights(cx);
@@ -7256,12 +7278,12 @@ impl Editor {
       return Some(text);
     }
 
-    if self.selected_range.is_empty() {
+    if self.selections.primary().range.is_empty() {
       return None;
     }
 
     let document = self.document.read(cx);
-    let range = Self::clamp_range_to_len(self.selected_range.clone(), document.len());
+    let range = Self::clamp_range_to_len(self.selections.primary().range.clone(), document.len());
     if range.is_empty() {
       None
     } else {
@@ -7550,8 +7572,8 @@ impl Editor {
     self.expanded_gaps.clear();
     self.undo_stack.clear();
     self.redo_stack.clear();
-    self.selected_range = 0..0;
-    self.selection_reversed = false;
+    self.selections = Selections::default();
+    self.selections.primary_mut().reversed = false;
     self.display_selection = None;
     self.marked_range = None;
     self.hovered_group_id = None;
@@ -7994,14 +8016,14 @@ impl Editor {
     self.invalidate_lines_from(start_line);
     self.display_selection = None;
     self.marked_range = None;
-    self.selection_reversed = false;
+    self.selections.primary_mut().reversed = false;
 
     let doc_len_after = self.document.read(cx).len();
     let new_cursor = (range.start + replacement.chars().count()).min(doc_len_after);
-    self.selected_range = new_cursor..new_cursor;
+    self.selections.single();
+    self.selections.primary_mut().range = new_cursor..new_cursor;
 
-    let selection_after = self.selected_range.clone();
-    self.record_transaction(transaction_id, selection_before, selection_after, cx);
+    self.record_transaction(transaction_id, selection_before, cx);
     self.finalize_transaction(cx);
 
     self.hovered_group_id = None;
@@ -8701,8 +8723,7 @@ impl Editor {
   pub(crate) fn record_transaction(
     &mut self,
     id: TransactionId,
-    selection_before: SelectionSnapshot,
-    selection_after: Range<usize>,
+    selection_before: Selections,
     cx: &App,
   ) {
     if self.document.read(cx).buffer.last_transaction_id() != Some(id) {
@@ -8712,10 +8733,7 @@ impl Editor {
       .auto_pairs
       .finish(self.document.read(cx).buffer.version());
     self.redo_stack.clear();
-    let selection_after = SelectionSnapshot {
-      range: selection_after,
-      reversed: false,
-    };
+    let selection_after = self.selection_snapshot(cx);
     if let Some(transaction) = self.undo_stack.iter_mut().find(|t| t.id == id) {
       transaction.selection_after = selection_after;
       transaction.pairs_after = pairs_after;
@@ -8731,11 +8749,15 @@ impl Editor {
   }
 
   pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.selections.single();
+    self.selections.primary_mut().goal = None;
+    self.occurrence_wordwise = false;
     self.vertical_goal_x = None;
     self.pending_navigation_line = None;
+    self.pending_selection_reveal = false;
     self.finalize_transaction(cx);
     let offset = self.clamp_offset_to_doc_len(offset, cx);
-    self.selected_range = offset..offset;
+    self.selections.primary_mut().range = offset..offset;
     if !self.is_selecting {
       self.display_selection = None;
       self.mouse_selection = None;
@@ -8747,41 +8769,46 @@ impl Editor {
   }
 
   pub fn cursor_offset(&self) -> usize {
-    if self.selection_reversed {
-      self.selected_range.start
+    if self.selections.primary().reversed {
+      self.selections.primary().range.start
     } else {
-      self.selected_range.end
+      self.selections.primary().range.end
     }
   }
 
   pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.selections.single();
+    self.selections.primary_mut().goal = None;
+    self.occurrence_wordwise = false;
     self.vertical_goal_x = None;
     self.pending_navigation_line = None;
+    self.pending_selection_reveal = false;
     if !self.is_selecting {
       self.finalize_transaction(cx);
     }
     let offset = self.clamp_offset_to_doc_len(offset, cx);
-    if self.selection_reversed {
-      self.selected_range.start = offset
+    if self.selections.primary().reversed {
+      self.selections.primary_mut().range.start = offset
     } else {
-      self.selected_range.end = offset
+      self.selections.primary_mut().range.end = offset
     };
     if !self.is_selecting {
       self.display_selection = None;
       self.mouse_selection = None;
     }
-    if self.selected_range.end < self.selected_range.start {
-      self.selection_reversed = !self.selection_reversed;
-      self.selected_range = self.selected_range.end..self.selected_range.start;
+    if self.selections.primary().range.end < self.selections.primary().range.start {
+      self.selections.primary_mut().reversed = !self.selections.primary().reversed;
+      self.selections.primary_mut().range =
+        self.selections.primary().range.end..self.selections.primary().range.start;
     }
     cx.notify()
   }
 
   fn selection_anchor_offset(&self) -> usize {
-    if self.selection_reversed {
-      self.selected_range.end
+    if self.selections.primary().reversed {
+      self.selections.primary().range.end
     } else {
-      self.selected_range.start
+      self.selections.primary().range.start
     }
   }
 
@@ -8922,9 +8949,12 @@ impl Editor {
   }
 
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
+    self.selections.primary_mut().goal = None;
+    self.occurrence_wordwise = false;
     self.vertical_goal_x = None;
     self.pending_navigation_line = None;
-    self.selection_reversed = false;
+    self.pending_selection_reveal = false;
+    self.selections.primary_mut().reversed = false;
     self.finalize_transaction(cx);
     if !self.is_selecting {
       self.mouse_selection = None;
@@ -8934,8 +8964,8 @@ impl Editor {
       end: cursor,
     });
     if let Some(offset) = self.doc_offset_for_display_cursor(cursor, cx) {
-      self.selected_range = offset..offset;
-      self.selection_reversed = false;
+      self.selections.primary_mut().range = offset..offset;
+      self.selections.primary_mut().reversed = false;
     }
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
@@ -8953,8 +8983,11 @@ impl Editor {
     cursor: DisplayCursor,
     cx: &mut Context<Self>,
   ) {
+    self.selections.primary_mut().goal = None;
+    self.occurrence_wordwise = false;
     self.vertical_goal_x = None;
     self.pending_navigation_line = None;
+    self.pending_selection_reveal = false;
     if !self.is_selecting {
       self.finalize_transaction(cx);
       self.mouse_selection = None;
@@ -8966,13 +8999,14 @@ impl Editor {
 
     let reversed =
       cursor.line < anchor.line || (cursor.line == anchor.line && cursor.column < anchor.column);
-    self.selection_reversed = reversed;
+    self.selections.primary_mut().reversed = reversed;
 
     if let (Some(anchor_offset), Some(cursor_offset)) = (
       self.doc_offset_for_display_cursor(anchor, cx),
       self.doc_offset_for_display_cursor(cursor, cx),
     ) {
-      self.selected_range = anchor_offset.min(cursor_offset)..anchor_offset.max(cursor_offset);
+      self.selections.primary_mut().range =
+        anchor_offset.min(cursor_offset)..anchor_offset.max(cursor_offset);
     }
 
     self.cursor_blink.update(cx, |blink, cx| {
@@ -9097,7 +9131,7 @@ impl Editor {
       return false;
     };
 
-    if self.display_selection.is_some() && !self.selected_range.is_empty() {
+    if self.display_selection.is_some() && !self.selections.primary().range.is_empty() {
       let Some(next_cursor) = self.step_display_cursor_horizontal(cursor, delta, cx) else {
         // Keep display-based selection mode at boundaries instead of
         // falling back to doc-only selection (which drops removed lines).
@@ -9422,7 +9456,7 @@ impl Editor {
       return false;
     };
 
-    if self.display_selection.is_some() && !self.selected_range.is_empty() {
+    if self.display_selection.is_some() && !self.selections.primary().range.is_empty() {
       let line_len = self.display_line_len(cursor.line, cx);
       let column = if to_start { 0 } else { line_len };
       if cursor.column == column {
@@ -9678,10 +9712,10 @@ impl EntityInputHandler for Editor {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Option<UTF16Selection> {
-    let selected_range = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
+    let selected_range = self.clamp_range_to_doc_len(self.selections.primary().range.clone(), cx);
     Some(UTF16Selection {
       range: self.range_to_utf16(&selected_range, cx),
-      reversed: self.selection_reversed,
+      reversed: self.selections.primary().reversed,
     })
   }
 
@@ -9699,6 +9733,7 @@ impl EntityInputHandler for Editor {
 
   fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
     self.marked_range = None;
+    self.composition_ranges = None;
     self.finalize_transaction(cx);
   }
 
@@ -9715,7 +9750,11 @@ impl EntityInputHandler for Editor {
     // Native input may explicitly target the selection even for ordinary typing.
     let replaces_selection = range_utf16
       .as_ref()
-      .is_none_or(|range| *range == self.range_to_utf16(&self.selected_range, cx));
+      .is_none_or(|range| *range == self.range_to_utf16(&self.selections.primary().range, cx));
+    if self.selections.len() > 1 && self.composition_ranges.is_some() {
+      self.replace_multiple_composition(range_utf16, new_text, None, false, cx);
+      return;
+    }
     if replaces_selection && self.marked_range.is_none() && self.try_auto_pair(new_text, cx) {
       return;
     }
@@ -9733,7 +9772,11 @@ impl EntityInputHandler for Editor {
     if self.selection_is_read_only() {
       return;
     }
-    if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
+    if self.selections.len() > 1 {
+      self.replace_multiple_composition(range_utf16, new_text, new_selected_range_utf16, true, cx);
+      return;
+    }
+    if self.is_read_only_display_cursor(cx) && self.selections.primary().range.is_empty() {
       return;
     }
     self.cursor_blink.update(cx, |blink, cx| {
@@ -9743,7 +9786,7 @@ impl EntityInputHandler for Editor {
       .as_ref()
       .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
       .or(self.marked_range.clone())
-      .unwrap_or(self.selected_range.clone());
+      .unwrap_or(self.selections.primary().range.clone());
     let range = self.clamp_range_to_doc_len(range, cx);
 
     let selection_before = self.selection_snapshot(cx);
@@ -9814,14 +9857,9 @@ impl EntityInputHandler for Editor {
       .map(|range_utf16| Self::utf16_range_to_char_range_in_text(new_text, range_utf16))
       .map(|new_range| new_range.start + range.start..new_range.end + range.start)
       .unwrap_or_else(|| range.start + new_text_chars..range.start + new_text_chars);
-    self.selected_range = Self::clamp_range_to_len(selected_range, doc_len_after);
-    self.selection_reversed = false;
-    self.record_transaction(
-      transaction_id,
-      selection_before,
-      self.selected_range.clone(),
-      cx,
-    );
+    self.selections.primary_mut().range = Self::clamp_range_to_len(selected_range, doc_len_after);
+    self.selections.primary_mut().reversed = false;
+    self.record_transaction(transaction_id, selection_before, cx);
     self.refresh_dirty(cx);
     let _ = window;
     self.ensure_cursor_visible_when_hidden(cx);
@@ -10305,6 +10343,11 @@ impl Render for Editor {
           .on_action(cx.listener(crate::actions::home))
           .on_action(cx.listener(crate::actions::end))
           .on_action(cx.listener(crate::actions::select_all))
+          .on_action(cx.listener(crate::actions::add_selection_above))
+          .on_action(cx.listener(crate::actions::add_selection_below))
+          .on_action(cx.listener(crate::actions::select_next_occurrence))
+          .on_action(cx.listener(crate::actions::select_all_occurrences))
+          .on_action(cx.listener(crate::actions::clear_extra_selections))
           .on_action(cx.listener(crate::actions::reload_from_disk))
           .on_action(cx.listener(crate::actions::overwrite_disk))
           .on_action(cx.listener(crate::actions::copy))
@@ -11678,8 +11721,10 @@ pub mod tests {
           review_comments: Vec::new(),
           document: doc,
           focus_handle: cx.focus_handle(),
-          selected_range: 0..0,
-          selection_reversed: false,
+          selections: crate::selections::Selections::default(),
+          occurrence_wordwise: false,
+          composition_ranges: None,
+          composition_update: false,
           display_selection: None,
           marked_range: None,
           is_selecting: false,
@@ -11722,6 +11767,7 @@ pub mod tests {
           selected_conflict_start_line: None,
           pending_conflict_reveal_start_line: None,
           pending_navigation_line: None,
+          pending_selection_reveal: false,
           conflict_cache: RwLock::new(ConflictCache::default()),
           last_mouse_position: None,
           expanded_gaps: HashMap::new(),
@@ -11794,9 +11840,9 @@ pub mod tests {
 
     /// Get the current selection range
     pub fn selection(&self) -> Range<usize> {
-      self
-        .editor
-        .read_with(&self.cx, |editor, _| editor.selected_range.clone())
+      self.editor.read_with(&self.cx, |editor, _| {
+        editor.selections.primary().range.clone()
+      })
     }
 
     /// Get whether selection is reversed
@@ -11804,7 +11850,7 @@ pub mod tests {
     pub fn selection_reversed(&self) -> bool {
       self
         .editor
-        .read_with(&self.cx, |editor, _| editor.selection_reversed)
+        .read_with(&self.cx, |editor, _| editor.selections.primary().reversed)
     }
 
     /// Set cursor position (collapses selection)
@@ -11817,8 +11863,8 @@ pub mod tests {
     /// Set selection range
     pub fn set_selection(&mut self, range: Range<usize>, reversed: bool) {
       self.editor.update(&mut self.cx, |editor, _| {
-        editor.selected_range = range;
-        editor.selection_reversed = reversed;
+        editor.selections.primary_mut().range = range;
+        editor.selections.primary_mut().reversed = reversed;
         editor.display_selection = None;
       });
     }
@@ -13893,10 +13939,15 @@ pub mod tests {
 
     let prev_offset = ctx.cursor_offset();
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      let new_offset = if editor.selected_range.is_empty() {
+      let new_offset = if editor.selections.primary().range.is_empty() {
         editor.cursor_offset().saturating_sub(1)
       } else {
-        editor.selected_range.start.min(editor.selected_range.end)
+        editor
+          .selections
+          .primary()
+          .range
+          .start
+          .min(editor.selections.primary().range.end)
       };
       editor.move_to(new_offset, cx);
     });
@@ -13922,10 +13973,15 @@ pub mod tests {
     ctx.set_cursor(2);
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       let doc_len = editor.document().read(cx).len();
-      let new_offset = if editor.selected_range.is_empty() {
+      let new_offset = if editor.selections.primary().range.is_empty() {
         (editor.cursor_offset() + 1).min(doc_len)
       } else {
-        editor.selected_range.start.max(editor.selected_range.end)
+        editor
+          .selections
+          .primary()
+          .range
+          .start
+          .max(editor.selections.primary().range.end)
       };
       editor.move_to(new_offset, cx);
     });
@@ -13985,7 +14041,7 @@ pub mod tests {
 
     ctx.set_selection(2..7, false);
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      let range = editor.selected_range.clone();
+      let range = editor.selections.primary().range.clone();
       editor.document.update(cx, |doc, cx| {
         doc.replace(range, "X", cx);
       });
@@ -14019,7 +14075,7 @@ pub mod tests {
 
     ctx.set_cursor(3);
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      let range = editor.selected_range.clone();
+      let range = editor.selections.primary().range.clone();
       let new_text = "😎";
       editor.document.update(cx, |doc, cx| {
         doc.replace(range.clone(), new_text, cx);
@@ -14037,7 +14093,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      let range = editor.selected_range.clone();
+      let range = editor.selections.primary().range.clone();
       let new_text = "😎````";
       editor.document.update(cx, |doc, cx| {
         doc.replace(range.clone(), new_text, cx);
@@ -14128,7 +14184,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "abc");
 
     let copied = ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.selected_range = 999..1000;
+      editor.selections.primary_mut().range = 999..1000;
       editor.selected_text_for_copy(cx)
     });
     assert_eq!(copied, None);
@@ -14695,7 +14751,7 @@ pub mod tests {
         )
       );
       assert!(editor.display_to_doc_line(1).is_none());
-      assert_eq!(editor.selected_range, 0..2);
+      assert_eq!(editor.selections.primary().range, 0..2);
     });
   }
 
@@ -14717,7 +14773,10 @@ pub mod tests {
 
       assert_eq!(editor.current_display_cursor(cx), before_cursor);
       assert_eq!(editor.cursor_offset(), before_offset);
-      assert_eq!(editor.selected_range, before_offset..before_offset);
+      assert_eq!(
+        editor.selections.primary().range,
+        before_offset..before_offset
+      );
     });
   }
 
@@ -14739,7 +14798,10 @@ pub mod tests {
 
       assert_eq!(editor.current_display_cursor(cx), before_cursor);
       assert_eq!(editor.cursor_offset(), before_offset);
-      assert_eq!(editor.selected_range, before_offset..before_offset);
+      assert_eq!(
+        editor.selections.primary().range,
+        before_offset..before_offset
+      );
     });
   }
 
@@ -14780,7 +14842,10 @@ pub mod tests {
         .expect("display selection should remain active");
       assert_eq!(after.start, before.start);
       assert_eq!(after.end, before.end);
-      assert_eq!(editor.selected_range, 0..editor.document.read(cx).len());
+      assert_eq!(
+        editor.selections.primary().range,
+        0..editor.document.read(cx).len()
+      );
     });
   }
 
@@ -14809,7 +14874,7 @@ pub mod tests {
         )
       );
       assert!(editor.display_to_doc_line(1).is_none());
-      assert_eq!(editor.selected_range, 0..2);
+      assert_eq!(editor.selections.primary().range, 0..2);
     });
   }
 
@@ -14834,7 +14899,10 @@ pub mod tests {
         .expect("display selection should remain active");
       assert_eq!(after.start, before.start);
       assert_eq!(after.end, before.end);
-      assert_eq!(editor.selected_range, 0..editor.document.read(cx).len());
+      assert_eq!(
+        editor.selections.primary().range,
+        0..editor.document.read(cx).len()
+      );
     });
   }
 
@@ -14849,7 +14917,7 @@ pub mod tests {
       assert_eq!(editor.find.matches().len(), 2);
       assert_eq!(editor.find.active_match(), Some(0));
       assert_eq!(editor.find.highlights().active_range, Some(0..3));
-      assert_eq!(editor.selected_range, 3..3);
+      assert_eq!(editor.selections.primary().range, 3..3);
     });
   }
 
@@ -14858,14 +14926,14 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar\nfoo baz");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.selected_range = 0..3;
+      editor.selections.primary_mut().range = 0..3;
       let query = editor.find_query_from_selection(cx).expect("selected text");
       editor.find.set_query(query);
       editor.refresh_find_matches(px(20.0), false, cx);
 
       assert_eq!(editor.find.active_match(), Some(0));
       assert_eq!(editor.find.highlights().active_range, Some(0..3));
-      assert_eq!(editor.selected_range, 0..3);
+      assert_eq!(editor.selections.primary().range, 0..3);
     });
   }
 
@@ -14880,17 +14948,17 @@ pub mod tests {
       editor.find_next_match_with_line_height(px(20.0), cx);
       assert_eq!(editor.find.active_match(), Some(1));
       assert_eq!(editor.find.highlights().active_range, Some(8..11));
-      assert_eq!(editor.selected_range, 11..11);
+      assert_eq!(editor.selections.primary().range, 11..11);
 
       editor.find_next_match_with_line_height(px(20.0), cx);
       assert_eq!(editor.find.active_match(), Some(0));
       assert_eq!(editor.find.highlights().active_range, Some(0..3));
-      assert_eq!(editor.selected_range, 3..3);
+      assert_eq!(editor.selections.primary().range, 3..3);
 
       editor.find_previous_match_with_line_height(px(20.0), cx);
       assert_eq!(editor.find.active_match(), Some(1));
       assert_eq!(editor.find.highlights().active_range, Some(8..11));
-      assert_eq!(editor.selected_range, 11..11);
+      assert_eq!(editor.selections.primary().range, 11..11);
     });
   }
 
@@ -14910,7 +14978,7 @@ pub mod tests {
         });
         cx.notify();
       });
-      editor.selected_range = 3..3;
+      editor.selections.primary_mut().range = 3..3;
       editor.refresh_find_matches_after_document_edit(cx);
 
       assert_eq!(editor.find.matches().len(), 1);
@@ -14918,7 +14986,7 @@ pub mod tests {
 
       assert_eq!(editor.find.active_match(), Some(0));
       assert_eq!(editor.find.highlights().active_range, Some(8..11));
-      assert_eq!(editor.selected_range, 11..11);
+      assert_eq!(editor.selections.primary().range, 11..11);
     });
   }
 
@@ -15141,7 +15209,7 @@ pub mod tests {
       editor.refresh_find_matches(px(20.0), false, cx);
       assert_eq!(editor.find.matches().len(), 1);
       assert_eq!(editor.find.highlights().active_range, Some(13..16));
-      assert_eq!(editor.selected_range, 16..16);
+      assert_eq!(editor.selections.primary().range, 16..16);
     });
   }
 
@@ -15216,8 +15284,8 @@ pub mod tests {
     // Simulate quadruple click - select all buffer
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       editor.is_selecting = true;
-      editor.selected_range = 0..doc_len;
-      editor.selection_reversed = false;
+      editor.selections.primary_mut().range = 0..doc_len;
+      editor.selections.primary_mut().reversed = false;
       cx.notify();
     });
 

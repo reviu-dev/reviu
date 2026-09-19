@@ -54,6 +54,11 @@ actions!(
     SelectWordLeft,
     SelectWordRight,
     SelectAll,
+    AddSelectionAbove,
+    AddSelectionBelow,
+    SelectNextOccurrence,
+    SelectAllOccurrences,
+    ClearExtraSelections,
     Home,
     End,
     ShowCharacterPalette,
@@ -77,7 +82,7 @@ actions!(
 );
 
 fn should_handle_backspace_in_display_space(editor: &Editor, cx: &Context<Editor>) -> bool {
-  editor.selected_range.is_empty() && editor.is_read_only_display_cursor(cx)
+  editor.selections.primary().range.is_empty() && editor.is_read_only_display_cursor(cx)
 }
 
 pub fn enter(editor: &mut Editor, _: &Enter, _window: &mut Window, cx: &mut Context<Editor>) {
@@ -173,6 +178,10 @@ pub fn backspace(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.selections.len() > 1 {
+    editor.delete_selections(true, false, false, cx);
+    return;
+  }
   editor.vertical_goal_x = None;
   if should_handle_backspace_in_display_space(editor, cx)
     && editor.move_display_cursor_horizontal(-1, cx)
@@ -183,10 +192,10 @@ pub fn backspace(
   if editor.backspace_auto_pair(cx) {
     return;
   }
-  let range = if editor.selected_range.is_empty() {
+  let range = if editor.selections.primary().range.is_empty() {
     boundaries::previous_boundary(editor, editor.cursor_offset(), cx)..editor.cursor_offset()
   } else {
-    editor.selected_range.clone()
+    editor.selections.primary().range.clone()
   };
   let range = editor.range_to_utf16(&range, cx);
   editor.replace_text_in_range(Some(range), "", window, cx)
@@ -198,9 +207,13 @@ pub fn backspace_word(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.selections.len() > 1 {
+    editor.delete_selections(true, true, false, cx);
+    return;
+  }
   editor.vertical_goal_x = None;
   editor.finalize_transaction(cx);
-  let range = if editor.selected_range.is_empty() {
+  let range = if editor.selections.primary().range.is_empty() {
     let document = editor.document.read(cx);
     let cursor = editor.cursor_offset();
     let line = document.char_to_line(cursor);
@@ -213,7 +226,7 @@ pub fn backspace_word(
     };
     start..cursor
   } else {
-    editor.selected_range.clone()
+    editor.selections.primary().range.clone()
   };
   let range = editor.range_to_utf16(&range, cx);
   editor.replace_text_in_range(Some(range), "", window, cx);
@@ -226,9 +239,13 @@ pub fn backspace_all(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.selections.len() > 1 {
+    editor.delete_selections(true, false, true, cx);
+    return;
+  }
   editor.vertical_goal_x = None;
   editor.finalize_transaction(cx);
-  let range = if editor.selected_range.is_empty() {
+  let range = if editor.selections.primary().range.is_empty() {
     let document = editor.document.read(cx);
     let cursor = editor.cursor_offset();
     let line = document.char_to_line(cursor);
@@ -241,7 +258,7 @@ pub fn backspace_all(
       };
     start..cursor
   } else {
-    editor.selected_range.clone()
+    editor.selections.primary().range.clone()
   };
   let range = editor.range_to_utf16(&range, cx);
   editor.replace_text_in_range(Some(range), "", window, cx);
@@ -249,29 +266,51 @@ pub fn backspace_all(
 }
 
 pub fn delete(editor: &mut Editor, _: &Delete, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.selections.len() > 1 {
+    editor.delete_selections(false, false, false, cx);
+    return;
+  }
   editor.vertical_goal_x = None;
-  let range = if editor.selected_range.is_empty() {
+  let range = if editor.selections.primary().range.is_empty() {
     editor.cursor_offset()..boundaries::next_boundary(editor, editor.cursor_offset(), cx)
   } else {
-    editor.selected_range.clone()
+    editor.selections.primary().range.clone()
   };
   let range = editor.range_to_utf16(&range, cx);
   editor.replace_text_in_range(Some(range), "", window, cx)
 }
 
 pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| up(editor, &Up, window, cx)) {
+    return;
+  }
   editor.navigate_vertical(-1, false, false, window, cx);
 }
 
 pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    down(editor, &Down, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_vertical(1, false, false, window, cx);
 }
 
 pub fn page_up(editor: &mut Editor, _: &PageUp, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    page_up(editor, &PageUp, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_vertical(-1, false, true, window, cx);
 }
 
 pub fn page_down(editor: &mut Editor, _: &PageDown, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    page_down(editor, &PageDown, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_vertical(1, false, true, window, cx);
 }
 
@@ -281,6 +320,11 @@ pub fn select_page_up(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_page_up(editor, &SelectPageUp, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_vertical(-1, true, true, window, cx);
 }
 
@@ -290,6 +334,11 @@ pub fn select_page_down(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_page_down(editor, &SelectPageDown, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_vertical(1, true, true, window, cx);
 }
 
@@ -303,6 +352,11 @@ pub fn go_to_line(
 }
 
 pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    left(editor, &Left, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::Character(-1), false, window, cx) {
     return;
   }
@@ -311,32 +365,39 @@ pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty()
+  if editor.selections.primary().range.is_empty()
     && editor.move_display_cursor_prev_removed_line_end_from_boundary(cx)
   {
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty() && editor.move_display_cursor_prev_display_line_end(cx) {
+  if editor.selections.primary().range.is_empty()
+    && editor.move_display_cursor_prev_display_line_end(cx)
+  {
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty() && editor.move_display_cursor_horizontal(-1, cx) {
+  if editor.selections.primary().range.is_empty() && editor.move_display_cursor_horizontal(-1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty() {
+  if editor.selections.primary().range.is_empty() {
     editor.move_to(
       boundaries::previous_boundary(editor, editor.cursor_offset(), cx),
       cx,
     );
   } else {
-    editor.move_to(editor.selected_range.start, cx)
+    editor.move_to(editor.selections.primary().range.start, cx)
   }
   editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn alt_left(editor: &mut Editor, _: &AltLeft, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    alt_left(editor, &AltLeft, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::Word(-1), false, window, cx) {
     return;
   }
@@ -349,18 +410,23 @@ pub fn alt_left(editor: &mut Editor, _: &AltLeft, window: &mut Window, cx: &mut 
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty() {
+  if editor.selections.primary().range.is_empty() {
     editor.move_to(
       boundaries::previous_word_boundary(editor, editor.cursor_offset(), cx),
       cx,
     );
   } else {
-    editor.move_to(editor.selected_range.start, cx)
+    editor.move_to(editor.selections.primary().range.start, cx)
   }
   editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn cmd_left(editor: &mut Editor, _: &CmdLeft, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    cmd_left(editor, &CmdLeft, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::LineBoundary(true), false, window, cx) {
     return;
   }
@@ -382,6 +448,11 @@ pub fn cmd_left(editor: &mut Editor, _: &CmdLeft, window: &mut Window, cx: &mut 
 }
 
 pub fn right(editor: &mut Editor, _: &Right, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    right(editor, &Right, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::Character(1), false, window, cx) {
     return;
   }
@@ -390,22 +461,27 @@ pub fn right(editor: &mut Editor, _: &Right, window: &mut Window, cx: &mut Conte
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty() && editor.move_display_cursor_horizontal(1, cx) {
+  if editor.selections.primary().range.is_empty() && editor.move_display_cursor_horizontal(1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty() {
+  if editor.selections.primary().range.is_empty() {
     editor.move_to(
-      boundaries::next_boundary(editor, editor.selected_range.end, cx),
+      boundaries::next_boundary(editor, editor.selections.primary().range.end, cx),
       cx,
     );
   } else {
-    editor.move_to(editor.selected_range.end, cx)
+    editor.move_to(editor.selections.primary().range.end, cx)
   }
   editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn alt_right(editor: &mut Editor, _: &AltRight, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    alt_right(editor, &AltRight, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::Word(1), false, window, cx) {
     return;
   }
@@ -418,18 +494,23 @@ pub fn alt_right(editor: &mut Editor, _: &AltRight, window: &mut Window, cx: &mu
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  if editor.selected_range.is_empty() {
+  if editor.selections.primary().range.is_empty() {
     editor.move_to(
-      boundaries::next_word_boundary(editor, editor.selected_range.end, cx),
+      boundaries::next_word_boundary(editor, editor.selections.primary().range.end, cx),
       cx,
     );
   } else {
-    editor.move_to(editor.selected_range.end, cx)
+    editor.move_to(editor.selections.primary().range.end, cx)
   }
   editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn cmd_right(editor: &mut Editor, _: &CmdRight, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    cmd_right(editor, &CmdRight, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::LineBoundary(false), false, window, cx) {
     return;
   }
@@ -453,22 +534,47 @@ pub fn cmd_right(editor: &mut Editor, _: &CmdRight, window: &mut Window, cx: &mu
 }
 
 pub fn cmd_up(editor: &mut Editor, _: &CmdUp, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    cmd_up(editor, &CmdUp, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_document_boundary(true, false, window, cx);
 }
 
 pub fn cmd_down(editor: &mut Editor, _: &CmdDown, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    cmd_down(editor, &CmdDown, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_document_boundary(false, false, window, cx);
 }
 
 pub fn home(editor: &mut Editor, _: &Home, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    home(editor, &Home, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_document_boundary(true, false, window, cx);
 }
 
 pub fn end(editor: &mut Editor, _: &End, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    end(editor, &End, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_document_boundary(false, false, window, cx);
 }
 
 pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_up(editor, &SelectUp, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_vertical(-1, true, false, window, cx);
 }
 
@@ -478,6 +584,11 @@ pub fn select_down(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_down(editor, &SelectDown, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_vertical(1, true, false, window, cx);
 }
 
@@ -487,6 +598,11 @@ pub fn select_left(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_left(editor, &SelectLeft, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::Character(-1), true, window, cx) {
     return;
   }
@@ -511,6 +627,11 @@ pub fn select_word_left(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_word_left(editor, &SelectWordLeft, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::Word(-1), true, window, cx) {
     return;
   }
@@ -532,6 +653,11 @@ pub fn select_right(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_right(editor, &SelectRight, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::Character(1), true, window, cx) {
     return;
   }
@@ -553,6 +679,11 @@ pub fn select_word_right(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_word_right(editor, &SelectWordRight, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::Word(1), true, window, cx) {
     return;
   }
@@ -574,6 +705,11 @@ pub fn select_cmd_left(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_cmd_left(editor, &SelectCmdLeft, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::LineBoundary(true), true, window, cx) {
     return;
   }
@@ -595,6 +731,11 @@ pub fn select_cmd_right(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_cmd_right(editor, &SelectCmdRight, window, cx)
+  }) {
+    return;
+  }
   if editor.navigate_old_side(HorizontalMotion::LineBoundary(false), true, window, cx) {
     return;
   }
@@ -618,6 +759,11 @@ pub fn select_cmd_up(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_cmd_up(editor, &SelectCmdUp, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_document_boundary(true, true, window, cx);
 }
 
@@ -627,12 +773,60 @@ pub fn select_cmd_down(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.navigate_selections(window, cx, |editor, window, cx| {
+    select_cmd_down(editor, &SelectCmdDown, window, cx)
+  }) {
+    return;
+  }
   editor.navigate_document_boundary(false, true, window, cx);
 }
 
 pub fn select_all(editor: &mut Editor, _: &SelectAll, _: &mut Window, cx: &mut Context<Editor>) {
   editor.vertical_goal_x = None;
   editor.select_all_display_lines(cx);
+}
+
+pub fn add_selection_above(
+  editor: &mut Editor,
+  _: &AddSelectionAbove,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.add_selection_vertical(-1, window, cx);
+}
+pub fn add_selection_below(
+  editor: &mut Editor,
+  _: &AddSelectionBelow,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.add_selection_vertical(1, window, cx);
+}
+pub fn select_next_occurrence(
+  editor: &mut Editor,
+  _: &SelectNextOccurrence,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.select_occurrences(false, window, cx);
+}
+pub fn select_all_occurrences(
+  editor: &mut Editor,
+  _: &SelectAllOccurrences,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.select_occurrences(true, window, cx);
+}
+pub fn clear_extra_selections(
+  editor: &mut Editor,
+  _: &ClearExtraSelections,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  if !editor.retain_primary_selection(cx) {
+    close_find(editor, &CloseFind, window, cx);
+  }
 }
 
 pub fn paste(editor: &mut Editor, _: &Paste, _: &mut Window, cx: &mut Context<Editor>) {
@@ -729,7 +923,7 @@ pub fn close_find(
 ) {
   // Actions stop propagating by default in the bubble phase; let escape reach the
   // host (to close the file view) when there was no find panel to close.
-  if !editor.close_find_panel(window, cx) {
+  if !editor.retain_primary_selection(cx) && !editor.close_find_panel(window, cx) {
     cx.propagate();
   }
 }
@@ -827,8 +1021,8 @@ mod tests {
 
     ctx.editor.update(&mut ctx.cx, |editor, _cx| {
       editor.projection = Some(projection_with_removed_line());
-      editor.selected_range = 0..0;
-      editor.selection_reversed = false;
+      editor.selections.primary_mut().range = 0..0;
+      editor.selections.primary_mut().reversed = false;
       editor.display_selection = Some(DisplaySelection {
         start: DisplayCursor { line: 1, column: 3 },
         end: DisplayCursor { line: 1, column: 3 },
@@ -846,8 +1040,8 @@ mod tests {
 
     ctx.editor.update(&mut ctx.cx, |editor, _cx| {
       editor.projection = Some(projection_with_removed_line());
-      editor.selected_range = 0..1;
-      editor.selection_reversed = false;
+      editor.selections.primary_mut().range = 0..1;
+      editor.selections.primary_mut().reversed = false;
       editor.display_selection = Some(DisplaySelection {
         start: DisplayCursor { line: 1, column: 3 },
         end: DisplayCursor { line: 1, column: 3 },

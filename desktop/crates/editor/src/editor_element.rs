@@ -923,7 +923,7 @@ pub struct PrepaintState {
   conflict_borders: Vec<PaintQuad>,
   group_borders: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
-  cursor_quad: Option<PaintQuad>,
+  cursor_quads: Vec<PaintQuad>,
   search_match_quads: Vec<PaintQuad>,
   selection_quads: Vec<PaintQuad>,
   viewport: Range<usize>,
@@ -1151,7 +1151,7 @@ impl Element for EditorElement {
 
       (
         viewport,
-        editor.selected_range.clone(),
+        editor.selections.primary().range.clone(),
         editor.display_selection.clone(),
         editor.cursor_offset(),
         scroll_offset,
@@ -1847,57 +1847,46 @@ impl Element for EditorElement {
 
     let document = self.editor.read(cx).document().read(cx);
     let display_selection = display_selection.clone();
-    let display_cursor = display_selection.as_ref().map(|selection| selection.end);
-
-    let cursor_quad = if let Some(display_cursor) = display_cursor
-      && viewport.contains(&display_cursor.line)
-    {
-      let shaped_opt = shaped_lines
-        .iter()
-        .find(|(idx, _)| *idx == display_cursor.line)
-        .map(|(_, shaped)| shaped);
-      let line_text = line_texts
-        .get(&display_cursor.line)
-        .cloned()
-        .unwrap_or_default();
-      if let Some(shaped) = shaped_opt {
-        let line_len = line_text.chars().count();
-        let cursor_in_line = display_cursor.column.min(line_len);
-        let cursor_byte = char_offset_to_byte_offset(&line_text, cursor_in_line);
-        let cursor_x = shaped.x_for_index(cursor_byte);
-        let y = line_y(
-          bounds.top(),
-          line_height,
-          display_cursor.line,
-          scroll_offset,
-        );
-        Some(fill(
-          Bounds::new(
-            point(bounds.left() + cursor_x, y),
-            size(px(2.), line_height),
-          ),
-          theme.cursor(),
-        ))
+    let mut cursor_quads = Vec::new();
+    let mut selection_quads = Vec::new();
+    let selections = self.editor.read(cx).selections.clone();
+    for selection in selections.iter() {
+      let is_primary_selection = selection.id == selections.primary().id;
+      let selected_range = selection.range.clone();
+      let cursor_offset = if is_primary_selection {
+        cursor_offset
+      } else {
+        selection.head()
+      };
+      let display_selection = if is_primary_selection {
+        display_selection.clone()
       } else {
         None
-      }
-    } else {
-      let cursor_doc_line = document.char_to_line(cursor_offset);
-      let cursor_display_line = self.editor.read(cx).doc_to_display_line(cursor_doc_line);
-      if let Some(cursor_line) = cursor_display_line
-        && viewport.contains(&cursor_line)
+      };
+      let display_cursor = display_selection.as_ref().map(|selection| selection.end);
+
+      let cursor_quad = if let Some(display_cursor) = display_cursor
+        && viewport.contains(&display_cursor.line)
       {
         let shaped_opt = shaped_lines
           .iter()
-          .find(|(idx, _)| *idx == cursor_line)
+          .find(|(idx, _)| *idx == display_cursor.line)
           .map(|(_, shaped)| shaped);
+        let line_text = line_texts
+          .get(&display_cursor.line)
+          .cloned()
+          .unwrap_or_default();
         if let Some(shaped) = shaped_opt {
-          let line_start = document.line_to_char(cursor_doc_line);
-          let cursor_in_line = cursor_offset - line_start;
-          let line_text = line_texts.get(&cursor_line).cloned().unwrap_or_default();
+          let line_len = line_text.chars().count();
+          let cursor_in_line = display_cursor.column.min(line_len);
           let cursor_byte = char_offset_to_byte_offset(&line_text, cursor_in_line);
           let cursor_x = shaped.x_for_index(cursor_byte);
-          let y = line_y(bounds.top(), line_height, cursor_line, scroll_offset);
+          let y = line_y(
+            bounds.top(),
+            line_height,
+            display_cursor.line,
+            scroll_offset,
+          );
           Some(fill(
             Bounds::new(
               point(bounds.left() + cursor_x, y),
@@ -1909,117 +1898,151 @@ impl Element for EditorElement {
           None
         }
       } else {
-        None
-      }
-    };
+        let cursor_doc_line = document.char_to_line(cursor_offset);
+        let cursor_display_line = self.editor.read(cx).doc_to_display_line(cursor_doc_line);
+        if let Some(cursor_line) = cursor_display_line
+          && viewport.contains(&cursor_line)
+        {
+          let shaped_opt = shaped_lines
+            .iter()
+            .find(|(idx, _)| *idx == cursor_line)
+            .map(|(_, shaped)| shaped);
+          if let Some(shaped) = shaped_opt {
+            let line_start = document.line_to_char(cursor_doc_line);
+            let cursor_in_line = cursor_offset - line_start;
+            let line_text = line_texts.get(&cursor_line).cloned().unwrap_or_default();
+            let cursor_byte = char_offset_to_byte_offset(&line_text, cursor_in_line);
+            let cursor_x = shaped.x_for_index(cursor_byte);
+            let y = line_y(bounds.top(), line_height, cursor_line, scroll_offset);
+            Some(fill(
+              Bounds::new(
+                point(bounds.left() + cursor_x, y),
+                size(px(2.), line_height),
+              ),
+              theme.cursor(),
+            ))
+          } else {
+            None
+          }
+        } else {
+          None
+        }
+      };
 
-    let mut selection_quads = Vec::new();
-    let display_selection = display_selection.filter(|selection| !selection.is_empty());
-    if let Some(selection) = display_selection {
-      let (start, end) = selection.normalized();
-      let mut end_line = end.line;
-      if end.column == 0 && end.line > start.line {
-        end_line = end_line.saturating_sub(1);
+      if let Some(quad) = cursor_quad {
+        cursor_quads.push(quad);
       }
-
-      for display_line in start.line..=end_line {
-        if !viewport.contains(&display_line) {
-          continue;
+      let display_selection = display_selection.filter(|selection| !selection.is_empty());
+      if let Some(selection) = display_selection {
+        let (start, end) = selection.normalized();
+        let mut end_line = end.line;
+        if end.column == 0 && end.line > start.line {
+          end_line = end_line.saturating_sub(1);
         }
 
-        let Some(line_text) = line_texts.get(&display_line).cloned() else {
-          continue;
-        };
+        for display_line in start.line..=end_line {
+          if !viewport.contains(&display_line) {
+            continue;
+          }
 
-        let shaped_opt = shaped_lines
-          .iter()
-          .find(|(idx, _)| *idx == display_line)
-          .map(|(_, shaped)| shaped);
-
-        if let Some(shaped) = shaped_opt {
-          let line_len = line_text.chars().count();
-          let line_start = if display_line == start.line {
-            start.column.min(line_len)
-          } else {
-            0
-          };
-          let line_end = if display_line == end_line && display_line == end.line {
-            end.column.min(line_len)
-          } else {
-            line_len
+          let Some(line_text) = line_texts.get(&display_line).cloned() else {
+            continue;
           };
 
-          let x_start = shaped.x_for_index(char_offset_to_byte_offset(&line_text, line_start));
-          let x_end = shaped.x_for_index(char_offset_to_byte_offset(&line_text, line_end));
-          let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
+          let shaped_opt = shaped_lines
+            .iter()
+            .find(|(idx, _)| *idx == display_line)
+            .map(|(_, shaped)| shaped);
 
-          let is_selecting_newline = display_line < end_line && x_start == x_end;
-          let visual_x_end = if is_selecting_newline {
-            x_end + px(NEWLINE_SELECTION_WIDTH)
-          } else {
-            x_end
-          };
+          if let Some(shaped) = shaped_opt {
+            let line_len = line_text.chars().count();
+            let line_start = if display_line == start.line {
+              start.column.min(line_len)
+            } else {
+              0
+            };
+            let line_end = if display_line == end_line && display_line == end.line {
+              end.column.min(line_len)
+            } else {
+              line_len
+            };
 
-          selection_quads.push(fill(
-            Bounds::from_corners(
-              point(bounds.left() + x_start, y),
-              point(bounds.left() + visual_x_end, y + line_height),
-            ),
-            theme.selection(),
-          ));
+            let x_start = shaped.x_for_index(char_offset_to_byte_offset(&line_text, line_start));
+            let x_end = shaped.x_for_index(char_offset_to_byte_offset(&line_text, line_end));
+            let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
+
+            let is_selecting_newline = display_line < end_line && x_start == x_end;
+            let visual_x_end = if is_selecting_newline {
+              x_end + px(NEWLINE_SELECTION_WIDTH)
+            } else {
+              x_end
+            };
+
+            selection_quads.push(fill(
+              Bounds::from_corners(
+                point(bounds.left() + x_start, y),
+                point(bounds.left() + visual_x_end, y + line_height),
+              ),
+              theme.selection(),
+            ));
+          }
         }
-      }
-    } else if !selected_range.is_empty() && !active_find_is_selection {
-      let sel_start = selected_range.start;
-      let sel_end = selected_range.end;
-      let sel_start_line = document.char_to_line(sel_start);
-      let sel_end_line = document.char_to_line(sel_end);
+      } else if !selected_range.is_empty() && !(is_primary_selection && active_find_is_selection) {
+        let sel_start = selected_range.start;
+        let sel_end = selected_range.end;
+        let sel_start_line = document.char_to_line(sel_start);
+        let sel_end_line = document.char_to_line(sel_end);
 
-      for doc_line in sel_start_line..=sel_end_line {
-        let display_line = self.editor.read(cx).doc_to_display_line(doc_line);
-        let Some(display_line) = display_line else {
-          continue;
-        };
-        if !viewport.contains(&display_line) {
-          continue;
-        }
-        let line_range = document.line_range(doc_line).unwrap();
-        let shaped_opt = shaped_lines
-          .iter()
-          .find(|(idx, _)| *idx == display_line)
-          .map(|(_, shaped)| shaped);
-
-        if let Some(shaped) = shaped_opt {
-          let line_start = line_range.start;
-          let line_end = line_range.end;
-          let sel_line_start = sel_start.max(line_start) - line_start;
-          let sel_line_end = sel_end.min(line_end) - line_start;
-          let line_text = line_texts.get(&display_line).cloned().unwrap_or_default();
-          let x_start = shaped.x_for_index(char_offset_to_byte_offset(&line_text, sel_line_start));
-          let x_end = shaped.x_for_index(char_offset_to_byte_offset(&line_text, sel_line_end));
-          let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
-
-          // A selection covering only the newline measures zero wide, so it needs a sliver.
-          let is_selecting_newline = sel_line_end > sel_line_start && x_start == x_end;
-          let visual_x_end = if is_selecting_newline {
-            x_end + px(NEWLINE_SELECTION_WIDTH) // Small width to show newline selection
-          } else {
-            x_end
+        for doc_line in sel_start_line..=sel_end_line {
+          let display_line = self.editor.read(cx).doc_to_display_line(doc_line);
+          let Some(display_line) = display_line else {
+            continue;
           };
+          if !viewport.contains(&display_line) {
+            continue;
+          }
+          let Some(line_range) = document.line_range(doc_line) else {
+            continue;
+          };
+          let shaped_opt = shaped_lines
+            .iter()
+            .find(|(idx, _)| *idx == display_line)
+            .map(|(_, shaped)| shaped);
 
-          selection_quads.push(fill(
-            Bounds::from_corners(
-              point(bounds.left() + x_start, y),
-              point(bounds.left() + visual_x_end, y + line_height),
-            ),
-            theme.selection(),
-          ));
+          if let Some(shaped) = shaped_opt {
+            let line_start = line_range.start;
+            let line_end = line_range.end;
+            let sel_line_start = sel_start.max(line_start) - line_start;
+            let sel_line_end = sel_end.min(line_end) - line_start;
+            let line_text = line_texts.get(&display_line).cloned().unwrap_or_default();
+            let x_start =
+              shaped.x_for_index(char_offset_to_byte_offset(&line_text, sel_line_start));
+            let x_end = shaped.x_for_index(char_offset_to_byte_offset(&line_text, sel_line_end));
+            let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
+
+            // A selection covering only the newline measures zero wide, so it needs a sliver.
+            let is_selecting_newline = sel_line_end > sel_line_start && x_start == x_end;
+            let visual_x_end = if is_selecting_newline {
+              x_end + px(NEWLINE_SELECTION_WIDTH) // Small width to show newline selection
+            } else {
+              x_end
+            };
+
+            selection_quads.push(fill(
+              Bounds::from_corners(
+                point(bounds.left() + x_start, y),
+                point(bounds.left() + visual_x_end, y + line_height),
+              ),
+              theme.selection(),
+            ));
+          }
         }
       }
     }
-
     let selection_active = self.editor.read(cx).selection_view == self.diff_view;
-    let cursor_quad = if selection_active { cursor_quad } else { None };
+    if !selection_active {
+      cursor_quads.clear();
+    }
     let selection_quads = if selection_active {
       selection_quads
     } else {
@@ -2036,7 +2059,7 @@ impl Element for EditorElement {
       conflict_borders,
       group_borders,
       diag_paths,
-      cursor_quad,
+      cursor_quads,
       search_match_quads,
       selection_quads,
       viewport,
@@ -2343,10 +2366,10 @@ impl Element for EditorElement {
     let editor = self.editor.read(cx);
     let cursor_visible = editor.cursor_blink.read(cx).visible();
     let selection_active = editor.selection_view == self.diff_view;
-    if should_paint_text_caret(selection_active, is_focused, cursor_visible)
-      && let Some(cursor_quad) = &prepaint.cursor_quad
-    {
-      window.paint_quad(cursor_quad.clone());
+    if should_paint_text_caret(selection_active, is_focused, cursor_visible) {
+      for cursor in &prepaint.cursor_quads {
+        window.paint_quad(cursor.clone());
+      }
     }
   }
 }

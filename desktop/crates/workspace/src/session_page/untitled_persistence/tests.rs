@@ -24,8 +24,8 @@ fn new_buffer(page: &Entity<SessionPage>, text: &str, cx: &mut VisualTestContext
         .clone()
         .update(cx, |document, cx| document.replace_all(text, cx));
       editor.is_dirty = !text.is_empty();
-      editor.selected_range = 1.min(text.chars().count())..text.chars().count();
-      editor.selection_reversed = true;
+      editor.selections.primary_mut().range = 1.min(text.chars().count())..text.chars().count();
+      editor.selections.primary_mut().reversed = true;
       cx.notify();
     });
     tab
@@ -179,7 +179,7 @@ async fn untitled_save_as_after_restore_reuses_editor_and_cleans_up(cx: &mut Tes
   page.update(cx, |page, _| page.untitled_buffers.clear());
   let restored = fresh_page(cx);
   let editor = restored.read_with(cx, |page, _| page.shown_editor().expect("restored editor"));
-  let selection = editor.read_with(cx, |editor, _| editor.selected_range.clone());
+  let selection = editor.read_with(cx, |editor, _| editor.selections.primary().range.clone());
   editor.update(cx, |editor, cx| editor.save(cx));
   cx.run_until_parked();
   assert!(cx.did_prompt_for_new_path());
@@ -200,7 +200,7 @@ async fn untitled_save_as_after_restore_reuses_editor_and_cleans_up(cx: &mut Tes
   );
   restored.read_with(cx, |page, cx| {
     assert_eq!(page.shown_editor(), Some(editor.clone()));
-    assert_eq!(editor.read(cx).selected_range, selection);
+    assert_eq!(editor.read(cx).selections.primary().range, selection);
     assert!(!editor.read(cx).is_untitled());
     assert!(!page.editor_states.contains_key(&tab));
     assert!(page.untitled_buffers.is_empty());

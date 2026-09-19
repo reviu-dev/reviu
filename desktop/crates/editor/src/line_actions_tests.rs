@@ -40,17 +40,18 @@ fn moving_lines_preserves_unicode_columns_and_line_endings(cx: &mut TestAppConte
     ("a\r\nb|\nc", false, "b\r\na\nc", 1),
   ] {
     let (editor, cx) = setup(cx, before, None);
-    let original_selection = editor.read_with(cx, |editor, _| editor.selected_range.clone());
+    let original_selection =
+      editor.read_with(cx, |editor, _| editor.selections.primary().range.clone());
     editor.update(cx, |editor, cx| editor.move_lines(down, cx));
     assert_eq!(text(&editor, cx), after, "{before}");
     assert_eq!(
-      editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+      editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
       cursor..cursor
     );
     undo(&editor, false, cx);
     assert_eq!(text(&editor, cx), before.replace('|', ""));
     assert_eq!(
-      editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+      editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
       original_selection
     );
     assert!(!editor.read_with(cx, |editor, _| editor.is_dirty));
@@ -67,20 +68,20 @@ fn moving_selection_excludes_last_line_start_and_keeps_direction(cx: &mut TestAp
   ] {
     let (editor, cx) = setup(cx, &format!("|{before}"), None);
     editor.update(cx, |editor, cx| {
-      editor.selected_range = 0..4;
-      editor.selection_reversed = true;
+      editor.selections.primary_mut().range = 0..4;
+      editor.selections.primary_mut().reversed = true;
       editor.move_lines(true, cx);
     });
     assert_eq!(text(&editor, cx), after);
     editor.read_with(cx, |editor, _| {
-      assert_eq!(editor.selected_range, 2..end);
-      assert!(editor.selection_reversed);
+      assert_eq!(editor.selections.primary().range, 2..end);
+      assert!(editor.selections.primary().reversed);
     });
     undo(&editor, false, cx);
     assert_eq!(text(&editor, cx), before);
     editor.read_with(cx, |editor, _| {
-      assert_eq!(editor.selected_range, 0..4);
-      assert!(editor.selection_reversed);
+      assert_eq!(editor.selections.primary().range, 0..4);
+      assert!(editor.selections.primary().reversed);
     });
   }
 }
@@ -91,7 +92,7 @@ fn boundary_moves_and_identical_lines_do_not_dirty_the_document(cx: &mut TestApp
   editor.update(cx, |editor, cx| {
     editor.move_lines(false, cx);
     editor.move_lines(true, cx);
-    assert_eq!(editor.selected_range, 5..5);
+    assert_eq!(editor.selections.primary().range, 5..5);
     editor.move_lines(true, cx);
   });
   assert_eq!(text(&editor, cx), "same\nsame");
@@ -123,14 +124,14 @@ fn duplicate_moves_selection_to_the_requested_copy(cx: &mut TestAppContext) {
   }
   let (editor, cx) = setup(cx, "|a\nb\nc", None);
   editor.update(cx, |editor, cx| {
-    editor.selected_range = 0..4;
-    editor.selection_reversed = true;
+    editor.selections.primary_mut().range = 0..4;
+    editor.selections.primary_mut().reversed = true;
     editor.duplicate_lines(true, cx);
   });
   assert_eq!(text(&editor, cx), "a\nb\na\nb\nc");
   editor.read_with(cx, |editor, _| {
-    assert_eq!(editor.selected_range, 4..8);
-    assert!(editor.selection_reversed);
+    assert_eq!(editor.selections.primary().range, 4..8);
+    assert!(editor.selections.primary().reversed);
   });
 }
 
@@ -161,20 +162,20 @@ fn deleting_lines_preserves_column_and_handles_eof(cx: &mut TestAppContext) {
 fn deleting_a_selection_uses_whole_rows_and_is_one_undo_step(cx: &mut TestAppContext) {
   let (editor, cx) = setup(cx, "|a\nb\nc", None);
   editor.update(cx, |editor, cx| {
-    editor.selected_range = 1..4;
-    editor.selection_reversed = true;
+    editor.selections.primary_mut().range = 1..4;
+    editor.selections.primary_mut().reversed = true;
     editor.delete_lines(cx);
   });
   assert_eq!(text(&editor, cx), "c");
   undo(&editor, false, cx);
   assert_eq!(text(&editor, cx), "a\nb\nc");
   editor.read_with(cx, |editor, _| {
-    assert_eq!(editor.selected_range, 1..4);
-    assert!(editor.selection_reversed);
+    assert_eq!(editor.selections.primary().range, 1..4);
+    assert!(editor.selections.primary().reversed);
     assert!(!editor.is_dirty);
   });
   editor.update(cx, |editor, cx| {
-    editor.selected_range = 0..editor.document.read(cx).len();
+    editor.selections.primary_mut().range = 0..editor.document.read(cx).len();
     editor.delete_lines(cx);
   });
   assert_eq!(text(&editor, cx), "");
@@ -219,8 +220,8 @@ fn line_comments_align_and_roundtrip_with_blank_lines(cx: &mut TestAppContext) {
     let original = "  café\n\n    🙂\nlast";
     let (editor, cx) = setup(cx, &format!("|{original}"), Some(language));
     editor.update(cx, |editor, cx| {
-      editor.selected_range = 0..14;
-      editor.selection_reversed = true;
+      editor.selections.primary_mut().range = 0..14;
+      editor.selections.primary_mut().reversed = true;
       editor.toggle_line_comments(cx).expect("supported language");
     });
     assert_eq!(
@@ -231,7 +232,7 @@ fn line_comments_align_and_roundtrip_with_blank_lines(cx: &mut TestAppContext) {
     let after = text(&editor, cx);
     undo(&editor, false, cx);
     assert_eq!(text(&editor, cx), original);
-    assert!(editor.read_with(cx, |editor, _| editor.selection_reversed));
+    assert!(editor.read_with(cx, |editor, _| editor.selections.primary().reversed));
     undo(&editor, true, cx);
     assert_eq!(text(&editor, cx), after);
     editor.update(cx, |editor, cx| {
@@ -246,7 +247,7 @@ fn mixed_comments_add_one_layer_and_remove_only_one_optional_space(cx: &mut Test
   let original = "//old\n  code\n//  aligned";
   let (editor, cx) = setup(cx, &format!("|{original}"), Some("rs"));
   editor.update(cx, |editor, cx| {
-    editor.selected_range = 0..editor.document.read(cx).len();
+    editor.selections.primary_mut().range = 0..editor.document.read(cx).len();
     editor.toggle_line_comments(cx).expect("comment");
   });
   assert_eq!(text(&editor, cx), "// //old\n//   code\n// //  aligned");
@@ -270,7 +271,7 @@ fn block_comments_roundtrip_without_losing_whitespace(cx: &mut TestAppContext) {
   ] {
     let (editor, cx) = setup(cx, &format!("|{original}"), Some(language));
     editor.update(cx, |editor, cx| {
-      editor.selected_range = 0..editor.document.read(cx).len();
+      editor.selections.primary_mut().range = 0..editor.document.read(cx).len();
       editor.toggle_line_comments(cx).expect("comment");
     });
     assert_eq!(text(&editor, cx), expected);
@@ -289,19 +290,19 @@ fn block_comment_selection_stays_inside_the_delimiters(cx: &mut TestAppContext) 
     let (editor, cx) = setup(cx, &format!("|{source}"), Some("css"));
     let length = source.chars().count();
     editor.update(cx, |editor, cx| {
-      editor.selected_range = 0..length;
+      editor.selections.primary_mut().range = 0..length;
       editor.toggle_line_comments(cx).expect("comment");
-      assert_eq!(editor.selected_range, 3..3 + length);
+      assert_eq!(editor.selections.primary().range, 3..3 + length);
     });
     undo(&editor, false, cx);
     assert_eq!(text(&editor, cx), source);
     assert_eq!(
-      editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+      editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
       0..length
     );
     undo(&editor, true, cx);
     assert_eq!(
-      editor.read_with(cx, |editor, _| editor.selected_range.clone()),
+      editor.read_with(cx, |editor, _| editor.selections.primary().range.clone()),
       3..3 + length
     );
   }
@@ -318,7 +319,7 @@ fn unsupported_or_unsafe_comments_leave_the_buffer_untouched(cx: &mut TestAppCon
   ] {
     let (editor, cx) = setup(cx, &format!("|{source}"), language);
     editor.update(cx, |editor, cx| {
-      editor.selected_range = 0..editor.document.read(cx).len();
+      editor.selections.primary_mut().range = 0..editor.document.read(cx).len();
       assert!(editor.toggle_line_comments(cx).is_err());
       assert!(!editor.is_dirty);
     });

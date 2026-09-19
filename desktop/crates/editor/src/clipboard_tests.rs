@@ -22,8 +22,8 @@ fn state(editor: &Entity<Editor>, cx: &VisualTestContext) -> (String, Range<usiz
     let document = editor.document.read(cx);
     (
       document.slice_to_string(0..document.len()),
-      editor.selected_range.clone(),
-      editor.selection_reversed,
+      editor.selections.primary().range.clone(),
+      editor.selections.primary().reversed,
     )
   })
 }
@@ -167,8 +167,8 @@ fn explicit_selection_replaces_literally_and_undo_restores_direction(cx: &mut Te
     let (editor, cx) = setup(cx, "one\né|🙂\nlast");
     copy(&editor, cx);
     editor.update(cx, |editor, _| {
-      editor.selected_range = 0..3;
-      editor.selection_reversed = reversed;
+      editor.selections.primary_mut().range = 0..3;
+      editor.selections.primary_mut().reversed = reversed;
     });
     let original = state(&editor, cx);
     paste(&editor, cx);
@@ -195,8 +195,8 @@ fn explicitly_copied_text_pastes_at_cursor_even_for_a_whole_line(cx: &mut TestAp
   ] {
     let (editor, cx) = setup(cx, "|alpha\nbeta");
     editor.update(cx, |editor, _| {
-      editor.selected_range = selection;
-      editor.selection_reversed = true;
+      editor.selections.primary_mut().range = selection;
+      editor.selections.primary_mut().reversed = true;
     });
     let selected = state(&editor, cx);
     copy(&editor, cx);
@@ -326,7 +326,9 @@ fn read_only_editor_allows_copy_but_not_cut_or_paste(cx: &mut TestAppContext) {
   let (editor, cx) = setup(cx, "one\né|🙂");
   editor.update(cx, |editor, _| editor.is_read_only = true);
   for selection in [5..5, 4..6] {
-    editor.update(cx, |editor, _| editor.selected_range = selection.clone());
+    editor.update(cx, |editor, _| {
+      editor.selections.primary_mut().range = selection.clone()
+    });
     let original = state(&editor, cx);
     copy(&editor, cx);
     let item = clipboard(cx);

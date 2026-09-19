@@ -126,8 +126,23 @@ impl Editor {
     if self.selection_line_text(cursor.line, view, cx).is_none() {
       return;
     }
+    let adding = event.modifiers.alt && self.selection_view == view;
+    if adding
+      && (view == DiffElementView::SplitLeft || self.is_removed_display_line(cursor.line, cx))
+    {
+      return;
+    }
     self.finalize_transaction(cx);
-    let extending = event.modifiers.shift && self.selection_view == view;
+    self.occurrence_wordwise = false;
+    if adding {
+      if let Some(offset) = self.doc_offset_for_display_cursor(cursor, cx) {
+        self.selections.add(offset..offset, false);
+        self.display_selection = None;
+      }
+    } else {
+      self.selections.single();
+    }
+    let extending = event.modifiers.shift && !adding && self.selection_view == view;
     let anchor = self.current_display_anchor(cx).unwrap_or(cursor);
     let previous = self
       .mouse_selection
@@ -188,6 +203,9 @@ impl Editor {
     let Some(selection) = self.mouse_selection.clone() else {
       return;
     };
+    if self.selections.len() > 1 && self.is_removed_display_line(cursor.line, cx) {
+      return;
+    }
     let total = self.display_line_count(self.document.read(cx).len_lines());
     cursor.line = cursor.line.min(total.saturating_sub(1));
     let forward = cursor >= selection.original.start;
@@ -288,6 +306,11 @@ impl Editor {
     }
     self.is_selecting = false;
     self.selection_autoscroll_task = None;
+    self.selections.normalize();
+    if self.selections.len() > 1 {
+      self.display_selection = None;
+    }
+    cx.notify();
   }
 
   pub fn mouse_dragged(
@@ -375,11 +398,13 @@ impl Editor {
   }
 
   pub(crate) fn select_all_display_lines(&mut self, cx: &mut Context<Self>) -> bool {
+    self.selections.single();
+    self.occurrence_wordwise = false;
     let range =
       self.mouse_selection_range(DisplayCursor { line: 0, column: 0 }, SelectionMode::All, cx);
     self.mouse_selection = None;
     self.set_display_selection_with_anchor(range.start, range.end, cx);
-    self.selected_range = 0..self.document.read(cx).len();
+    self.selections.primary_mut().range = 0..self.document.read(cx).len();
     true
   }
 }
