@@ -1001,7 +1001,7 @@ impl SessionPage {
                   .child(
                     div()
                       .relative()
-                      .w(px(48.0))
+                      .w(px(56.0))
                       .h(px(20.0))
                       .child(
                         div()
@@ -1009,6 +1009,8 @@ impl SessionPage {
                           .right_0()
                           .top(px(2.0))
                           .text_xs()
+                          .text_right()
+                          .whitespace_nowrap()
                           .text_color(theme.muted_foreground)
                           .group_hover(group_name.clone(), |this| this.invisible())
                           .debug_selector(|| "session-history-time".to_string())
