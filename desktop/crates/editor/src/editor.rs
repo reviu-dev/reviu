@@ -1433,7 +1433,7 @@ impl Editor {
       last_layout_font_size: px(0.0),
       word_diff_cache: WordDiffCache::default(),
       block_map: ProjectionBlockMap::default(),
-      soft_wrap: soft_wrap::SoftWrap::default(),
+      soft_wrap: soft_wrap::SoftWrap::new(crate::settings::EditorSettings::get(cx).soft_wrap),
       scroll_offset_y: 0.0,
       editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
       editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),

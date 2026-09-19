@@ -30,7 +30,7 @@ fn settings_reload_applies_effects_and_ignores_own_write_echoes(cx: &mut TestApp
   });
   std::fs::write(
     &path,
-    r#"{"font_size":20,"auto_switch_theme":false,"dark_mode":true,"find_regex":true}"#,
+    r#"{"font_size":20,"auto_switch_theme":false,"dark_mode":true,"find_regex":true,"soft_wrap":true}"#,
   )
   .expect("write settings");
   cx.update(|cx| reload(ConfigKind::Settings, cx));
@@ -40,6 +40,8 @@ fn settings_reload_applies_effects_and_ignores_own_write_echoes(cx: &mut TestApp
     assert_eq!(Theme::global(cx).font_size, px(20.0));
     assert!(Theme::global(cx).mode.is_dark());
     assert!(cx.global::<editor::SearchOptions>().regex);
+    assert!(AppSettings::get(cx).soft_wrap);
+    assert!(editor::EditorSettings::get(cx).soft_wrap);
     AppSettings::update(cx, |settings| settings.font_size = 18.0);
   });
   cx.run_until_parked();

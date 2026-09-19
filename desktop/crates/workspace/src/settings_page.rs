@@ -109,6 +109,7 @@ pub struct SettingsPage {
   focus_handle: FocusHandle,
   auto_switch_theme: bool,
   indent_rainbow: bool,
+  soft_wrap: bool,
   git_unified_file_view: bool,
   split_diff_view: bool,
   hide_whitespace: bool,
@@ -164,6 +165,7 @@ impl SettingsPage {
       focus_handle: cx.focus_handle(),
       auto_switch_theme: settings.auto_switch_theme,
       indent_rainbow: settings.indent_rainbow,
+      soft_wrap: settings.soft_wrap,
       git_unified_file_view: settings.git_unified_file_view,
       split_diff_view: settings.split_diff_view,
       hide_whitespace: settings.hide_whitespace,
@@ -189,6 +191,7 @@ impl SettingsPage {
   fn sync_persisted_settings(&mut self, settings: PersistedSettings, cx: &mut Context<Self>) {
     let changed = self.auto_switch_theme != settings.auto_switch_theme
       || self.indent_rainbow != settings.indent_rainbow
+      || self.soft_wrap != settings.soft_wrap
       || self.git_unified_file_view != settings.git_unified_file_view
       || self.split_diff_view != settings.split_diff_view
       || self.hide_whitespace != settings.hide_whitespace
@@ -202,6 +205,7 @@ impl SettingsPage {
 
     self.auto_switch_theme = settings.auto_switch_theme;
     self.indent_rainbow = settings.indent_rainbow;
+    self.soft_wrap = settings.soft_wrap;
     self.git_unified_file_view = settings.git_unified_file_view;
     self.split_diff_view = settings.split_diff_view;
     self.hide_whitespace = settings.hide_whitespace;
@@ -319,6 +323,13 @@ impl SettingsPage {
           .description("Base font size for the application (12–24px)."),
         ]),
         SettingGroup::new().title("Editor").items(vec![
+          SettingItem::new(
+            "Soft Wrap",
+            SettingField::checkbox(
+              |cx: &App| PersistedSettings::get(cx).soft_wrap,
+              |value: bool, cx: &mut App| PersistedSettings::update(cx, |settings| settings.soft_wrap = value),
+            ).default_value(false),
+          ).description("Wrap long lines to the editor width by default. Toggle temporarily in the active editor with Alt-Z or the command palette."),
           SettingItem::new(
             "Split Diff View",
             SettingField::checkbox(
@@ -1115,6 +1126,7 @@ mod tests {
       let mut settings = PersistedSettings::get(cx);
       settings.files_show_gitignored = false;
       settings.files_show_hidden = false;
+      settings.soft_wrap = true;
       cx.set_global(settings);
     });
     cx.run_until_parked();
@@ -1122,6 +1134,7 @@ mod tests {
     view.read_with(cx, |view, _| {
       assert!(!view.files_show_gitignored);
       assert!(!view.files_show_hidden);
+      assert!(view.soft_wrap);
     });
   }
 

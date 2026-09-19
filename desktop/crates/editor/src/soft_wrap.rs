@@ -223,6 +223,7 @@ struct WrapKey {
 #[derive(Default)]
 pub(crate) struct SoftWrap {
   pub enabled: bool,
+  preference_override: Option<bool>,
   pub map: Arc<WrapMap>,
   pub upstream_cursor: Option<DisplayCursor>,
   pub upstream_selections: HashMap<u64, DisplayCursor>,
@@ -233,6 +234,13 @@ pub(crate) struct SoftWrap {
 }
 
 impl SoftWrap {
+  pub fn new(enabled: bool) -> Self {
+    Self {
+      enabled,
+      ..Self::default()
+    }
+  }
+
   pub fn cursor_row(&self, cursor: DisplayCursor, view: DiffElementView) -> usize {
     self
       .map
@@ -362,6 +370,11 @@ impl Editor {
   }
 
   pub fn set_soft_wrap(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    self.soft_wrap.preference_override = Some(enabled);
+    self.apply_soft_wrap(enabled, cx);
+  }
+
+  fn apply_soft_wrap(&mut self, enabled: bool, cx: &mut Context<Self>) {
     if self.soft_wrap.enabled == enabled {
       return;
     }
@@ -371,6 +384,7 @@ impl Editor {
       .line(self.scroll_offset_y.floor().max(0.0) as usize);
     self.soft_wrap = SoftWrap {
       enabled,
+      preference_override: self.soft_wrap.preference_override,
       ..SoftWrap::default()
     };
     self.scroll_offset_y = line as f32;
@@ -383,6 +397,9 @@ impl Editor {
   }
 
   pub(crate) fn sync_soft_wrap(&mut self, window: &Window, cx: &mut Context<Self>) {
+    if self.soft_wrap.preference_override.is_none() {
+      self.apply_soft_wrap(crate::settings::EditorSettings::get(cx).soft_wrap, cx);
+    }
     if !self.soft_wrap.enabled || self.viewport_width <= px(0.0) {
       return;
     }

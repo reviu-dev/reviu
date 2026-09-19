@@ -416,6 +416,7 @@ pub enum CommandPaletteAction {
   ShowGlobalSearch,
   ToggleDiffView,
   ToggleHideWhitespace,
+  ToggleSoftWrap,
   SendSelectionToAgent,
   JumpToLatestMessage,
   SignIn,
@@ -1045,6 +1046,7 @@ pub enum CommandPaletteCommandId {
   ShowGlobalSearch,
   ToggleDiffView,
   ToggleHideWhitespace,
+  ToggleSoftWrap,
   SendSelectionToAgent,
   JumpToLatestMessage,
   NewAgentSession,
@@ -1123,6 +1125,7 @@ impl CommandPaletteCommandId {
       Self::ShowGlobalSearch => "show_global_search",
       Self::ToggleDiffView => "toggle_diff_view",
       Self::ToggleHideWhitespace => "toggle_hide_whitespace",
+      Self::ToggleSoftWrap => "toggle_soft_wrap",
       Self::SendSelectionToAgent => "send_selection_to_agent",
       Self::JumpToLatestMessage => "jump_to_latest_message",
       Self::NewAgentSession => "new_agent_session",
@@ -1197,6 +1200,7 @@ impl CommandPaletteCommandId {
       "show_global_search" => Some(Self::ShowGlobalSearch),
       "toggle_diff_view" => Some(Self::ToggleDiffView),
       "toggle_hide_whitespace" => Some(Self::ToggleHideWhitespace),
+      "toggle_soft_wrap" => Some(Self::ToggleSoftWrap),
       "send_selection_to_agent" => Some(Self::SendSelectionToAgent),
       "jump_to_latest_message" => Some(Self::JumpToLatestMessage),
       "new_agent_session" => Some(Self::NewAgentSession),
@@ -1829,6 +1833,14 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn toggle_soft_wrap() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ToggleSoftWrap,
+      "Toggle soft wrap",
+      "Temporarily toggle line wrapping in the active editor without changing your settings",
+    )
+  }
+
   pub fn send_selection_to_agent() -> Self {
     Self::new(
       CommandPaletteCommandId::SendSelectionToAgent,
@@ -2043,9 +2055,9 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::ShowGlobalSearch
       | CommandPaletteCommandId::JumpToLatestMessage => CommandPaletteGroup::Navigation,
 
-      CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
-        CommandPaletteGroup::View
-      }
+      CommandPaletteCommandId::ToggleDiffView
+      | CommandPaletteCommandId::ToggleHideWhitespace
+      | CommandPaletteCommandId::ToggleSoftWrap => CommandPaletteGroup::View,
 
       CommandPaletteCommandId::SendSelectionToAgent => CommandPaletteGroup::Review,
 
@@ -2104,6 +2116,7 @@ impl CommandPaletteCommand {
       Id::ShowGlobalSearch => &["grep", "find", "content", "search"],
       Id::ToggleDiffView => &["split", "inline", "unified", "side"],
       Id::ToggleHideWhitespace => &["blank", "spaces", "indent"],
+      Id::ToggleSoftWrap => &["word", "wrap", "line", "width", "editor"],
       Id::SendSelectionToAgent => &["context", "attach", "prompt"],
       Id::JumpToLatestMessage => &["bottom", "newest", "tail", "conversation"],
       Id::NewAgentSession => &["chat", "conversation", "agent", "start", "create"],
@@ -2209,6 +2222,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
         Icon::new(UiIconName::FileDiff)
       }
+      CommandPaletteCommandId::ToggleSoftWrap => Icon::new(UiIconName::FileCode),
       CommandPaletteCommandId::SendSelectionToAgent => Icon::new(UiIconName::Sparkles),
       CommandPaletteCommandId::JumpToLatestMessage => Icon::new(UiIconName::ArrowDownFromLine),
       CommandPaletteCommandId::NewAgentSession => Icon::new(UiIconName::SquarePen),
@@ -3448,6 +3462,9 @@ impl CommandPalette {
       CommandPaletteCommandId::ToggleDiffView => {
         self.trigger_action(command, CommandPaletteAction::ToggleDiffView, window, cx);
       }
+      CommandPaletteCommandId::ToggleSoftWrap => {
+        self.trigger_action(command, CommandPaletteAction::ToggleSoftWrap, window, cx);
+      }
       CommandPaletteCommandId::ToggleHideWhitespace => {
         self.trigger_action(
           command,
@@ -4531,6 +4548,7 @@ mod tests {
       CommandPaletteCommand::show_global_search(),
       CommandPaletteCommand::toggle_diff_view(),
       CommandPaletteCommand::toggle_hide_whitespace(),
+      CommandPaletteCommand::toggle_soft_wrap(),
       CommandPaletteCommand::send_selection_to_agent(),
       CommandPaletteCommand::jump_to_latest_message(),
     ] {
@@ -4553,6 +4571,7 @@ mod tests {
     assert!(CommandPaletteCommand::show_global_search().matches("grep"));
     assert!(CommandPaletteCommand::show_global_search().matches("content"));
     assert!(CommandPaletteCommand::toggle_diff_view().matches("split"));
+    assert!(CommandPaletteCommand::toggle_soft_wrap().matches("word wrap"));
     assert!(CommandPaletteCommand::sign_out().matches("logout"));
     assert!(CommandPaletteCommand::open_browser_extensions().matches("chrome"));
   }

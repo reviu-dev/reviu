@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.2.0
 
+### Soft Wrap Preference
+
+Choose whether long lines wrap by default in Settings > Editor, without changing file contents. Use Alt-Z or Toggle Soft Wrap in the command palette for a temporary override in the active editor. The editor header no longer needs a Wrap button.
+
 ### Live Configuration Files
 
 Find your settings and keyboard shortcut files from Settings or the command palette. Manual edits now apply without restarting Reviu, including symlinked dotfiles. Invalid JSON keeps your last working configuration and shows an error that clears when the file is corrected.

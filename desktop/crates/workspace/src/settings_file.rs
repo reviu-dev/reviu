@@ -65,6 +65,8 @@ struct SettingsDoc {
   #[serde(deserialize_with = "lenient")]
   indent_rainbow: Option<bool>,
   #[serde(deserialize_with = "lenient")]
+  soft_wrap: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
   font_size: Option<f32>,
   #[serde(deserialize_with = "lenient")]
   git_unified_file_view: Option<bool>,
@@ -109,6 +111,7 @@ impl SettingsDoc {
       auto_switch_theme: self.auto_switch_theme.unwrap_or(defaults.auto_switch_theme),
       dark_mode: self.dark_mode.unwrap_or(defaults.dark_mode),
       indent_rainbow: self.indent_rainbow.unwrap_or(defaults.indent_rainbow),
+      soft_wrap: self.soft_wrap.unwrap_or(defaults.soft_wrap),
       font_size: self.font_size.unwrap_or(defaults.font_size),
       git_unified_file_view: self
         .git_unified_file_view
@@ -140,6 +143,7 @@ impl From<AppSettings> for SettingsDoc {
       auto_switch_theme: Some(settings.auto_switch_theme),
       dark_mode: Some(settings.dark_mode),
       indent_rainbow: Some(settings.indent_rainbow),
+      soft_wrap: Some(settings.soft_wrap),
       font_size: Some(settings.font_size),
       git_unified_file_view: Some(settings.git_unified_file_view),
       split_diff_view: Some(settings.split_diff_view),
@@ -268,6 +272,7 @@ mod tests {
       auto_switch_theme: false,
       dark_mode: true,
       indent_rainbow: true,
+      soft_wrap: true,
       font_size: 20.0,
       git_unified_file_view: true,
       split_diff_view: true,
@@ -304,6 +309,7 @@ mod tests {
       "absent field must take its default"
     );
     assert!(loaded.menu_bar_icon);
+    assert!(!loaded.soft_wrap);
     assert!(take_startup_error().is_none());
 
     teardown();
@@ -324,11 +330,16 @@ mod tests {
   #[test]
   fn a_mistyped_field_falls_back_alone() {
     let path = setup("mistyped-field");
-    fs::write(&path, r#"{ "font_size": "big", "hide_whitespace": true }"#).expect("write file");
+    fs::write(
+      &path,
+      r#"{ "font_size": "big", "hide_whitespace": true, "soft_wrap": "yes" }"#,
+    )
+    .expect("write file");
 
     let loaded = load();
     assert_eq!(loaded.font_size, 16.0);
     assert!(loaded.hide_whitespace, "valid fields must survive");
+    assert!(!loaded.soft_wrap);
     assert!(take_startup_error().is_none());
 
     teardown();

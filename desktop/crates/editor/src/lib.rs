@@ -32,4 +32,4 @@ pub use gutter_element::GutterElement;
 pub use projection::*;
 pub use search::SearchOptions;
 pub use selections::{Selection, Selections};
-pub use settings::{indent_rainbow_enabled, set_indent_rainbow_enabled};
+pub use settings::{EditorSettings, indent_rainbow_enabled, set_indent_rainbow_enabled};

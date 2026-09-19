@@ -154,6 +154,9 @@ pub(crate) fn apply_settings(settings: AppSettings, window: Option<&mut Window>,
   let previous = cx.try_global::<AppSettings>().copied();
   cx.set_global(settings);
   cx.set_global(settings.find_options());
+  cx.set_global(editor::EditorSettings {
+    soft_wrap: settings.soft_wrap,
+  });
   editor::set_indent_rainbow_enabled(settings.indent_rainbow);
   if cx.has_global::<Theme>() {
     Theme::global_mut(cx).font_size = px(settings.font_size);

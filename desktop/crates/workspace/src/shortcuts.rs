@@ -101,6 +101,7 @@ pub enum ShortcutId {
   OpenPullRequestSidebar,
   ToggleDiffView,
   ToggleHideWhitespace,
+  ToggleSoftWrap,
   PreviousAnnotation,
   NextAnnotation,
   CommentHunk,
@@ -141,6 +142,7 @@ impl ShortcutId {
       ShortcutId::OpenPullRequestSidebar => "open_pull_request_sidebar",
       ShortcutId::ToggleDiffView => "toggle_diff_view",
       ShortcutId::ToggleHideWhitespace => "toggle_hide_whitespace",
+      ShortcutId::ToggleSoftWrap => "toggle_soft_wrap",
       ShortcutId::PreviousAnnotation => "previous_annotation",
       ShortcutId::NextAnnotation => "next_annotation",
       ShortcutId::CommentHunk => "comment_hunk",
@@ -181,6 +183,7 @@ impl ShortcutId {
       "open_pull_request_sidebar" => Some(ShortcutId::OpenPullRequestSidebar),
       "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
       "toggle_hide_whitespace" => Some(ShortcutId::ToggleHideWhitespace),
+      "toggle_soft_wrap" => Some(ShortcutId::ToggleSoftWrap),
       "previous_annotation" => Some(ShortcutId::PreviousAnnotation),
       "next_annotation" => Some(ShortcutId::NextAnnotation),
       "comment_hunk" => Some(ShortcutId::CommentHunk),
@@ -220,7 +223,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 35] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -462,6 +465,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 35] = [
     context: TOGGLE_DIFF_VIEW_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleSoftWrap,
+    title: "Toggle Soft Wrap",
+    description: "Temporarily toggle line wrapping in the active editor.",
+    scope_label: "Editor",
+    category: ShortcutCategory::Core,
+    keystroke: "alt-z",
+    context: "WorkspaceSession",
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleHideWhitespace,
@@ -917,6 +931,12 @@ impl ShortcutDefinition {
       base
     };
 
+    let context = if self.id == ShortcutId::ToggleSoftWrap {
+      format!("({context}) && !Input")
+    } else {
+      context
+    };
+
     match self.id {
       ShortcutId::ShowCommandPalette => {
         KeyBinding::new(keystroke, ShowCommandPalette, Some(&context))
@@ -953,6 +973,7 @@ impl ShortcutDefinition {
         KeyBinding::new(keystroke, OpenPullRequestSidebar, Some(&context))
       }
       ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
+      ShortcutId::ToggleSoftWrap => KeyBinding::new(keystroke, ToggleSoftWrap, Some(&context)),
       ShortcutId::ToggleHideWhitespace => {
         KeyBinding::new(keystroke, ToggleHideWhitespace, Some(&context))
       }
@@ -987,6 +1008,7 @@ impl ShortcutDefinition {
   fn descendant_focus(self) -> Option<&'static str> {
     match self.id {
       ShortcutId::CommentHunk => Some(COMMENT_HUNK_DESCENDANT_FOCUS),
+      ShortcutId::ToggleSoftWrap => Some("Editor"),
       ShortcutId::ToggleHunkStage | ShortcutId::RestoreHunk | ShortcutId::AcceptBothConflict => {
         Some(HUNK_OR_CONFLICT_ACTION_FOCUS)
       }
@@ -1154,6 +1176,7 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::ShowGlobalSearch => Some(ShortcutId::ShowGlobalSearch),
     Command::ToggleDiffView => Some(ShortcutId::ToggleDiffView),
     Command::ToggleHideWhitespace => Some(ShortcutId::ToggleHideWhitespace),
+    Command::ToggleSoftWrap => Some(ShortcutId::ToggleSoftWrap),
     Command::SendSelectionToAgent => Some(ShortcutId::AddSelectionToAgent),
     Command::JumpToLatestMessage => Some(ShortcutId::JumpToLatestMessage),
     Command::NewAgentSession => Some(ShortcutId::NewAgentSession),
@@ -1323,7 +1346,6 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
       NewlineAbove,
       Some("CodeEditor && !Input"),
     ),
-    KeyBinding::new("alt-z", ToggleSoftWrap, Some("Editor && !Input")),
     KeyBinding::new("cmd-/", ToggleComments, Some("CodeEditor && !Input")),
     KeyBinding::new("ctrl-enter", NewlineBelow, Some("Editor && !Input")),
     KeyBinding::new("ctrl-shift-enter", NewlineAbove, Some("Editor && !Input")),
@@ -1628,6 +1650,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::OpenPullRequestSidebar => f(&OpenPullRequestSidebar),
     ShortcutId::ToggleDiffView => f(&ToggleDiffView),
     ShortcutId::ToggleHideWhitespace => f(&ToggleHideWhitespace),
+    ShortcutId::ToggleSoftWrap => f(&ToggleSoftWrap),
     ShortcutId::PreviousAnnotation => f(&PreviousAnnotation),
     ShortcutId::NextAnnotation => f(&NextAnnotation),
     ShortcutId::CommentHunk => f(&CommentHunk),
@@ -1671,6 +1694,10 @@ mod tests {
     );
 
     assert_eq!(palette_command_shortcut(Command::NewTerminal), None);
+    assert_eq!(
+      palette_command_shortcut(Command::ToggleSoftWrap),
+      Some(ShortcutId::ToggleSoftWrap)
+    );
 
     // The dock surfaces that only had a key now show it on their palette row.
     assert_eq!(

@@ -2294,29 +2294,6 @@ impl SessionPage {
       });
     }
 
-    if !previewing
-      && active_binary_preview.is_none()
-      && let Some(editor) = active_editor.clone()
-    {
-      let enabled = editor.read(cx).soft_wrap_enabled();
-      toolbar = toolbar.after_toggles(
-        Button::new("session-page-soft-wrap")
-          .debug_selector(|| "editor-soft-wrap-toggle".to_string())
-          .label("Wrap")
-          .selected(enabled)
-          .xsmall()
-          .ghost()
-          .tooltip("Toggle soft wrap (alt-z)")
-          .on_click(move |_, window, cx| {
-            editor.update(cx, |editor, cx| {
-              editor.toggle_soft_wrap(window, cx);
-              window.focus(&editor.focus_handle, cx);
-            });
-          })
-          .into_any_element(),
-      );
-    }
-
     if can_save && !previewing {
       let save_editor = active_editor.clone();
       toolbar = toolbar.after_toggles(

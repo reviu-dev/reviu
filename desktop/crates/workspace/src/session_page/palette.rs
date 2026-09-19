@@ -55,6 +55,12 @@ impl SessionPage {
     if projects_len > 0 {
       commands.push(CommandPaletteCommand::forget_project());
     }
+    if self.shown_editor().is_some()
+      && self.shown_binary_preview().is_none()
+      && !(self.show_preview && self.shown_previewable())
+    {
+      commands.push(CommandPaletteCommand::toggle_soft_wrap());
+    }
 
     // Creation lands where you are; the project in the label says so upfront.
     if let Some(project_root) = self.project_root(cx) {
@@ -511,6 +517,12 @@ impl SessionPage {
         self.toggle_hide_whitespace(cx);
         Ok(())
       }
+      CommandPaletteAction::ToggleSoftWrap => {
+        if let Some(editor) = self.shown_editor() {
+          editor.update(cx, |editor, cx| editor.toggle_soft_wrap(window, cx));
+        }
+        Ok(())
+      }
       CommandPaletteAction::SendSelectionToAgent => {
         self.add_selection_to_agent_action(&crate::AddSelectionToAgent, window, cx);
         Ok(())
@@ -573,7 +585,51 @@ mod tests {
       // Nothing is open, so the two diff toggles have nothing to act on.
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleDiffView));
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleHideWhitespace));
+      assert!(!ids.contains(&CommandPaletteCommandId::ToggleSoftWrap));
       assert!(!ids.contains(&CommandPaletteCommandId::SendSelectionToAgent));
+    });
+  }
+
+  #[gpui::test]
+  async fn soft_wrap_palette_toggle_is_temporary_and_requires_a_visible_editor(
+    cx: &mut TestAppContext,
+  ) {
+    let _config = crate::config_file::TestConfig::new();
+    let repo = TempRepo::init("session-page-wrap-command");
+    commit_text_file(&repo.path, Path::new("readme.md"), "long line ", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("readme.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      assert!(
+        page
+          .palette_commands(1, cx)
+          .iter()
+          .any(|command| command.id == CommandPaletteCommandId::ToggleSoftWrap)
+      );
+      let editor = page.shown_editor().expect("editor");
+      assert!(!editor.read(cx).soft_wrap_enabled());
+      page
+        .handle_command_palette_action(CommandPaletteAction::ToggleSoftWrap, window, cx)
+        .expect("toggle");
+      assert!(editor.read(cx).soft_wrap_enabled());
+      assert!(!crate::config::AppSettings::get(cx).soft_wrap);
+      page.show_preview = true;
+      assert!(
+        !page
+          .palette_commands(1, cx)
+          .iter()
+          .any(|command| command.id == CommandPaletteCommandId::ToggleSoftWrap)
+      );
     });
   }
 

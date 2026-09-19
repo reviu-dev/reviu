@@ -391,6 +391,7 @@ pub struct AppSettings {
   pub auto_switch_theme: bool,
   pub dark_mode: bool,
   pub indent_rainbow: bool,
+  pub soft_wrap: bool,
   pub font_size: f32,
   pub git_unified_file_view: bool,
   pub split_diff_view: bool,
@@ -447,6 +448,7 @@ impl Default for AppSettings {
       auto_switch_theme: true,
       dark_mode: false,
       indent_rainbow: false,
+      soft_wrap: false,
       font_size: 16.0,
       git_unified_file_view: false,
       split_diff_view: false,
@@ -1035,6 +1037,7 @@ impl ConfigStore {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
           indent_rainbow: indent_rainbow != 0,
+          soft_wrap: false,
           font_size: font_size as f32,
           git_unified_file_view: git_unified_file_view != 0,
           split_diff_view: split_diff_view != 0,
@@ -1667,6 +1670,7 @@ mod tests {
       auto_switch_theme: false,
       dark_mode: true,
       indent_rainbow: true,
+      soft_wrap: true,
       font_size: 20.0,
       git_unified_file_view: true,
       split_diff_view: true,
@@ -1687,6 +1691,7 @@ mod tests {
     assert!(!loaded.auto_switch_theme);
     assert!(loaded.dark_mode);
     assert!(loaded.indent_rainbow);
+    assert!(loaded.soft_wrap);
     assert_eq!(loaded.font_size, 20.0);
     assert!(loaded.git_unified_file_view);
     assert!(loaded.split_diff_view);
