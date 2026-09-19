@@ -2222,7 +2222,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
         Icon::new(UiIconName::FileDiff)
       }
-      CommandPaletteCommandId::ToggleSoftWrap => Icon::new(UiIconName::FileCode),
+      CommandPaletteCommandId::ToggleSoftWrap => Icon::new(UiIconName::TextWrap),
       CommandPaletteCommandId::SendSelectionToAgent => Icon::new(UiIconName::Sparkles),
       CommandPaletteCommandId::JumpToLatestMessage => Icon::new(UiIconName::ArrowDownFromLine),
       CommandPaletteCommandId::NewAgentSession => Icon::new(UiIconName::SquarePen),
