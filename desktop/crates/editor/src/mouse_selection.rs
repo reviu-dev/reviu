@@ -196,6 +196,7 @@ impl Editor {
     }
     if let Some(cursor) = position_map.display_cursor_for_position(event.position) {
       self.begin_mouse_selection(cursor, position_map.view, event, window, cx);
+      self.set_wrap_affinity(position_map.upstream_cursor_at_position(event.position), cx);
     }
   }
 
@@ -286,6 +287,7 @@ impl Editor {
       && let Some(cursor) = map.display_cursor_for_position(position)
     {
       self.update_mouse_selection(cursor, cx);
+      self.set_wrap_affinity(map.upstream_cursor_at_position(position), cx);
     }
   }
 
@@ -303,6 +305,7 @@ impl Editor {
       && let Some(cursor) = map.display_cursor_for_position(event.position)
     {
       self.update_mouse_selection(cursor, cx);
+      self.set_wrap_affinity(map.upstream_cursor_at_position(event.position), cx);
     }
     self.is_selecting = false;
     self.selection_autoscroll_task = None;
@@ -331,6 +334,7 @@ impl Editor {
     self.last_mouse_position = Some(event.position);
     if let Some(cursor) = position_map.display_cursor_for_position(event.position) {
       self.update_mouse_selection(cursor, cx);
+      self.set_wrap_affinity(position_map.upstream_cursor_at_position(event.position), cx);
     }
     if self
       .mouse_selection
@@ -362,6 +366,7 @@ impl Editor {
             let position = window.mouse_position();
             if let Some(cursor) = map.display_cursor_for_position(position) {
               editor.update_mouse_selection(cursor, cx);
+              editor.set_wrap_affinity(map.upstream_cursor_at_position(position), cx);
             }
             let delta = selection_scroll_delta(
               position,
@@ -374,7 +379,7 @@ impl Editor {
               editor.scroll_offset_y + delta.y,
               map.viewport_bounds.size.height,
               map.line_height,
-              total,
+              editor.soft_wrap.map.count(total),
             );
             let horizontal =
               editor.clamp_horizontal_scroll_x(editor.scroll_handle.offset().x - px(delta.x));

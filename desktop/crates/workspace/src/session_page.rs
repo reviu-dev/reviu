@@ -2569,6 +2569,8 @@ impl SessionPage {
         "selected_file": selected_file,
         "line_count": line_count,
         "display_line_count": display_line_count,
+        "visual_line_count": editor.visual_line_count(line_count),
+        "soft_wrap": editor.soft_wrap_enabled(),
         "scroll_offset_y": editor.scroll_offset_y,
         "cursor_offset": editor.cursor_offset(),
         "cursor_line": document.char_to_line(editor.cursor_offset()),

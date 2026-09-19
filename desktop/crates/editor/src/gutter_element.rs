@@ -330,12 +330,15 @@ impl Element for GutterElement {
       let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
       let line_number_right_padding = editor.gutter_line_number_right_padding();
 
-      let viewport = Editor::viewport_range_for_height(
-        scroll_offset,
-        bounds.size.height,
-        line_height,
-        total_lines,
-      );
+      let viewport = editor
+        .soft_wrap
+        .map
+        .logical_range(Editor::viewport_range_for_height(
+          scroll_offset,
+          bounds.size.height,
+          line_height,
+          editor.soft_wrap.map.count(total_lines),
+        ));
 
       let mut group_kinds = HashMap::new();
       let mut group_border_colors = HashMap::new();
@@ -720,6 +723,22 @@ impl Element for GutterElement {
       }
 
       let line_number_color = editor.theme.line_number();
+      let map = &editor.soft_wrap.map;
+      let line_numbers = line_numbers
+        .into_iter()
+        .map(|(line, number)| (map.row(line), number))
+        .collect();
+      let map_quads = |quads: Vec<PaintQuad>| {
+        quads
+          .into_iter()
+          .map(|quad| map.block_quad(quad, bounds.top(), line_height, scroll_offset))
+          .collect()
+      };
+      let line_backgrounds = map_quads(line_backgrounds);
+      let gap_separators = map_quads(gap_separators);
+      let stripe_quads = map_quads(stripe_quads);
+      let conflict_borders = map_quads(conflict_borders);
+      let group_borders = map_quads(group_borders);
 
       (
         line_numbers,
@@ -809,6 +828,7 @@ impl Element for GutterElement {
           let line = (editor.scroll_offset_y + (event.position.y - bounds.top()) / line_height)
             .max(0.0)
             .floor() as usize;
+          let line = editor.soft_wrap.map.line(line);
           let mut event = event.clone();
           event.click_count = 3;
           editor.begin_mouse_selection(DisplayCursor { line, column: 0 }, view, &event, window, cx);
@@ -841,7 +861,7 @@ impl Element for GutterElement {
             if line_float.is_sign_negative() {
               None
             } else {
-              Some(line_float.floor() as usize)
+              Some(editor.soft_wrap.map.line(line_float.floor() as usize))
             }
           };
 
@@ -940,7 +960,7 @@ impl Element for GutterElement {
             editor.scroll_offset_y + delta_y,
             bounds.size.height,
             line_height,
-            total_lines,
+            editor.soft_wrap.map.count(total_lines),
           );
           let clamped_scroll_x = editor.clamp_horizontal_scroll_x(editor.last_scroll_x);
           if editor.scroll_handle.offset().x != clamped_scroll_x {

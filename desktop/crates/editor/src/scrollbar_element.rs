@@ -118,10 +118,21 @@ impl EditorScrollbarElement {
           return None;
         }
         let line_height = editor.measured_editor_line_height();
-        let total_lines = editor.display_line_count(editor.document.read(cx).len_lines());
+        let total_lines = editor
+          .soft_wrap
+          .map
+          .count(editor.display_line_count(editor.document.read(cx).len_lines()));
         let metrics =
           Editor::vertical_scroll_metrics_for_height(bounds.size.height, line_height, total_lines);
-        let markers = editor.scrollbar_markers(cx);
+        let markers = editor
+          .scrollbar_markers(cx)
+          .into_iter()
+          .map(|mut marker| {
+            marker.range = editor.soft_wrap.map.row(marker.range.start)
+              ..editor.soft_wrap.map.row(marker.range.end);
+            marker
+          })
+          .collect::<Vec<_>>();
         if !should_show_vertical_scrollbar(metrics.max_scroll, !markers.is_empty()) {
           return None;
         }

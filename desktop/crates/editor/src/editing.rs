@@ -305,6 +305,7 @@ impl Editor {
 
     self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
 
+    let version_before = self.document.read(cx).buffer.version();
     let transaction_id = self.document.update(cx, |doc, cx| {
       let id = if was_composing {
         doc
@@ -335,6 +336,14 @@ impl Editor {
     });
     self.mark_conflict_cache_dirty();
 
+    let document = self.document.read(cx);
+    if document.len_lines() == doc_line_count {
+      self.soft_wrap.record_edit(
+        version_before,
+        document.buffer.version(),
+        start_line..end_line + 1,
+      );
+    }
     let has_newline = new_text.contains('\n');
 
     if has_newline || start_line != end_line {

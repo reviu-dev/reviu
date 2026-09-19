@@ -1,3 +1,4 @@
+use app_log::ResultExt as _;
 use gpui::{
   App, Bounds, ContentMask, CursorStyle, DispatchPhase, ElementId, ElementInputHandler, Entity,
   GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton,
@@ -21,6 +22,7 @@ use crate::{
   editor::{
     ConflictLineKind, DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay,
     REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_REMS, REVIEW_COMMENT_UI_FONT_FAMILY, ScrollAxis,
+    soft_wrap::WrapMap,
   },
   projection::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection, ProjectionBlock,
@@ -87,6 +89,33 @@ pub(crate) fn expand_tab_stops(
   });
   line.text = source.to_string().into();
   line
+}
+
+fn shaped_fragment(line: &ShapedLine, bytes: Range<usize>) -> ShapedLine {
+  let mut fragment = line.clone();
+  let runs = line
+    .runs
+    .iter()
+    .filter_map(|run| {
+      let start = run
+        .glyphs
+        .partition_point(|glyph| glyph.index < bytes.start);
+      let end = run.glyphs.partition_point(|glyph| glyph.index < bytes.end);
+      (start < end).then(|| gpui::ShapedRun {
+        font_id: run.font_id,
+        glyphs: run.glyphs[start..end].to_vec(),
+      })
+    })
+    .collect();
+  *fragment = Arc::new(gpui::LineLayout {
+    font_size: line.font_size,
+    width: line.x_for_index(bytes.end),
+    ascent: line.ascent,
+    descent: line.descent,
+    runs,
+    len: line.len(),
+  });
+  fragment
 }
 
 fn indent_guide_byte_ranges(text: &str, tab_spaces: usize) -> Vec<Range<usize>> {
@@ -293,6 +322,8 @@ fn should_paint_text_caret(selection_active: bool, is_focused: bool, cursor_visi
 /// Encapsulates layout information for mouse position -> text offset conversion
 #[derive(Clone)]
 pub struct PositionMap {
+  pub(crate) wrap_map: Arc<WrapMap>,
+  pub(crate) upstream_cursor: Option<DisplayCursor>,
   pub shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
   pub line_texts: HashMap<usize, String>,
   pub bounds: Bounds<Pixels>,
@@ -326,13 +357,47 @@ impl PositionMap {
     let line_start = document.line_to_char(doc_line);
     let start_column = char_offset_to_byte_offset(text, start - line_start);
     // Native candidate windows anchor to the first visual line of a composed range.
-    let end_column = char_offset_to_byte_offset(text, range.end.max(start) - line_start);
-    let left = self.bounds.left() + shaped.x_for_index(start_column);
-    let right = (self.bounds.left() + shaped.x_for_index(end_column)).max(left + px(1.0));
-    let top = self.bounds.top() + self.line_height * (display_line as f32 - self.scroll_offset);
+    let cursor = DisplayCursor {
+      line: display_line,
+      column: start - line_start,
+    };
+    let row = self.wrap_map.cursor_row_with_affinity(
+      cursor,
+      self.view,
+      self.upstream_cursor == Some(cursor),
+    );
+    let boundary = self.wrap_map.boundary(row, self.view);
+    let fragment = row - self.wrap_map.row(display_line);
+    let fragment_end = self
+      .wrap_map
+      .fragment_bytes(display_line, fragment, self.view, text.len())?
+      .end;
+    let end_column =
+      char_offset_to_byte_offset(text, range.end.max(start) - line_start).min(fragment_end);
+    let origin_x = shaped.x_for_index(boundary.byte);
+    let left = self.bounds.left() + shaped.x_for_index(start_column) - origin_x;
+    let right =
+      (self.bounds.left() + shaped.x_for_index(end_column) - origin_x).max(left + px(1.0));
+    let top = self.bounds.top() + self.line_height * (row as f32 - self.scroll_offset);
     let bounds = Bounds::from_corners(point(left, top), point(right, top + self.line_height))
       .intersect(&self.viewport_bounds);
     (bounds.size.width > px(0.0) && bounds.size.height > px(0.0)).then_some(bounds)
+  }
+
+  pub(crate) fn upstream_cursor_at_position(
+    &self,
+    position: Point<Pixels>,
+  ) -> Option<DisplayCursor> {
+    let cursor = self.display_cursor_for_position(position)?;
+    let row = (self.scroll_offset + (position.y - self.bounds.top()) / self.line_height)
+      .floor()
+      .max(0.0) as usize;
+    (self.wrap_map.line(row) == cursor.line
+      && row
+        < self
+          .wrap_map
+          .cursor_row(cursor.line, cursor.column, self.view))
+    .then_some(cursor)
   }
 
   pub fn display_line_for_position(&self, position: Point<Pixels>) -> Option<usize> {
@@ -345,7 +410,7 @@ impl PositionMap {
     if line_float.is_sign_negative() {
       return None;
     }
-    let mut display_line = line_float.floor() as usize;
+    let mut display_line = self.wrap_map.line(line_float.floor() as usize);
     if display_line >= self.viewport.end {
       display_line = self.viewport.end.saturating_sub(1);
     }
@@ -365,7 +430,8 @@ impl PositionMap {
     if line_float.is_sign_negative() {
       return None;
     }
-    let mut actual_row = line_float.floor() as usize;
+    let visual_row = line_float.floor() as usize;
+    let mut actual_row = self.wrap_map.line(visual_row);
     if actual_row >= self.viewport.end {
       actual_row = self.viewport.end.saturating_sub(1);
     }
@@ -375,7 +441,20 @@ impl PositionMap {
       .shaped_lines
       .iter()
       .find(|(idx, _)| *idx == actual_row)
-      .map(|(_, shaped)| shaped.closest_index_for_x(x_offset))
+      .map(|(_, shaped)| {
+        let boundary = self.wrap_map.boundary(visual_row, self.view);
+        let fragment = visual_row.saturating_sub(self.wrap_map.row(actual_row));
+        let Some(bytes) =
+          self
+            .wrap_map
+            .fragment_bytes(actual_row, fragment, self.view, shaped.text.len())
+        else {
+          return shaped.text.len();
+        };
+        shaped
+          .closest_index_for_x(x_offset + shaped.x_for_index(boundary.byte))
+          .clamp(boundary.byte, bytes.end)
+      })
       .unwrap_or(0);
     let column = self
       .line_texts
@@ -394,7 +473,8 @@ impl PositionMap {
       return Some(0);
     }
 
-    let actual_row = self.display_cursor_for_position(position)?.line;
+    let cursor = self.display_cursor_for_position(position)?;
+    let actual_row = cursor.line;
 
     let doc_line = if let Some(projection) = &self.projection {
       projection.display_to_doc_line(actual_row)?
@@ -406,21 +486,8 @@ impl PositionMap {
       return Some(document.len());
     }
 
-    let shaped = self
-      .shaped_lines
-      .iter()
-      .find(|(idx, _)| *idx == actual_row)
-      .map(|(_, s)| s)?;
-
-    let x_offset = position.x - self.bounds.left();
-    let byte_column = shaped.closest_index_for_x(x_offset);
-    let column = document
-      .line_content(doc_line)
-      .map(|line| byte_offset_to_char_offset(line.as_ref(), byte_column))
-      .unwrap_or(byte_column);
-
     let line_start = document.line_to_char(doc_line);
-    Some(line_start + column)
+    Some(line_start + cursor.column)
   }
 }
 
@@ -1048,12 +1115,12 @@ impl Element for EditorElement {
       editor.invalidate_layout_cache_if_font_size_changed(font_size);
       if is_primary {
         editor.viewport_height = bounds.size.height;
-        if editor.viewport_width != bounds.size.width {
-          editor.viewport_width = bounds.size.width;
-          // Review comment cards follow the content width; re-render to resize them.
-          cx.notify();
-        }
       }
+      if editor.viewport_width != bounds.size.width {
+        editor.viewport_width = bounds.size.width;
+        cx.notify();
+      }
+      editor.sync_soft_wrap(window, cx);
 
       if editor.scroll_axis_lock == Some(ScrollAxis::Vertical)
         && editor.scroll_handle.offset().x != editor.clamp_horizontal_scroll_x(editor.last_scroll_x)
@@ -1096,7 +1163,12 @@ impl Element for EditorElement {
       let doc_line_count = document.len_lines();
       let total_lines = editor.display_line_count(doc_line_count);
 
-      let viewport = self.calculate_viewport(bounds, line_height, scroll_offset, total_lines);
+      let viewport = editor.soft_wrap.map.logical_range(self.calculate_viewport(
+        bounds,
+        line_height,
+        scroll_offset,
+        editor.soft_wrap.map.count(total_lines),
+      ));
 
       let mut lines_to_shape = Vec::new();
       let mut shaped_lines = Vec::new();
@@ -1201,6 +1273,7 @@ impl Element for EditorElement {
       );
     });
     let line_height = measured_line_height;
+    let wrap_map = self.editor.read(cx).soft_wrap.map.clone();
 
     let theme = self.editor.read(cx).theme.clone();
 
@@ -1736,8 +1809,13 @@ impl Element for EditorElement {
       let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);
       let stripe_width = px(DIAGONAL_STRIPE_WIDTH);
       for (start, end) in blank_ranges {
-        let y = line_y(bounds.top(), line_height, start, scroll_offset);
-        let height = line_height * (end - start + 1) as f32;
+        let y = line_y(
+          bounds.top(),
+          line_height,
+          wrap_map.row(start),
+          scroll_offset,
+        );
+        let height = line_height * (wrap_map.row(end + 1) - wrap_map.row(start)) as f32;
         let top = y;
         let bottom = y + height;
         let left = bounds.left();
@@ -1818,7 +1896,7 @@ impl Element for EditorElement {
         if line_float.is_sign_negative() {
           return;
         }
-        let mut display_line = line_float.floor() as usize;
+        let mut display_line = editor.soft_wrap.map.line(line_float.floor() as usize);
         if display_line >= viewport.end {
           display_line = viewport.end.saturating_sub(1);
         }
@@ -2049,6 +2127,68 @@ impl Element for EditorElement {
       Vec::new()
     };
 
+    let map_blocks = |quads: Vec<PaintQuad>| {
+      quads
+        .into_iter()
+        .map(|quad| wrap_map.block_quad(quad, bounds.top(), line_height, scroll_offset))
+        .collect()
+    };
+    let editor = self.editor.read(cx);
+    let upstream_cursors = editor
+      .soft_wrap
+      .upstream_selections
+      .iter()
+      .filter(|(id, _)| {
+        editor
+          .selections
+          .iter()
+          .any(|selection| selection.id == **id)
+      })
+      .map(|(_, cursor)| *cursor)
+      .chain(editor.soft_wrap.upstream_cursor)
+      .collect::<Vec<_>>();
+    let map_text = |quads: Vec<PaintQuad>, caret| {
+      quads
+        .into_iter()
+        .flat_map(|quad| {
+          let line = (scroll_offset + (quad.bounds.top() - bounds.top()) / line_height)
+            .round()
+            .max(0.0) as usize;
+          shaped_lines
+            .iter()
+            .find(|(index, _)| *index == line)
+            .map(|(_, shaped)| {
+              wrap_map.text_quads(
+                &quad,
+                line,
+                shaped,
+                bounds,
+                line_height,
+                scroll_offset,
+                self.diff_view,
+                caret,
+                caret
+                  && upstream_cursors.iter().any(|cursor| {
+                    cursor.line == line
+                      && shaped.x_for_index(char_offset_to_byte_offset(&shaped.text, cursor.column))
+                        == quad.bounds.left() - bounds.left()
+                  }),
+              )
+            })
+            .unwrap_or_default()
+        })
+        .collect()
+    };
+    let line_backgrounds = map_blocks(line_backgrounds);
+    let gap_separators = map_blocks(gap_separators);
+    let conflict_borders = map_blocks(conflict_borders);
+    let group_borders = map_blocks(group_borders);
+    let word_diff_quads = map_text(word_diff_quads, false);
+    let indent_guides = map_text(indent_guides, false);
+    let search_match_quads = map_text(search_match_quads, false);
+    let selection_quads = map_text(selection_quads, false);
+    let cursor_quads = map_text(cursor_quads, true);
+
     PrepaintState {
       shaped_lines,
       line_texts,
@@ -2094,6 +2234,8 @@ impl Element for EditorElement {
     // Use Rc to avoid cloning PositionMap in closures
     let scroll_offset = self.editor.read(cx).scroll_offset_y;
     let position_map = Rc::new(PositionMap {
+      wrap_map: self.editor.read(cx).soft_wrap.map.clone(),
+      upstream_cursor: self.editor.read(cx).soft_wrap.upstream_cursor,
       shaped_lines: prepaint.shaped_lines.clone(),
       line_texts: prepaint.line_texts.clone(),
       bounds: prepaint.bounds,
@@ -2277,7 +2419,7 @@ impl Element for EditorElement {
               editor.scroll_offset_y + delta_y,
               bounds.size.height,
               line_height,
-              total_lines,
+              editor.soft_wrap.map.count(total_lines),
             );
             let clamped_scroll_x = editor.clamp_horizontal_scroll_x(editor.last_scroll_x);
             if editor.scroll_handle.offset().x != clamped_scroll_x {
@@ -2345,22 +2487,57 @@ impl Element for EditorElement {
     }
 
     for (line_idx, shaped_line) in &prepaint.shaped_lines {
-      let y = line_y(
-        bounds.top(),
-        prepaint.line_height,
+      for fragment in position_map.wrap_map.visible_fragments(
         *line_idx,
+        self.diff_view,
         prepaint.scroll_offset,
-      );
-      shaped_line
-        .paint(
-          point(bounds.left(), y),
+        prepaint.line_height,
+        bounds.size.height,
+      ) {
+        let y = line_y(
+          bounds.top(),
           prepaint.line_height,
-          TextAlign::Left,
-          None,
-          window,
-          cx,
-        )
-        .ok();
+          position_map.wrap_map.row(*line_idx) + fragment,
+          prepaint.scroll_offset,
+        );
+        if y + prepaint.line_height <= bounds.top() || y >= bounds.bottom() {
+          continue;
+        }
+        let Some(bytes) = position_map.wrap_map.fragment_bytes(
+          *line_idx,
+          fragment,
+          self.diff_view,
+          shaped_line.text.len(),
+        ) else {
+          continue;
+        };
+        let left = shaped_line.x_for_index(bytes.start);
+        let width = shaped_line.x_for_index(bytes.end) - left;
+        let mask = ContentMask {
+          bounds: Bounds::new(
+            point(bounds.left(), y),
+            size(width.max(px(1.0)), prepaint.line_height),
+          )
+          .intersect(&bounds),
+        };
+        window.with_content_mask(Some(mask), |window| {
+          let fragment = if bytes.start == 0 && bytes.end == shaped_line.text.len() {
+            shaped_line.as_ref().clone()
+          } else {
+            shaped_fragment(shaped_line, bytes)
+          };
+          fragment
+            .paint(
+              point(bounds.left() - left, y),
+              prepaint.line_height,
+              TextAlign::Left,
+              None,
+              window,
+              cx,
+            )
+            .log_err();
+        });
+      }
     }
 
     let editor = self.editor.read(cx);
@@ -2428,6 +2605,8 @@ mod tests {
       .map(|projection| projection.block_map().clone())
       .unwrap_or_default();
     PositionMap {
+      wrap_map: Arc::new(WrapMap::default()),
+      upstream_cursor: None,
       shaped_lines: Vec::new(),
       line_texts: HashMap::new(),
       bounds: test_bounds(200.0, 100.0),

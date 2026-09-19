@@ -299,7 +299,7 @@ fn visible_action_top(
   }
   let top = hunk_action_top(
     editor_state.measured_editor_line_height(),
-    anchor_display_line,
+    editor_state.visual_row_for_display_line(anchor_display_line),
     editor_state.scroll_offset_y,
   );
   if top >= editor_state.viewport_height {

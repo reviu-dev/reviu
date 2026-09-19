@@ -24,6 +24,7 @@ actions!(
     NewlineAbove,
     NewlineBelow,
     ToggleComments,
+    ToggleSoftWrap,
     Backspace,
     BackspaceWord,
     BackspaceAll,
@@ -158,6 +159,15 @@ pub fn newline_below(
   cx: &mut Context<Editor>,
 ) {
   editor.insert_line(true, cx);
+}
+
+pub fn toggle_soft_wrap(
+  editor: &mut Editor,
+  _: &ToggleSoftWrap,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.toggle_soft_wrap(window, cx);
 }
 
 pub fn toggle_comments(

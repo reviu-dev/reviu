@@ -104,6 +104,11 @@ impl Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.sync_soft_wrap(window, cx);
+    if self.soft_wrap.enabled {
+      self.navigate_wrapped_vertical(direction, selecting, page, window, cx);
+      return;
+    }
     let Some(cursor) = self.current_display_cursor(cx) else {
       return;
     };
@@ -177,6 +182,115 @@ impl Editor {
       selecting,
       cx,
     );
+    self.vertical_goal_x = Some(goal);
+    self.ensure_cursor_visible(window, cx);
+    cx.notify();
+  }
+
+  fn navigate_wrapped_vertical(
+    &mut self,
+    direction: i32,
+    selecting: bool,
+    page: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return;
+    };
+    let Some(layout) = self.navigation_layout(cursor.line, window, cx) else {
+      return;
+    };
+    let map = self.soft_wrap.map.clone();
+    let row = self.soft_wrap.cursor_row(cursor, self.selection_view);
+    let boundary = map.boundary(row, self.selection_view);
+    let goal = self.vertical_goal_x.unwrap_or_else(|| {
+      layout.x_for_index(char_offset_to_byte_offset(&layout.text, cursor.column))
+        - layout.x_for_index(boundary.byte)
+    });
+    let total = map.count(self.display_line_count(self.document.read(cx).len_lines()));
+    let distance = if page {
+      ((self.viewport_height / self.measured_editor_line_height()).floor() as usize)
+        .saturating_sub(1)
+        .max(1)
+    } else {
+      1
+    };
+    let mut target = if direction < 0 {
+      row.saturating_sub(distance)
+    } else {
+      row.saturating_add(distance).min(total.saturating_sub(1))
+    };
+    loop {
+      let line = map.line(target);
+      let fragment = target.saturating_sub(map.row(line));
+      if fragment < map.boundaries(line, self.selection_view).len()
+        && self
+          .selection_line_text(line, self.selection_view, cx)
+          .is_some()
+      {
+        break;
+      }
+      let next = if direction < 0 {
+        target.saturating_sub(1)
+      } else {
+        target.saturating_add(1).min(total.saturating_sub(1))
+      };
+      if next == target {
+        target = row;
+        break;
+      }
+      target = next;
+    }
+    let line = map.line(target);
+    let Some(layout) = self.navigation_layout(line, window, cx) else {
+      return;
+    };
+    let fragment = target.saturating_sub(map.row(line));
+    let Some(bytes) = map.fragment_bytes(line, fragment, self.selection_view, layout.text.len())
+    else {
+      return;
+    };
+    let x = layout.x_for_index(bytes.start) + goal;
+    let byte = layout
+      .text
+      .get(bytes.clone())
+      .unwrap_or_default()
+      .grapheme_indices(true)
+      .map(|(byte, _)| bytes.start + byte)
+      .chain(std::iter::once(bytes.end))
+      .min_by(|left, right| {
+        (layout.x_for_index(*left) - x)
+          .abs()
+          .partial_cmp(&(layout.x_for_index(*right) - x).abs())
+          .unwrap_or(std::cmp::Ordering::Equal)
+      })
+      .unwrap_or(bytes.start);
+    if page {
+      self.scroll_offset_y += target as f32 - row as f32;
+    }
+    let target_cursor = DisplayCursor {
+      line,
+      column: if target == row {
+        if direction < 0 {
+          0
+        } else {
+          layout.text.chars().count()
+        }
+      } else {
+        map.boundary(target, self.selection_view).column
+          + layout
+            .text
+            .get(bytes.start..byte)
+            .unwrap_or_default()
+            .chars()
+            .count()
+      },
+    };
+    self.apply_navigation(target_cursor, selecting, cx);
+    self.soft_wrap.upstream_cursor =
+      (map.cursor_row(line, target_cursor.column, self.selection_view) > target)
+        .then_some(target_cursor);
     self.vertical_goal_x = Some(goal);
     self.ensure_cursor_visible(window, cx);
     cx.notify();

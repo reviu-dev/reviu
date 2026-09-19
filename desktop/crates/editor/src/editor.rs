@@ -87,6 +87,8 @@ mod go_to_line;
 mod line_actions;
 #[path = "navigation.rs"]
 pub(crate) mod navigation;
+#[path = "soft_wrap.rs"]
+pub(crate) mod soft_wrap;
 use crate::selections::{Selection, Selections};
 use document_lifecycle::SelectionSnapshot;
 #[path = "multicursor.rs"]
@@ -889,6 +891,7 @@ pub struct Editor {
   pub(crate) word_diff_cache: WordDiffCache,
   pub(crate) block_map: ProjectionBlockMap,
 
+  pub(crate) soft_wrap: soft_wrap::SoftWrap,
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
   pub editor_line_height: Pixels,
   pub editor_char_width: Pixels,
@@ -1430,6 +1433,7 @@ impl Editor {
       last_layout_font_size: px(0.0),
       word_diff_cache: WordDiffCache::default(),
       block_map: ProjectionBlockMap::default(),
+      soft_wrap: soft_wrap::SoftWrap::default(),
       scroll_offset_y: 0.0,
       editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
       editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
@@ -1673,14 +1677,19 @@ impl Editor {
     }
 
     let scroll_top = self.scroll_offset_y.max(0.0);
-    let start_display_line = (scroll_top.floor() as usize).min(total_lines.saturating_sub(1));
+    let start_display_line = self
+      .soft_wrap
+      .map
+      .line(scroll_top.floor() as usize)
+      .min(total_lines.saturating_sub(1));
 
     if let Some(projection) = self.projection.as_ref() {
       for display_line in start_display_line..projection.lines.len() {
         if let Some(doc_line) = projection.display_to_doc_line(display_line) {
           return Some(ScrollAnchor {
             doc_line,
-            display_offset_from_scroll_top: display_line as f32 - scroll_top,
+            display_offset_from_scroll_top: self.soft_wrap.map.row(display_line) as f32
+              - scroll_top,
           });
         }
       }
@@ -1689,7 +1698,8 @@ impl Editor {
         if let Some(doc_line) = projection.display_to_doc_line(display_line) {
           return Some(ScrollAnchor {
             doc_line,
-            display_offset_from_scroll_top: display_line as f32 - scroll_top,
+            display_offset_from_scroll_top: self.soft_wrap.map.row(display_line) as f32
+              - scroll_top,
           });
         }
       }
@@ -1699,7 +1709,8 @@ impl Editor {
 
     (start_display_line < doc_line_count).then_some(ScrollAnchor {
       doc_line: start_display_line,
-      display_offset_from_scroll_top: start_display_line as f32 - scroll_top,
+      display_offset_from_scroll_top: self.soft_wrap.map.row(start_display_line) as f32
+        - scroll_top,
     })
   }
 
@@ -1733,7 +1744,7 @@ impl Editor {
     };
 
     self.scroll_offset_y = self.clamp_vertical_scroll(
-      display_line as f32 - anchor.display_offset_from_scroll_top,
+      self.soft_wrap.map.row(display_line) as f32 - anchor.display_offset_from_scroll_top,
       self.measured_editor_line_height(),
       total_lines,
     );
@@ -2262,7 +2273,11 @@ impl Editor {
     line_height: Pixels,
     total_lines: usize,
   ) -> VerticalScrollMetrics {
-    Self::vertical_scroll_metrics_for_height(self.viewport_height, line_height, total_lines)
+    Self::vertical_scroll_metrics_for_height(
+      self.viewport_height,
+      line_height,
+      self.soft_wrap.map.count(total_lines),
+    )
   }
 
   fn clamp_vertical_scroll(
@@ -2275,7 +2290,7 @@ impl Editor {
       scroll_offset_y,
       self.viewport_height,
       line_height,
-      total_lines,
+      self.soft_wrap.map.count(total_lines),
     )
   }
 
@@ -2288,7 +2303,8 @@ impl Editor {
     let line_height = self.measured_editor_line_height();
     let metrics = self.vertical_scroll_metrics(line_height, total_lines);
     let center_offset = ((metrics.viewport_lines - 1.0) / 2.0).max(0.0);
-    self.scroll_offset_y = (display_line as f32 - center_offset).clamp(0.0, metrics.max_scroll);
+    self.scroll_offset_y =
+      (self.soft_wrap.map.row(display_line) as f32 - center_offset).clamp(0.0, metrics.max_scroll);
   }
 
   fn reset_horizontal_scroll_state(&mut self) {
@@ -2298,7 +2314,11 @@ impl Editor {
   }
 
   pub(crate) fn horizontal_scrollbar_content_width(&self) -> Pixels {
-    self.max_line_width + px(EXTRA_EDITOR_WIDTH)
+    if self.soft_wrap.enabled {
+      self.viewport_width
+    } else {
+      self.max_line_width + px(EXTRA_EDITOR_WIDTH)
+    }
   }
 
   pub(crate) fn set_vertical_scroll_offset_for_height(
@@ -2315,12 +2335,15 @@ impl Editor {
       line_height,
       total_lines,
     );
-    let viewport = Self::viewport_range_for_height(
-      self.scroll_offset_y,
-      viewport_height,
-      line_height,
-      total_lines,
-    );
+    let viewport = self
+      .soft_wrap
+      .map
+      .logical_range(Self::viewport_range_for_height(
+        self.scroll_offset_y,
+        viewport_height,
+        line_height,
+        total_lines,
+      ));
     let doc_viewports = self.doc_ranges_for_display_viewport(viewport);
     self.document.update(cx, |doc, cx| {
       doc.schedule_viewport_highlights_for_ranges(
@@ -4380,7 +4403,18 @@ impl Editor {
     }
 
     let metrics = self.vertical_scroll_metrics(line_height, total_lines);
-    let target = (display_line as f32 - metrics.scroll_padding).clamp(0.0, metrics.max_scroll);
+    let column = self
+      .find
+      .active_match()
+      .and_then(|index| self.find.matches().get(index))
+      .filter(|found| found.display_line == display_line)
+      .map_or(0, |found| found.column_start);
+    let target = (self
+      .soft_wrap
+      .map
+      .cursor_row(display_line, column, DiffElementView::SplitRight) as f32
+      - metrics.scroll_padding)
+      .clamp(0.0, metrics.max_scroll);
     let start = self.scroll_offset_y;
     let delta = target - start;
 
@@ -4653,8 +4687,9 @@ impl Editor {
       return false;
     }
 
-    let first_visible_line = self.scroll_offset_y.floor().max(0.0) as usize;
-    display_line < first_visible_line.saturating_add(FIND_PANEL_OCCLUDED_VISIBLE_LINES)
+    let first_visible_row = self.scroll_offset_y.floor().max(0.0) as usize;
+    self.soft_wrap.map.row(display_line)
+      < first_visible_row.saturating_add(FIND_PANEL_OCCLUDED_VISIBLE_LINES)
   }
 
   fn reset_find_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -5107,7 +5142,7 @@ impl Editor {
 
     let total_lines = projection.lines.len();
     let metrics = self.vertical_scroll_metrics(line_height, total_lines);
-    let target = (display_line as f32 - metrics.scroll_padding)
+    let target = (self.soft_wrap.map.row(display_line) as f32 - metrics.scroll_padding)
       .max(0.0)
       .min(metrics.max_scroll);
     let start = self.scroll_offset_y;
@@ -5257,7 +5292,8 @@ impl Editor {
 
       let span_count = thread_last_line - thread_first_line + 1;
 
-      let top = line_height * (thread_first_line as f32 - self.scroll_offset_y);
+      let top =
+        line_height * (self.soft_wrap.map.row(thread_first_line) as f32 - self.scroll_offset_y);
       let height = line_height * span_count as f32;
       let collapsed = !visible_comment_ids.is_empty()
         && visible_comment_ids
@@ -5297,7 +5333,7 @@ impl Editor {
 
       layouts.push(ReviewCommentLayout {
         id: thread_id,
-        top: line_height * (first as f32 - self.scroll_offset_y),
+        top: line_height * (self.soft_wrap.map.row(first) as f32 - self.scroll_offset_y),
         height: line_height * count as f32,
         messages: vec![ReviewCommentMessageLayout {
           id: comment.id,
@@ -6466,7 +6502,8 @@ impl Editor {
     if let Some(draft) = self.review_comment_create_draft
       && side_filter.is_none_or(|filter| filter == draft.side)
     {
-      let top = line_height * (draft.first_display_line as f32 - self.scroll_offset_y);
+      let top = line_height
+        * (self.soft_wrap.map.row(draft.first_display_line) as f32 - self.scroll_offset_y);
       let span_count = draft
         .last_display_line
         .saturating_sub(draft.first_display_line)
@@ -6492,7 +6529,8 @@ impl Editor {
       && let Some((first_display_line, line_count)) = self.review_comment_create_span(side_filter)
       && line_count > 0
     {
-      let composer_top = line_height * (first_display_line as f32 - self.scroll_offset_y);
+      let composer_top =
+        line_height * (self.soft_wrap.map.row(first_display_line) as f32 - self.scroll_offset_y);
       let composer_height = line_height * line_count as f32;
       let composer_card = if let Some(input_state) = self.review_comment_create_input.clone() {
         let cancel_editor = editor_entity.clone();
@@ -8451,12 +8489,15 @@ impl Editor {
   }
 
   pub(crate) fn viewport_range(&self, line_height: Pixels, total_lines: usize) -> Range<usize> {
-    Self::viewport_range_for_height(
-      self.scroll_offset_y,
-      self.viewport_height,
-      line_height,
-      total_lines,
-    )
+    self
+      .soft_wrap
+      .map
+      .logical_range(Self::viewport_range_for_height(
+        self.scroll_offset_y,
+        self.viewport_height,
+        line_height,
+        self.soft_wrap.map.count(total_lines),
+      ))
   }
 
   pub(crate) fn doc_ranges_for_display_viewport(
@@ -8610,7 +8651,13 @@ impl Editor {
     self.scroll_offset_y =
       self.clamp_vertical_scroll(self.scroll_offset_y, line_height, total_lines);
 
-    let cursor_line_f = cursor_line as f32;
+    let cursor_line_f = self.soft_wrap.cursor_row(
+      DisplayCursor {
+        line: cursor_line,
+        column: cursor_column,
+      },
+      self.selection_view,
+    ) as f32;
     let cursor_top = cursor_line_f;
     let cursor_bottom = cursor_line_f + 1.0;
     let view_top = self.scroll_offset_y;
@@ -8643,7 +8690,7 @@ impl Editor {
     });
     let line_text = self.selection_line_text(cursor_line, self.selection_view, cx);
 
-    if let Some(line_text) = line_text {
+    if let Some(line_text) = line_text.filter(|_| !self.soft_wrap.enabled) {
       let line_len = line_text.chars().count();
       let cursor_in_line = cursor_column.min(line_len);
       let cursor_x = shaped_line
@@ -8713,6 +8760,9 @@ impl Editor {
   }
 
   pub(crate) fn clamp_horizontal_scroll_x(&self, scroll_x: Pixels) -> Pixels {
+    if self.soft_wrap.enabled {
+      return px(0.0);
+    }
     let content_width = self.max_line_width + px(EXTRA_EDITOR_WIDTH);
     let viewport_width = self.horizontal_viewport_width();
     let max_right_scroll = (content_width - viewport_width).max(px(0.0));
@@ -8749,6 +8799,8 @@ impl Editor {
   }
 
   pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.soft_wrap.upstream_cursor = None;
+    self.soft_wrap.upstream_selections.clear();
     self.selections.single();
     self.selections.primary_mut().goal = None;
     self.occurrence_wordwise = false;
@@ -8777,6 +8829,8 @@ impl Editor {
   }
 
   pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.soft_wrap.upstream_cursor = None;
+    self.soft_wrap.upstream_selections.clear();
     self.selections.single();
     self.selections.primary_mut().goal = None;
     self.occurrence_wordwise = false;
@@ -8949,6 +9003,11 @@ impl Editor {
   }
 
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
+    self.soft_wrap.upstream_cursor = None;
+    self
+      .soft_wrap
+      .upstream_selections
+      .remove(&self.selections.primary().id);
     self.selections.primary_mut().goal = None;
     self.occurrence_wordwise = false;
     self.vertical_goal_x = None;
@@ -8983,6 +9042,11 @@ impl Editor {
     cursor: DisplayCursor,
     cx: &mut Context<Self>,
   ) {
+    self.soft_wrap.upstream_cursor = None;
+    self
+      .soft_wrap
+      .upstream_selections
+      .remove(&self.selections.primary().id);
     self.selections.primary_mut().goal = None;
     self.occurrence_wordwise = false;
     self.vertical_goal_x = None;
@@ -9816,6 +9880,7 @@ impl EntityInputHandler for Editor {
 
     self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
 
+    let version_before = self.document.read(cx).buffer.version();
     let transaction_id = self.document.update(cx, |doc, cx| {
       let id = if continuing_composition {
         doc
@@ -9840,6 +9905,14 @@ impl EntityInputHandler for Editor {
     });
     self.mark_conflict_cache_dirty();
 
+    let document = self.document.read(cx);
+    if document.len_lines() == doc_line_count {
+      self.soft_wrap.record_edit(
+        version_before,
+        document.buffer.version(),
+        start_line..end_line + 1,
+      );
+    }
     self.invalidate_lines_from(start_line);
 
     let new_text_chars = new_text.chars().count();
@@ -9973,9 +10046,16 @@ impl Render for Editor {
     if self.sync_review_comment_composer_rows(window, cx) && self.diffs.is_some() {
       self.rebuild_projection(cx);
     }
+    self.sync_soft_wrap(window, cx);
     let doc_line_count = self.document.read(cx).len_lines();
     let total_lines = self.display_line_count(doc_line_count);
     let viewport = self.viewport_range(line_height, total_lines);
+    let wrap_map = self.soft_wrap.map.clone();
+    let content_min_width = if self.soft_wrap.enabled {
+      px(0.0)
+    } else {
+      self.max_line_width + px(EXTRA_EDITOR_WIDTH)
+    };
     let gap_controls = self.gap_controls();
     let gutter_background = self.theme.gutter_background();
     let gutter_width = self.gutter_width();
@@ -10046,7 +10126,7 @@ impl Render for Editor {
           continue;
         }
 
-        let y = line_height * (control.display_line as f32 - scroll_offset_y);
+        let y = line_height * (wrap_map.row(control.display_line) as f32 - scroll_offset_y);
         let button_id = format!(
           "gap-expand-{}-{}-{}-{}",
           view_suffix,
@@ -10089,7 +10169,7 @@ impl Render for Editor {
         && let Some(target) = review_comment_create_button_target
         && viewport.contains(&target.display_line)
       {
-        let y = line_height * (target.display_line as f32 - scroll_offset_y);
+        let y = line_height * (wrap_map.row(target.display_line) as f32 - scroll_offset_y);
         let display_line = target.display_line;
         let button_id = format!(
           "review-comment-create-plus-{}-{}",
@@ -10175,7 +10255,7 @@ impl Render for Editor {
             .track_scroll(&self.scroll_handle)
             .child(
               div()
-                .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
+                .min_w(content_min_width)
                 .h_full()
                 .relative()
                 .overflow_hidden()
@@ -10210,7 +10290,7 @@ impl Render for Editor {
             .track_scroll(&self.scroll_handle)
             .child(
               div()
-                .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
+                .min_w(content_min_width)
                 .h_full()
                 .relative()
                 .overflow_hidden()
@@ -10256,7 +10336,7 @@ impl Render for Editor {
             .track_scroll(&self.scroll_handle)
             .child(
               div()
-                .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
+                .min_w(content_min_width)
                 .h_full()
                 .relative()
                 .overflow_hidden()
@@ -10316,6 +10396,7 @@ impl Render for Editor {
       )
       .when(editor_actions_enabled, |el| {
         el.on_action(cx.listener(crate::actions::up))
+          .on_action(cx.listener(crate::actions::toggle_soft_wrap))
           .on_action(cx.listener(crate::actions::down))
           .on_action(cx.listener(crate::actions::page_up))
           .on_action(cx.listener(crate::actions::page_down))
@@ -11658,6 +11739,7 @@ pub mod tests {
         let cursor_blink = cx.new(CursorBlink::new);
 
         Editor {
+          soft_wrap: soft_wrap::SoftWrap::default(),
           review_comment_thread_roots: HashMap::new(),
           review_comment_threads: HashMap::new(),
           review_comment_thread_order: Vec::new(),

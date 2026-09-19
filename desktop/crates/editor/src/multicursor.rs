@@ -164,6 +164,8 @@ impl Editor {
     }
     let start_line = document.char_to_line(edits.first().map_or(0, |edit| edit.range.start));
     let end_line = document.char_to_line(edits.last().map_or(0, |edit| edit.range.end));
+    let version_before = document.buffer.version();
+    let line_count_before = document.len_lines();
     self.auto_pairs.prepare(document.buffer.version(), &edits);
     self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
     let id = self.document.update(cx, |document, cx| {
@@ -181,6 +183,14 @@ impl Editor {
       cx.notify();
       id
     });
+    let document = self.document.read(cx);
+    if document.len_lines() == line_count_before {
+      self.soft_wrap.record_edit(
+        version_before,
+        document.buffer.version(),
+        start_line..end_line + 1,
+      );
+    }
     self.restore_selections(after, cx);
     self.record_transaction(id, before, cx);
     if !composing {
@@ -427,6 +437,8 @@ impl Editor {
     if self.selection_view == DiffElementView::SplitLeft || self.is_read_only_display_cursor(cx) {
       return;
     }
+    self.sync_soft_wrap(window, cx);
+    let map = self.soft_wrap.map.clone();
     let Some(cursor) = self.current_display_cursor(cx) else {
       return;
     };
@@ -434,38 +446,69 @@ impl Editor {
       return;
     };
     let primary = self.selections.primary().clone();
+    let mut row = self.soft_wrap.cursor_row(cursor, self.selection_view);
     let goal = primary.goal.unwrap_or_else(|| {
       layout.x_for_index(char_offset_to_byte_offset(&layout.text, cursor.column))
+        - layout.x_for_index(map.boundary(row, self.selection_view).byte)
     });
     let anchor_goal = self
       .current_display_anchor(cx)
       .and_then(|anchor| {
         self
           .navigation_layout(anchor.line, window, cx)
-          .map(|layout| layout.x_for_index(char_offset_to_byte_offset(&layout.text, anchor.column)))
+          .map(|layout| {
+            let row = map.cursor_row(anchor.line, anchor.column, self.selection_view);
+            layout.x_for_index(char_offset_to_byte_offset(&layout.text, anchor.column))
+              - layout.x_for_index(map.boundary(row, self.selection_view).byte)
+          })
       })
       .unwrap_or(goal);
-    let mut line = cursor.line;
-    while let Some(next) = self.next_selectable_display_line(line, direction, cx) {
-      line = next;
+    let total = self.visual_line_count(self.document.read(cx).len_lines());
+    loop {
+      let next = if direction < 0 {
+        row.checked_sub(1)
+      } else {
+        row.checked_add(1).filter(|row| *row < total)
+      };
+      let Some(next) = next else {
+        break;
+      };
+      row = next;
+      let line = map.line(row);
       if self.is_removed_display_line(line, cx) {
         continue;
       }
       let Some(layout) = self.navigation_layout(line, window, cx) else {
         continue;
       };
-      if !primary.range.is_empty() && layout.width < goal.max(anchor_goal) {
+      let Some(bytes) = map.fragment_bytes(
+        line,
+        row.saturating_sub(map.row(line)),
+        self.selection_view,
+        layout.text.len(),
+      ) else {
+        continue;
+      };
+      let left = layout.x_for_index(bytes.start);
+      if !primary.range.is_empty() && layout.x_for_index(bytes.end) - left < goal.max(anchor_goal) {
         continue;
       }
-      let byte = layout
-        .text
-        .grapheme_indices(true)
-        .map(|(byte, _)| byte)
-        .chain(std::iter::once(layout.text.len()))
+      let boundaries = || {
+        layout
+          .text
+          .get(bytes.clone())
+          .unwrap_or_default()
+          .grapheme_indices(true)
+          .map(|(byte, _)| bytes.start + byte)
+          .chain(std::iter::once(bytes.end))
+      };
+      let byte = boundaries()
         .min_by(|left, right| {
-          (layout.x_for_index(*left) - goal)
+          (layout.x_for_index(*left) - (layout.x_for_index(bytes.start) + goal))
             .abs()
-            .partial_cmp(&(layout.x_for_index(*right) - goal).abs())
+            .partial_cmp(
+              &(layout.x_for_index(*right) - (layout.x_for_index(bytes.start) + goal)).abs(),
+            )
             .unwrap_or(std::cmp::Ordering::Equal)
         })
         .unwrap_or(0);
@@ -479,12 +522,8 @@ impl Editor {
       let anchor = if primary.range.is_empty() {
         offset
       } else {
-        let byte = layout.closest_index_for_x(anchor_goal);
-        let byte = layout
-          .text
-          .grapheme_indices(true)
-          .map(|(byte, _)| byte)
-          .chain(std::iter::once(layout.text.len()))
+        let byte = layout.closest_index_for_x(left + anchor_goal);
+        let byte = boundaries()
           .min_by_key(|candidate| candidate.abs_diff(byte))
           .unwrap_or(0);
         self
@@ -506,7 +545,15 @@ impl Editor {
       }
       self.finalize_transaction(cx);
       self.display_selection = None;
+      if let Some(cursor) = self.soft_wrap.upstream_cursor {
+        self
+          .soft_wrap
+          .upstream_selections
+          .insert(primary.id, cursor);
+      }
       self.selections.add(range, primary.reversed);
+      self.soft_wrap.upstream_cursor =
+        (map.cursor_row(target.line, target.column, self.selection_view) > row).then_some(target);
       self.selections.primary_mut().goal = Some(goal);
       self.occurrence_wordwise = false;
       self.ensure_cursor_visible(window, cx);
@@ -528,7 +575,13 @@ impl Editor {
     let primary = moved.primary().id;
     let scroll = self.scroll_offset_y;
     let mut primary_scroll = scroll;
+    let mut affinities = std::mem::take(&mut self.soft_wrap.upstream_selections);
+    if let Some(cursor) = self.soft_wrap.upstream_cursor {
+      affinities.insert(primary, cursor);
+    }
+    let mut moved_affinities = HashMap::new();
     for selection in moved.iter_mut() {
+      self.soft_wrap.upstream_cursor = affinities.get(&selection.id).copied();
       self.scroll_offset_y = scroll;
       self.selections = Selections::default();
       *self.selections.primary_mut() = Selection {
@@ -543,6 +596,9 @@ impl Editor {
         selection.reversed = self.selections.primary().reversed;
       }
       selection.goal = self.vertical_goal_x;
+      if let Some(cursor) = self.soft_wrap.upstream_cursor {
+        moved_affinities.insert(selection.id, cursor);
+      }
       if selection.id == primary {
         primary_scroll = self.scroll_offset_y;
       }
@@ -550,6 +606,8 @@ impl Editor {
     self.scroll_offset_y = primary_scroll;
     moved.normalize();
     self.selections = moved;
+    self.soft_wrap.upstream_cursor = moved_affinities.get(&primary).copied();
+    self.soft_wrap.upstream_selections = moved_affinities;
     self.display_selection = None;
     self.occurrence_wordwise = false;
     self.ensure_cursor_visible(window, cx);

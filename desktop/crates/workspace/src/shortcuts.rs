@@ -8,7 +8,8 @@ use editor::{
   Quit, Redo, Right, Save, SelectAll, SelectAllOccurrences, SelectCmdDown, SelectCmdLeft,
   SelectCmdRight, SelectCmdUp, SelectDown, SelectLeft, SelectNextOccurrence, SelectPageDown,
   SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShowCharacterPalette, Tab,
-  ToggleComments, ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, Undo, Up,
+  ToggleComments, ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, ToggleSoftWrap,
+  Undo, Up,
 };
 use gpui::{Action, App, Global, KeyBinding, KeyContext, Keystroke, Window};
 use ui::{COMMAND_PALETTE_CONTEXT, CommandPaletteCommand, CommandPaletteCommandId};
@@ -1322,6 +1323,7 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
       NewlineAbove,
       Some("CodeEditor && !Input"),
     ),
+    KeyBinding::new("alt-z", ToggleSoftWrap, Some("Editor && !Input")),
     KeyBinding::new("cmd-/", ToggleComments, Some("CodeEditor && !Input")),
     KeyBinding::new("ctrl-enter", NewlineBelow, Some("Editor && !Input")),
     KeyBinding::new("ctrl-shift-enter", NewlineAbove, Some("Editor && !Input")),
@@ -1756,6 +1758,41 @@ mod tests {
         .iter()
         .map(|(id, keystroke)| (*id, (*keystroke).to_string()))
         .collect(),
+    }
+  }
+
+  #[test]
+  fn soft_wrap_shortcut_is_limited_to_editor_surfaces() {
+    for surface in ["Editor", "Editor CodeEditor"] {
+      assert_eq!(
+        first_binding_action_name(
+          "workspace",
+          &[surface],
+          "alt-z",
+          app_and_workspace_key_bindings()
+        ),
+        Some(ToggleSoftWrap::name_for_type())
+      );
+      assert_ne!(
+        first_binding_action_name(
+          "workspace",
+          &[surface, "Input"],
+          "alt-z",
+          app_and_workspace_key_bindings()
+        ),
+        Some(ToggleSoftWrap::name_for_type())
+      );
+    }
+    for surface in ["Input", "Terminal", "List"] {
+      assert_ne!(
+        first_binding_action_name(
+          "workspace",
+          &[surface],
+          "alt-z",
+          app_and_workspace_key_bindings()
+        ),
+        Some(ToggleSoftWrap::name_for_type())
+      );
     }
   }
 
