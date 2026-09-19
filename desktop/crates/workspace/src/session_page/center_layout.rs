@@ -1,4 +1,19 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct CenterGroupId(u64);
+
+impl CenterGroupId {
+  fn new() -> Self {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+  }
+
+  pub(super) fn as_u64(self) -> u64 {
+    self.0
+  }
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +59,8 @@ pub(super) enum PersistedCenterNode {
   },
   Split {
     direction: PersistedCenterSplitDirection,
+    #[serde(default)]
+    first_fraction: Option<u16>,
     first: Box<PersistedCenterNode>,
     second: Box<PersistedCenterNode>,
   },
@@ -96,6 +113,12 @@ pub(super) enum CenterSplitDirection {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct CenterPaneId(u64);
+
+impl CenterPaneId {
+  pub(super) fn as_u64(self) -> u64 {
+    self.0
+  }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct CenterSplitId(u64);
@@ -206,6 +229,7 @@ impl CenterPane {
 pub(super) struct CenterSplit {
   id: CenterSplitId,
   direction: CenterSplitDirection,
+  first_fraction: Option<u16>,
   first: Box<CenterNode>,
   second: Box<CenterNode>,
 }
@@ -224,6 +248,7 @@ impl CenterSplit {
     Self {
       id,
       direction,
+      first_fraction: None,
       first: Box::new(first),
       second: Box::new(second),
     }
@@ -235,6 +260,17 @@ impl CenterSplit {
 
   pub(super) fn direction(&self) -> CenterSplitDirection {
     self.direction
+  }
+
+  pub(super) fn first_fraction(&self) -> f32 {
+    self
+      .first_fraction
+      .map(|fraction| f32::from(fraction) / 10_000.0)
+      .unwrap_or_else(|| {
+        let first = self.first.surface_count().max(1) as f32;
+        let second = self.second.surface_count().max(1) as f32;
+        first / (first + second)
+      })
   }
 
   pub(super) fn first(&self) -> &CenterNode {
@@ -560,6 +596,7 @@ impl CenterNode {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CenterLayout {
+  id: CenterGroupId,
   root: CenterNode,
   active_tab: CenterTab,
   next_pane_id: u64,
@@ -618,6 +655,7 @@ fn persisted_center_node(
             CenterSplitDirection::Left => PersistedCenterSplitDirection::Left,
             CenterSplitDirection::Right => PersistedCenterSplitDirection::Right,
           },
+          first_fraction: split.first_fraction,
           first: Box::new(first),
           second: Box::new(second),
         }),
@@ -687,6 +725,7 @@ fn center_node_from_persisted(
     }
     PersistedCenterNode::Split {
       direction,
+      first_fraction,
       first,
       second,
     } => {
@@ -704,6 +743,7 @@ fn center_node_from_persisted(
               PersistedCenterSplitDirection::Left => CenterSplitDirection::Left,
               PersistedCenterSplitDirection::Right => CenterSplitDirection::Right,
             },
+            first_fraction: first_fraction.filter(|fraction| (1..10_000).contains(fraction)),
             first: Box::new(first),
             second: Box::new(second),
           }))
@@ -719,6 +759,7 @@ impl CenterLayout {
   pub(super) fn single(active_surface: CenterSurface) -> Self {
     let active_tab = active_surface.tab().clone();
     Self {
+      id: CenterGroupId::new(),
       root: CenterNode::Pane(CenterPane::new(CenterPaneId(0), active_surface)),
       active_tab,
       next_pane_id: 1,
@@ -752,10 +793,30 @@ impl CenterLayout {
       .cloned()
       .unwrap_or_else(|| root.first_active_surface().tab().clone());
     Some(Self {
+      id: CenterGroupId::new(),
       root,
       active_tab,
       next_pane_id: next_id,
     })
+  }
+
+  pub(super) fn id(&self) -> CenterGroupId {
+    self.id
+  }
+
+  pub(super) fn resize_split(&mut self, id: CenterSplitId, first_fraction: u16) -> bool {
+    fn resize(node: &mut CenterNode, id: CenterSplitId, fraction: u16) -> bool {
+      let CenterNode::Split(split) = node else {
+        return false;
+      };
+      if split.id == id {
+        split.first_fraction = Some(fraction.clamp(1, 9_999));
+        true
+      } else {
+        resize(&mut split.first, id, fraction) || resize(&mut split.second, id, fraction)
+      }
+    }
+    resize(&mut self.root, id, first_fraction)
   }
 
   fn allocate_pane_id(&mut self) -> CenterPaneId {
@@ -819,6 +880,9 @@ impl CenterLayout {
     direction: CenterSplitDirection,
   ) -> bool {
     let tab = surface.tab().clone();
+    if self.root.pane_surface_count(pane_id).is_none() {
+      return false;
+    }
     if self.root.pane_contains_tab(pane_id, &tab)
       && self
         .root
@@ -849,6 +913,11 @@ impl CenterLayout {
     mut layout: CenterLayout,
     direction: CenterSplitDirection,
   ) -> bool {
+    if self.root.pane_surface_count(pane_id).is_none()
+      || layout.tabs().iter().any(|tab| self.contains_tab(tab))
+    {
+      return false;
+    }
     let active_tab = layout.active_tab().clone();
     layout.root.reassign_ids(&mut self.next_pane_id);
     let new_split_id = CenterSplitId(self.allocate_pane_id().0);
@@ -1193,6 +1262,73 @@ mod tests {
     assert!(layout.move_surface_to_edge(&lib, CenterSplitDirection::Up));
 
     assert_split_tabs(&layout, CenterSplitDirection::Up, &lib, &readme);
+  }
+
+  #[test]
+  fn resizing_round_trips_and_accepts_layouts_without_saved_proportions() {
+    let first = CenterTab::file(PathBuf::from("first.txt"));
+    let second = CenterTab::file(PathBuf::from("second.txt"));
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(first.clone()));
+    assert!(layout.split_active(
+      CenterSurface::from_tab(second.clone()),
+      CenterSplitDirection::Right
+    ));
+    let CenterNode::Split(split) = layout.root() else {
+      panic!("split")
+    };
+    let split_id = split.id();
+    let id = layout.id();
+    assert!(layout.resize_split(split_id, 6_750));
+    let persisted = layout
+      .persisted_center_layout(&HashMap::new())
+      .expect("layout");
+    let tabs = HashMap::from([
+      (
+        PersistedCenterTab::File {
+          path: PathBuf::from("first.txt"),
+        },
+        first,
+      ),
+      (
+        PersistedCenterTab::File {
+          path: PathBuf::from("second.txt"),
+        },
+        second,
+      ),
+    ]);
+    let restored = CenterLayout::from_persisted_center_layout(&persisted, &tabs).expect("restored");
+    let CenterNode::Split(split) = restored.root() else {
+      panic!("split")
+    };
+    assert!((split.first_fraction() - 0.675).abs() < 0.001);
+    assert_eq!(layout.id(), id);
+    let mut legacy = serde_json::to_value(persisted).expect("json");
+    legacy
+      .get_mut("root")
+      .expect("root")
+      .as_object_mut()
+      .expect("object")
+      .remove("first_fraction");
+    let legacy = serde_json::from_value(legacy).expect("legacy layout");
+    let restored =
+      CenterLayout::from_persisted_center_layout(&legacy, &tabs).expect("legacy restore");
+    let CenterNode::Split(split) = restored.root() else {
+      panic!("split")
+    };
+    assert_eq!(split.first_fraction(), 0.5);
+  }
+
+  #[test]
+  fn splitting_into_a_stale_pane_does_not_remove_the_source() {
+    let mut layout = CenterLayout::single(file("one.txt"));
+    assert!(layout.split_active(file("two.txt"), CenterSplitDirection::Right));
+    let before = layout.clone();
+    assert!(!layout.split_pane(
+      CenterPaneId(999),
+      file("one.txt"),
+      CenterSplitDirection::Down
+    ));
+    assert_eq!(layout, before);
   }
 
   #[test]

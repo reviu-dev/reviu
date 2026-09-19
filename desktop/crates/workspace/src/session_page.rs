@@ -305,12 +305,13 @@ pub struct SessionPage {
   center_layout: CenterLayout,
   center_layouts_by_tab: HashMap<CenterTab, CenterLayout>,
   center_drag_target: Option<CenterDropTarget>,
+  center_tab_drop_target: Option<(center_layout::CenterGroupId, bool)>,
   center_tabs: Vec<CenterTab>,
   center_tabs_scroll_handle: ScrollHandle,
   center_tabs_revealed_tab: RefCell<Option<CenterTab>>,
   center_tab_history: Vec<CenterTab>,
-  center_tabs_by_checkout: HashMap<PathBuf, Vec<CenterTab>>,
-  center_active_tab_by_checkout: HashMap<PathBuf, CenterTab>,
+  /// Only inactive checkouts live here; the active state is moved out on restore.
+  center_checkouts: HashMap<PathBuf, center_workspace::CenterCheckoutState>,
   active_center_tab: Option<CenterTab>,
   editor_tab: Option<CenterTab>,
   editor_states: HashMap<CenterTab, CenterEditorState>,
@@ -372,6 +373,7 @@ mod agent;
 mod center_layout;
 mod center_persistence;
 mod center_tab;
+mod center_workspace;
 mod commands;
 #[cfg(any(test, feature = "test-support"))]
 mod driver;
@@ -663,12 +665,12 @@ impl SessionPage {
       center_layout: CenterLayout::single(CenterSurface::from_tab(CenterTab::chat())),
       center_layouts_by_tab: HashMap::new(),
       center_drag_target: None,
+      center_tab_drop_target: None,
       center_tabs: CenterTab::default_tabs(),
       center_tabs_scroll_handle: ScrollHandle::new(),
       center_tabs_revealed_tab: RefCell::new(None),
       center_tab_history: CenterTab::default_tabs(),
-      center_tabs_by_checkout: HashMap::new(),
-      center_active_tab_by_checkout: HashMap::new(),
+      center_checkouts: HashMap::new(),
       active_center_tab: Some(CenterTab::chat()),
       editor_tab: None,
       editor_states: HashMap::new(),
@@ -1127,7 +1129,9 @@ impl SessionPage {
     {
       self.checkout_override = None;
     }
-    let checkout = self.checkout_root(cx);
+    let checkout = self
+      .checkout_root(cx)
+      .map(|path| Self::canonical_repo(&path));
     let project_checkout = checkout.clone();
     let git_checkout = checkout.clone().filter(|_| self.fallback_repo.is_some());
     // The memo alone is not trusted: a fixture or future code may assign
@@ -1149,42 +1153,45 @@ impl SessionPage {
         })
         .cloned()
         .collect();
-      self
-        .center_tabs_by_checkout
-        .insert(previous_checkout.clone(), tabs);
-      if let Some(tab) = self.active_center_tab.clone().filter(|tab| {
+      let active_tab = self.active_center_tab.clone().filter(|tab| {
         tab.kind != CenterTabKind::InteractiveRebase
           && self.center_tab_belongs_to_checkout(tab, &previous_checkout, cx)
-      }) {
-        self
-          .center_active_tab_by_checkout
-          .insert(previous_checkout, tab);
-      } else {
-        self
-          .center_active_tab_by_checkout
-          .remove(&previous_checkout);
-      }
+      });
+      self.center_checkouts.insert(
+        previous_checkout,
+        center_workspace::CenterCheckoutState {
+          tabs,
+          active_tab,
+          history: std::mem::take(&mut self.center_tab_history),
+          layouts: std::mem::take(&mut self.center_layouts_by_tab),
+        },
+      );
     }
 
     if let Some(checkout) = checkout.as_ref() {
       self.restore_center_workspace(checkout, window, cx);
     }
-    let restored_tabs = CenterTab::with_chat_tab(
-      checkout
-        .as_ref()
-        .and_then(|checkout| self.center_tabs_by_checkout.get(checkout).cloned())
-        .unwrap_or_else(CenterTab::default_tabs),
-    );
-    let restored_selected_tab = checkout
+    let restored = checkout
       .as_ref()
-      .and_then(|checkout| self.center_active_tab_by_checkout.get(checkout).cloned())
+      .and_then(|checkout| self.center_checkouts.remove(checkout))
+      .unwrap_or_default();
+    let restored_tabs = CenterTab::with_chat_tab(restored.tabs);
+    let restored_selected_tab = restored
+      .active_tab
       .filter(|tab| restored_tabs.contains(tab))
       .unwrap_or_else(CenterTab::chat);
 
     self.synced_checkout = checkout.clone();
     self.center = CenterView::Conversation;
     self.center_tabs = restored_tabs;
-    self.center_tab_history = CenterTab::default_tabs();
+    self.center_tab_history = restored.history;
+    self.center_layouts_by_tab = restored.layouts;
+    for tab in &self.center_tabs {
+      self
+        .center_layouts_by_tab
+        .entry(tab.clone())
+        .or_insert_with(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())));
+    }
     self.center_layout = CenterLayout::single(CenterSurface::from_tab(CenterTab::chat()));
     self.active_center_tab = None;
     self.editor_tab = None;
@@ -1447,7 +1454,7 @@ impl SessionPage {
       CenterTabKind::Chat => tab
         .conversation_id()
         .and_then(|id| self.session_checkout_for_id(id, cx))
-        .is_none_or(|path| path == checkout),
+        .is_none_or(|path| Self::canonical_repo(&path) == checkout),
       CenterTabKind::File if tab.is_untitled() => tab
         .untitled_id()
         .and_then(|id| self.untitled_buffers.get(&id))
@@ -1483,12 +1490,13 @@ impl SessionPage {
     };
     self.center_tabs.retain(|tab| !is_removed_chat(tab));
     self.center_tab_history.retain(|tab| !is_removed_chat(tab));
-    for tabs in self.center_tabs_by_checkout.values_mut() {
-      tabs.retain(|tab| !is_removed_chat(tab));
+    for state in self.center_checkouts.values_mut() {
+      state.tabs.retain(|tab| !is_removed_chat(tab));
+      state.history.retain(|tab| !is_removed_chat(tab));
+      if state.active_tab.as_ref().is_some_and(is_removed_chat) {
+        state.active_tab = None;
+      }
     }
-    self
-      .center_active_tab_by_checkout
-      .retain(|_, tab| !is_removed_chat(tab));
     if self.active_center_tab.as_ref().is_some_and(is_removed_chat) {
       self.set_active_center_tab(CenterTab::chat());
       self.remember_center_tab_visit(CenterTab::chat());
@@ -1497,12 +1505,13 @@ impl SessionPage {
   }
 
   fn save_active_center_layout(&mut self) {
-    let Some(tab) = self.active_center_tab.clone() else {
+    let Some(tab) = self
+      .active_center_tab
+      .clone()
+      .filter(|tab| self.center_tabs.contains(tab))
+    else {
       return;
     };
-    if tab.kind == CenterTabKind::ProjectSearch {
-      return;
-    }
     self
       .center_layouts_by_tab
       .insert(tab, self.center_layout.clone());
@@ -1547,6 +1556,16 @@ impl SessionPage {
 
   fn remember_center_layout_tab(&mut self, representative: CenterTab) {
     let layout_tabs = self.center_layout.tabs();
+    let representative = if Self::is_placeholder_chat_tab(&representative)
+      && let Some(tab) = layout_tabs
+        .iter()
+        .find(|tab| !Self::is_placeholder_chat_tab(tab))
+    {
+      self.replace_center_group_representative(&representative, tab);
+      tab.clone()
+    } else {
+      representative
+    };
     self.center_tabs.retain(|tab| {
       tab == &representative || !layout_tabs.iter().any(|layout_tab| layout_tab == tab)
     });
@@ -1652,9 +1671,6 @@ impl SessionPage {
     self
       .center_tab_history
       .retain(|tab| tab != &placeholder_chat_tab);
-    for tabs in self.center_tabs_by_checkout.values_mut() {
-      tabs.retain(|tab| tab != &placeholder_chat_tab);
-    }
     self.center_layouts_by_tab.remove(&placeholder_chat_tab);
   }
 
@@ -1689,7 +1705,12 @@ impl SessionPage {
 
   fn center_tabs_for_navigation(&self) -> Vec<CenterTab> {
     let mut tabs = self.center_tabs.clone();
-    tabs.retain(|tab| !Self::is_placeholder_chat_tab(tab));
+    tabs.retain(|tab| {
+      !Self::is_placeholder_chat_tab(tab)
+        || self
+          .center_group_layout(tab)
+          .is_some_and(|layout| layout.surface_count() > 1)
+    });
     if self.center == CenterView::InteractiveRebase
       && !tabs
         .iter()
@@ -1733,11 +1754,15 @@ impl SessionPage {
     if Self::is_real_chat_tab(&tab) {
       self.forget_placeholder_chat_tab();
     }
-    self.center_layouts_by_tab.remove(&tab);
+    let layout = self
+      .center_layouts_by_tab
+      .remove(&tab)
+      .filter(|layout| layout.surface_count() == 1 && layout.contains_tab(&tab))
+      .unwrap_or_else(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())));
     if !self.center_tabs.contains(&tab) {
       self.center_tabs.push(tab.clone());
     }
-    self.center_layout = CenterLayout::single(CenterSurface::from_tab(tab.clone()));
+    self.center_layout = layout;
     self.set_active_center_tab(tab.clone());
     self.remember_center_tab_visit(tab);
     self.persist_current_center_workspace(cx);
@@ -2892,13 +2917,18 @@ impl SessionPage {
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
+    let tab = CenterTab::project_search();
+    let layout = self
+      .center_group_layout(&tab)
+      .filter(|layout| layout.surface_count() == 1)
+      .cloned();
     self.detach_project_search_from_layouts();
     self.save_active_center_layout();
     self.ensure_project_search_view(repo_root, window, cx);
-    let tab = CenterTab::project_search();
     self.center_layouts_by_tab.remove(&tab);
     self.center = CenterView::ProjectSearch;
-    self.center_layout = CenterLayout::single(CenterSurface::from_tab(tab.clone()));
+    self.center_layout =
+      layout.unwrap_or_else(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())));
     self.set_active_center_tab(tab.clone());
     if !self.center_tabs.contains(&tab) {
       self.center_tabs.push(tab.clone());
@@ -3083,8 +3113,9 @@ fn load_agent_review(path: Option<&Path>) -> AgentReviewComments {
 impl Focusable for SessionPage {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
     if self.center == CenterView::Terminal
-      && let Some(tab) = self.active_center_tab.as_ref()
-      && let Some(terminal) = tab
+      && let Some(terminal) = self
+        .center_layout
+        .active_tab()
         .terminal_id()
         .and_then(|id| self.terminal_views.get(&id))
     {
@@ -3095,6 +3126,16 @@ impl Focusable for SessionPage {
         return editor.read(cx).focus_handle(cx);
       }
       return self.focus_handle.clone();
+    }
+    if self.center == CenterView::ProjectSearch
+      && let Some(view) = self.project_search_view.as_ref()
+    {
+      return view.read(cx).focus_handle(cx);
+    }
+    if self.center == CenterView::InteractiveRebase
+      && let Some(view) = self.interactive_rebase_todo_view.as_ref()
+    {
+      return view.read(cx).focus_handle(cx);
     }
     if let Some(view) = self.agent_chat_view.as_ref() {
       return view.read(cx).input_focus_handle(cx);

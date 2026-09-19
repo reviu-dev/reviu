@@ -7,6 +7,8 @@ actions!(
     CloseCenterTab,
     NextCenterTab,
     PreviousCenterTab,
+    MoveCenterTabLeft,
+    MoveCenterTabRight,
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,

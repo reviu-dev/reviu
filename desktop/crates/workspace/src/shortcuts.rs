@@ -77,6 +77,8 @@ pub enum ShortcutId {
   ShowCommandPalette,
   NextCenterTab,
   PreviousCenterTab,
+  MoveCenterTabLeft,
+  MoveCenterTabRight,
   CloseCenterTab,
   NewFile,
   SaveFileAs,
@@ -118,6 +120,8 @@ impl ShortcutId {
       ShortcutId::ShowCommandPalette => "show_command_palette",
       ShortcutId::NextCenterTab => "next_center_tab",
       ShortcutId::PreviousCenterTab => "previous_center_tab",
+      ShortcutId::MoveCenterTabLeft => "move_center_tab_left",
+      ShortcutId::MoveCenterTabRight => "move_center_tab_right",
       ShortcutId::CloseCenterTab => "close_center_tab",
       ShortcutId::NewFile => "new_file",
       ShortcutId::SaveFileAs => "save_file_as",
@@ -159,6 +163,8 @@ impl ShortcutId {
       "show_command_palette" => Some(ShortcutId::ShowCommandPalette),
       "next_center_tab" => Some(ShortcutId::NextCenterTab),
       "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
+      "move_center_tab_left" => Some(ShortcutId::MoveCenterTabLeft),
+      "move_center_tab_right" => Some(ShortcutId::MoveCenterTabRight),
       "close_center_tab" => Some(ShortcutId::CloseCenterTab),
       "new_file" => Some(ShortcutId::NewFile),
       "save_file_as" => Some(ShortcutId::SaveFileAs),
@@ -218,7 +224,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -248,6 +254,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     scope_label: "Workspace",
     category: ShortcutCategory::Core,
     keystroke: "cmd-shift-[",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::MoveCenterTabLeft,
+    title: "Move Tab Left",
+    description: "Move the active center tab one position to the left.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "ctrl-shift-pageup",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::MoveCenterTabRight,
+    title: "Move Tab Right",
+    description: "Move the active center tab one position to the right.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "ctrl-shift-pagedown",
     context: CENTER_TAB_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -722,6 +750,12 @@ impl ShortcutDefinition {
       ShortcutId::PreviousCenterTab => {
         KeyBinding::new(keystroke, PreviousCenterTab, Some(&context))
       }
+      ShortcutId::MoveCenterTabLeft => {
+        KeyBinding::new(keystroke, crate::MoveCenterTabLeft, Some(&context))
+      }
+      ShortcutId::MoveCenterTabRight => {
+        KeyBinding::new(keystroke, crate::MoveCenterTabRight, Some(&context))
+      }
       ShortcutId::CloseCenterTab => KeyBinding::new(keystroke, CloseCenterTab, Some(&context)),
       ShortcutId::NewFile => KeyBinding::new(keystroke, NewFile, Some(&context)),
       ShortcutId::SaveFileAs => KeyBinding::new(keystroke, SaveFileAs, Some(&context)),
@@ -788,6 +822,8 @@ impl ShortcutDefinition {
       ShortcutId::ShowCommandPalette
         | ShortcutId::NextCenterTab
         | ShortcutId::PreviousCenterTab
+        | ShortcutId::MoveCenterTabLeft
+        | ShortcutId::MoveCenterTabRight
         | ShortcutId::CloseCenterTab
         | ShortcutId::NewFile
         | ShortcutId::SaveFileAs
@@ -1392,6 +1428,8 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::ShowCommandPalette => f(&ShowCommandPalette),
     ShortcutId::NextCenterTab => f(&NextCenterTab),
     ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
+    ShortcutId::MoveCenterTabLeft => f(&crate::MoveCenterTabLeft),
+    ShortcutId::MoveCenterTabRight => f(&crate::MoveCenterTabRight),
     ShortcutId::CloseCenterTab => f(&CloseCenterTab),
     ShortcutId::NewFile => f(&NewFile),
     ShortcutId::SaveFileAs => f(&SaveFileAs),

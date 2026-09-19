@@ -101,7 +101,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.center_tabs_by_checkout.contains_key(checkout_root) {
+    if self.center_checkouts.contains_key(checkout_root) {
       return;
     }
     let untitled_tabs = self.restore_untitled_buffers(checkout_root, window, cx);
@@ -204,13 +204,15 @@ impl SessionPage {
       .and_then(|tab| runtime_tabs.get(tab).cloned())
       .filter(|tab| tabs.contains(tab))
       .unwrap_or_else(|| tabs.last().cloned().unwrap_or_else(CenterTab::chat));
-    self.center_layouts_by_tab.extend(restored_layouts);
-    self
-      .center_tabs_by_checkout
-      .insert(checkout_root.to_path_buf(), tabs);
-    self
-      .center_active_tab_by_checkout
-      .insert(checkout_root.to_path_buf(), active_tab);
+    self.center_checkouts.insert(
+      checkout_root.to_path_buf(),
+      center_workspace::CenterCheckoutState {
+        tabs,
+        active_tab: Some(active_tab),
+        history: Vec::new(),
+        layouts: restored_layouts,
+      },
+    );
   }
 
   pub(super) fn persist_current_center_workspace(&mut self, cx: &App) {
@@ -277,9 +279,9 @@ impl SessionPage {
       self.center_tabs.clone()
     } else {
       self
-        .center_tabs_by_checkout
+        .center_checkouts
         .get(checkout_root)
-        .cloned()
+        .map(|state| state.tabs.clone())
         .unwrap_or_default()
     };
     let tabs = runtime_tabs
@@ -309,8 +311,13 @@ impl SessionPage {
       };
       let layout = if current_checkout && self.active_center_tab.as_ref() == Some(&representative) {
         Some(&self.center_layout)
-      } else {
+      } else if current_checkout {
         self.center_layouts_by_tab.get(&representative)
+      } else {
+        self
+          .center_checkouts
+          .get(checkout_root)
+          .and_then(|state| state.layouts.get(&representative))
       };
       let persisted_layout = layout
         .and_then(|layout| layout.persisted_center_layout(&terminal_keys))
@@ -329,7 +336,10 @@ impl SessionPage {
     let active_tab = if current_checkout {
       self.active_center_tab.as_ref()
     } else {
-      self.center_active_tab_by_checkout.get(checkout_root)
+      self
+        .center_checkouts
+        .get(checkout_root)
+        .and_then(|state| state.active_tab.as_ref())
     }
     .and_then(|tab| persisted_center_tab(tab, &terminal_keys));
     let state = PersistedCenterWorkspace {

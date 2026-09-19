@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.2.0
 
+### Reorder Your Workspace Tabs
+
+Drag tabs to rearrange files, conversations, terminals and split groups without losing your place. Move Tab Left and Move Tab Right also work from the keyboard with Ctrl-Shift-PageUp and Ctrl-Shift-PageDown. Tab order and split proportions are restored per checkout, and closing a group now checks every unsaved file before removing anything.
+
 ### Soft Wrap Preference
 
 Choose whether long lines wrap by default in Settings > Editor, without changing file contents. Use Alt-Z or Toggle Soft Wrap in the command palette for a temporary override in the active editor. The editor header no longer needs a Wrap button.

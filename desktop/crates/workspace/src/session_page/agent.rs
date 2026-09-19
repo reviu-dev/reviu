@@ -1521,14 +1521,6 @@ impl SessionPage {
 
     replace_in_tabs(&mut self.center_tabs, old_tab, new_tab);
     replace_in_tabs(&mut self.center_tab_history, old_tab, new_tab);
-    for tabs in self.center_tabs_by_checkout.values_mut() {
-      replace_in_tabs(tabs, old_tab, new_tab);
-    }
-    for tab in self.center_active_tab_by_checkout.values_mut() {
-      if tab == old_tab {
-        *tab = new_tab.clone();
-      }
-    }
     if self.active_center_tab.as_ref() == Some(old_tab) {
       self.active_center_tab = Some(new_tab.clone());
     }

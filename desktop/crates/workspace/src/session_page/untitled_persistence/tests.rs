@@ -225,7 +225,11 @@ fn untitled_close_and_discard_cancel_pending_writes(cx: &mut TestAppContext) {
     page.close_center_tab(dirty.clone(), window, cx);
     assert!(window.has_active_dialog(cx));
     page.discard_unsaved_editor_for_test(
-      UnsavedEditorAction::CloseCenterTab { tab: dirty },
+      UnsavedEditorAction::CloseCenterGroups {
+        groups: vec![page.center_layout.id()],
+        discarded: Vec::new(),
+        tab: dirty,
+      },
       window,
       cx,
     );

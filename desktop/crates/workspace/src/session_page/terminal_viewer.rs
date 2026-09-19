@@ -182,12 +182,20 @@ impl SessionPage {
     self
       .center_tab_history
       .retain(|tab| !terminal_tabs.iter().any(|terminal_tab| terminal_tab == tab));
-    for tabs in self.center_tabs_by_checkout.values_mut() {
-      tabs.retain(|tab| !terminal_tabs.iter().any(|terminal_tab| terminal_tab == tab));
+    for state in self.center_checkouts.values_mut() {
+      state.tabs.retain(|tab| !terminal_tabs.contains(tab));
+      state.history.retain(|tab| !terminal_tabs.contains(tab));
+      if state
+        .active_tab
+        .as_ref()
+        .is_some_and(|tab| terminal_tabs.contains(tab))
+      {
+        state.active_tab = None;
+      }
+      state.layouts.retain(|tab, layout| {
+        !terminal_tabs.contains(tab) && !layout.tabs().iter().any(|tab| terminal_tabs.contains(tab))
+      });
     }
-    self
-      .center_active_tab_by_checkout
-      .retain(|_, tab| !terminal_tabs.iter().any(|terminal_tab| terminal_tab == tab));
     self.center_layouts_by_tab.retain(|tab, layout| {
       !terminal_tabs.iter().any(|terminal_tab| terminal_tab == tab)
         && !layout

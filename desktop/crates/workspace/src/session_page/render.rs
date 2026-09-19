@@ -499,13 +499,15 @@ impl SessionPage {
         collect(&mut ids, &tab);
       }
     }
-    for tabs in self.center_tabs_by_checkout.values() {
-      for tab in tabs {
+    for state in self.center_checkouts.values() {
+      for tab in state.tabs.iter().chain(state.active_tab.iter()) {
         collect(&mut ids, tab);
       }
-    }
-    for tab in self.center_active_tab_by_checkout.values() {
-      collect(&mut ids, tab);
+      for layout in state.layouts.values() {
+        for tab in layout.tabs() {
+          collect(&mut ids, &tab);
+        }
+      }
     }
     ids
   }
@@ -646,9 +648,11 @@ impl SessionPage {
     tab: CenterTab,
     tabs: Vec<CenterTab>,
     delete_chat_id: Option<String>,
+    cx: &App,
   ) -> PopupMenu {
+    let is_closeable = |tab: &CenterTab| page.read(cx).center_group_is_closeable(tab);
     let tab_index = tabs.iter().position(|candidate| candidate == &tab);
-    if tab.is_closeable() {
+    if is_closeable(&tab) {
       let close_page = page.clone();
       let close_tab = tab.clone();
       menu = menu.item(PopupMenuItem::new("Close").on_click(move |_, window, cx| {
@@ -661,7 +665,7 @@ impl SessionPage {
 
     if tabs
       .iter()
-      .any(|candidate| candidate != &tab && candidate.is_closeable())
+      .any(|candidate| candidate != &tab && is_closeable(candidate))
     {
       let close_page = page.clone();
       let keep_tab = tab.clone();
@@ -675,7 +679,7 @@ impl SessionPage {
       );
     }
 
-    if tab_index.is_some_and(|index| tabs.iter().take(index).any(CenterTab::is_closeable)) {
+    if tab_index.is_some_and(|index| tabs.iter().take(index).any(is_closeable)) {
       let close_page = page.clone();
       let anchor_tab = tab.clone();
       menu = menu.item(
@@ -688,7 +692,7 @@ impl SessionPage {
       );
     }
 
-    if tab_index.is_some_and(|index| tabs.iter().skip(index + 1).any(CenterTab::is_closeable)) {
+    if tab_index.is_some_and(|index| tabs.iter().skip(index + 1).any(is_closeable)) {
       let close_page = page.clone();
       let anchor_tab = tab.clone();
       menu = menu.item(
@@ -736,14 +740,14 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let tabs = self.center_tabs_for_navigation();
-    for tab in tabs {
-      if tab != keep_tab && tab.is_closeable() {
-        self.close_center_tab(tab, window, cx);
-        if window.has_active_dialog(cx) {
-          break;
-        }
-      }
-    }
+    self.request_close_center_tabs(
+      tabs
+        .into_iter()
+        .filter(|tab| tab != &keep_tab && self.center_group_is_closeable(tab))
+        .collect(),
+      window,
+      cx,
+    );
   }
 
   fn close_center_tabs_to_left(
@@ -756,14 +760,15 @@ impl SessionPage {
     let Some(anchor_index) = tabs.iter().position(|tab| tab == &anchor_tab) else {
       return;
     };
-    for tab in tabs.into_iter().take(anchor_index) {
-      if tab.is_closeable() {
-        self.close_center_tab(tab, window, cx);
-        if window.has_active_dialog(cx) {
-          break;
-        }
-      }
-    }
+    self.request_close_center_tabs(
+      tabs
+        .into_iter()
+        .take(anchor_index)
+        .filter(|tab| self.center_group_is_closeable(tab))
+        .collect(),
+      window,
+      cx,
+    );
   }
 
   fn close_center_tabs_to_right(
@@ -776,14 +781,15 @@ impl SessionPage {
     let Some(anchor_index) = tabs.iter().position(|tab| tab == &anchor_tab) else {
       return;
     };
-    for tab in tabs.into_iter().skip(anchor_index + 1) {
-      if tab.is_closeable() {
-        self.close_center_tab(tab, window, cx);
-        if window.has_active_dialog(cx) {
-          break;
-        }
-      }
-    }
+    self.request_close_center_tabs(
+      tabs
+        .into_iter()
+        .skip(anchor_index + 1)
+        .filter(|tab| self.center_group_is_closeable(tab))
+        .collect(),
+      window,
+      cx,
+    );
   }
 
   fn render_center_tab_icons(&self, tabs: &[CenterTab], cx: &mut Context<Self>) -> AnyElement {
@@ -1274,12 +1280,13 @@ impl SessionPage {
     for tab in &tabs {
       let label_tab = self.center_tab_label_source(tab);
       let icon_tabs = self.center_tab_icon_sources(tab);
-      let dirty = matches!(label_tab.kind, CenterTabKind::File | CenterTabKind::Diff)
-        && self
+      let dirty = icon_tabs.iter().any(|tab| {
+        self
           .editor_states
-          .get(&label_tab)
+          .get(tab)
           .and_then(|state| state.editor.as_ref())
-          .is_some_and(|editor| editor.read(cx).is_dirty);
+          .is_some_and(|editor| editor.read(cx).is_dirty)
+      });
       let Some(label) = self.center_tab_label(&label_tab, cx) else {
         continue;
       };
@@ -1325,30 +1332,65 @@ impl SessionPage {
         .when_some(status, |this, status| {
           this.child(Self::render_center_tab_status(status, &theme))
         })
-        .context_menu(move |menu, _, _| {
+        .context_menu(move |menu, _, cx| {
           Self::build_center_tab_context_menu(
             menu,
             page.clone(),
             menu_tab.clone(),
             menu_tabs.clone(),
             menu_delete_chat_id.clone(),
+            cx,
           )
         });
 
-      let drag_tab = tab.clone();
+      let drop_target = self.center_tab_drop_target;
       let mut tab_element = Tab::new()
         .aria_label(accessibility_label)
         .child(tab_content)
-        .on_drag(
-          DraggedCenterTab {
-            tab: drag_tab.clone(),
-          },
-          move |drag, _, _, cx| {
-            cx.stop_propagation();
-            cx.new(|_| drag.clone())
-          },
-        );
-      if tab.is_closeable() {
+        .when_some(self.center_group_id(tab), |tab_element, group_id| {
+          tab_element
+            .on_drag(DraggedCenterTab { group_id }, move |drag, _, _, cx| {
+              cx.stop_propagation();
+              cx.new(|_| drag.clone())
+            })
+            .on_drag_move(cx.listener(
+              move |this, event: &gpui::DragMoveEvent<DraggedCenterTab>, _, cx| {
+                if !event.bounds.contains(&event.event.position) {
+                  return;
+                }
+                let after = event.event.position.x > event.bounds.center().x;
+                this.center_drag_target = None;
+                if this.center_tab_drop_target != Some((group_id, after)) {
+                  this.center_tab_drop_target = Some((group_id, after));
+                  cx.notify();
+                }
+              },
+            ))
+            .drag_over::<DraggedCenterTab>(move |tab, drag, _, cx| {
+              if drag.group_id == group_id {
+                return tab;
+              }
+              let after = drop_target
+                .filter(|(id, _)| *id == group_id)
+                .is_some_and(|(_, after)| after);
+              let tab = tab.border_color(cx.theme().primary);
+              if after {
+                tab.border_r_2()
+              } else {
+                tab.border_l_2()
+              }
+            })
+            .on_drop(cx.listener(move |this, drag: &DraggedCenterTab, _, cx| {
+              let after = this
+                .center_tab_drop_target
+                .take()
+                .filter(|(id, _)| *id == group_id)
+                .is_some_and(|(_, after)| after);
+              this.reorder_center_tab(drag.group_id, group_id, after, cx);
+              cx.stop_propagation();
+            }))
+        });
+      if self.center_group_is_closeable(tab) {
         let close_tab = tab.clone();
         let close_label = format!(
           "{:?}-{:?}-{}",
@@ -1374,6 +1416,24 @@ impl SessionPage {
         );
       }
       tab_bar = tab_bar.child(tab_element);
+    }
+
+    if let Some(last_group) = tabs.last().and_then(|tab| self.center_group_id(tab)) {
+      tab_bar = tab_bar.last_empty_space(
+        div()
+          .id("center-tab-end-drop")
+          .h_full()
+          .min_w(px(24.0))
+          .flex_1()
+          .drag_over::<DraggedCenterTab>(|element, _, _, cx| {
+            element.border_l_2().border_color(cx.theme().primary)
+          })
+          .on_drop(cx.listener(move |this, drag: &DraggedCenterTab, _, cx| {
+            this.center_tab_drop_target = None;
+            this.reorder_center_tab(drag.group_id, last_group, true, cx);
+            cx.stop_propagation();
+          })),
+      );
     }
 
     tab_bar = tab_bar.on_click(cx.listener(move |this, index: &usize, window, cx| {
@@ -1425,6 +1485,12 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> AnyElement {
+    if !cx.has_active_drag() {
+      self.center_tab_drop_target = None;
+      self.center_drag_target = None;
+    } else if self.center_tab_drop_target.is_some() {
+      self.scroll_center_tabs_during_drag(window);
+    }
     let animation_id = self.center_content_animation_id();
     let root = self.center_layout.root().clone();
     let view = self.render_center_node(&root, window, cx);
@@ -1498,62 +1564,75 @@ impl SessionPage {
         let theme = cx.theme().clone();
         let first = self.render_center_node(split.first(), window, cx);
         let second = self.render_center_node(split.second(), window, cx);
-        let first_weight = split.first().surface_count().max(1) as f32;
-        let second_weight = split.second().surface_count().max(1) as f32;
-        let total_weight = first_weight + second_weight;
+        let first_weight = split.first_fraction();
+        let second_weight = 1.0 - first_weight;
+        let total_weight = 1.0;
+        let group_id = self.center_layout.id();
+        let split_id = split.id();
+        let element_id = format!(
+          "session-center-split-{}-{}",
+          group_id.as_u64(),
+          split_id.as_u64()
+        );
         match split.direction() {
-          CenterSplitDirection::Left | CenterSplitDirection::Right => {
-            h_resizable(("session-center-split", split.id().as_u64()))
-              .child(
-                resizable_panel()
-                  .flex_basis(gpui::relative(first_weight / total_weight))
-                  .flex_grow(first_weight)
-                  .size_range(px(CENTER_SPLIT_MIN_WIDTH_PX)..gpui::Pixels::MAX)
-                  .child(first),
-              )
-              .child(
-                resizable_panel()
-                  .flex_basis(gpui::relative(second_weight / total_weight))
-                  .flex_grow(second_weight)
-                  .size_range(px(CENTER_SPLIT_MIN_WIDTH_PX)..gpui::Pixels::MAX)
-                  .child(
-                    div()
-                      .size_full()
-                      .min_w(px(0.0))
-                      .min_h_0()
-                      .border_l_1()
-                      .border_color(theme.border)
-                      .child(second),
-                  ),
-              )
-              .into_any_element()
-          }
-          CenterSplitDirection::Up | CenterSplitDirection::Down => {
-            v_resizable(("session-center-split", split.id().as_u64()))
-              .child(
-                resizable_panel()
-                  .flex_basis(gpui::relative(first_weight / total_weight))
-                  .flex_grow(first_weight)
-                  .size_range(px(CENTER_SPLIT_MIN_HEIGHT_PX)..gpui::Pixels::MAX)
-                  .child(first),
-              )
-              .child(
-                resizable_panel()
-                  .flex_basis(gpui::relative(second_weight / total_weight))
-                  .flex_grow(second_weight)
-                  .size_range(px(CENTER_SPLIT_MIN_HEIGHT_PX)..gpui::Pixels::MAX)
-                  .child(
-                    div()
-                      .size_full()
-                      .min_w(px(0.0))
-                      .min_h_0()
-                      .border_t_1()
-                      .border_color(theme.border)
-                      .child(second),
-                  ),
-              )
-              .into_any_element()
-          }
+          CenterSplitDirection::Left | CenterSplitDirection::Right => h_resizable(element_id)
+            .on_resize(cx.listener(
+              move |this, state: &Entity<gpui_component::resizable::ResizableState>, _, cx| {
+                this.resize_center_split(group_id, split_id, state.read(cx).sizes().clone(), cx);
+              },
+            ))
+            .child(
+              resizable_panel()
+                .flex_basis(gpui::relative(first_weight / total_weight))
+                .flex_grow(first_weight)
+                .size_range(px(CENTER_SPLIT_MIN_WIDTH_PX)..gpui::Pixels::MAX)
+                .child(first),
+            )
+            .child(
+              resizable_panel()
+                .flex_basis(gpui::relative(second_weight / total_weight))
+                .flex_grow(second_weight)
+                .size_range(px(CENTER_SPLIT_MIN_WIDTH_PX)..gpui::Pixels::MAX)
+                .child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .child(second),
+                ),
+            )
+            .into_any_element(),
+          CenterSplitDirection::Up | CenterSplitDirection::Down => v_resizable(element_id)
+            .on_resize(cx.listener(
+              move |this, state: &Entity<gpui_component::resizable::ResizableState>, _, cx| {
+                this.resize_center_split(group_id, split_id, state.read(cx).sizes().clone(), cx);
+              },
+            ))
+            .child(
+              resizable_panel()
+                .flex_basis(gpui::relative(first_weight / total_weight))
+                .flex_grow(first_weight)
+                .size_range(px(CENTER_SPLIT_MIN_HEIGHT_PX)..gpui::Pixels::MAX)
+                .child(first),
+            )
+            .child(
+              resizable_panel()
+                .flex_basis(gpui::relative(second_weight / total_weight))
+                .flex_grow(second_weight)
+                .size_range(px(CENTER_SPLIT_MIN_HEIGHT_PX)..gpui::Pixels::MAX)
+                .child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(second),
+                ),
+            )
+            .into_any_element(),
         }
       }
     }
@@ -1569,6 +1648,11 @@ impl SessionPage {
     let focus_tab = pane.active_surface().tab().clone();
     let view = self.render_center_surface(pane.active_surface(), window, cx);
     div()
+      .id(format!(
+        "center-pane-{}-{}",
+        self.center_layout.id().as_u64(),
+        pane_id.as_u64()
+      ))
       .relative()
       .size_full()
       .min_w(px(0.0))
@@ -1580,23 +1664,7 @@ impl SessionPage {
           if this.center_layout.active_tab() == &focus_tab {
             return;
           }
-          this
-            .center_layout
-            .set_active_surface(CenterSurface::from_tab(focus_tab.clone()));
-          if let Some(conversation_id) = focus_tab.conversation_id() {
-            this.activate_session_panel(conversation_id, window, cx);
-          }
-          this.center = Self::center_view_for_tab(&focus_tab);
-          if focus_tab.kind == CenterTabKind::Terminal {
-            this.focus_terminal_tab(&focus_tab, window, cx);
-          }
-          if let Some(active_tab) = this.active_center_tab.clone() {
-            this
-              .center_layouts_by_tab
-              .insert(active_tab, this.center_layout.clone());
-          }
-          this.persist_current_center_workspace(cx);
-          cx.notify();
+          this.activate_center_surface(&focus_tab, window, cx);
         }),
       )
       .on_drag_move(cx.listener(
@@ -1604,6 +1672,7 @@ impl SessionPage {
           if !Self::center_drag_event_contains_pointer(event) {
             return;
           }
+          this.center_tab_drop_target = None;
           let previous_direction = this
             .center_drag_target
             .filter(|target| target.pane_id == pane_id)
@@ -1620,9 +1689,17 @@ impl SessionPage {
           }
         },
       ))
-      .on_drop(cx.listener(|this, drag: &DraggedCenterTab, window, cx| {
-        this.drop_center_tab(drag.tab.clone(), window, cx);
-      }))
+      .on_drop(
+        cx.listener(move |this, drag: &DraggedCenterTab, window, cx| {
+          if this
+            .center_drag_target
+            .is_some_and(|target| target.pane_id == pane_id)
+            && let Some(tab) = this.center_group_tab(drag.group_id)
+          {
+            this.drop_center_tab(tab, window, cx);
+          }
+        }),
+      )
       .child(view)
       .child(self.render_center_drop_overlay(pane_id, cx))
       .into_any_element()
@@ -1699,16 +1776,7 @@ impl SessionPage {
       CenterSurface::InteractiveRebase(_) => self.render_interactive_rebase(cx),
       CenterSurface::ProjectSearch(_) => self.render_project_search(cx),
       CenterSurface::Terminal(tab) => self.render_terminal_surface(tab.clone(), cx),
-      CenterSurface::Editor(tab) => {
-        let previous_center = self.center;
-        let previous_active_tab = self.active_center_tab.clone();
-        self.center = CenterView::Diff;
-        self.active_center_tab = Some(tab.clone());
-        let view = self.render_diff_view(window, cx);
-        self.center = previous_center;
-        self.active_center_tab = previous_active_tab;
-        view
-      }
+      CenterSurface::Editor(tab) => self.render_diff_view(tab, window, cx),
     }
   }
 
@@ -1759,9 +1827,17 @@ impl SessionPage {
         CenterSplitDirection::Left => this.top(inset).left(inset).bottom(inset).w(half),
         CenterSplitDirection::Right => this.top(inset).bottom(inset).right(inset).w(half),
       })
-      .on_drop(cx.listener(|this, drag: &DraggedCenterTab, window, cx| {
-        this.drop_center_tab(drag.tab.clone(), window, cx);
-      }))
+      .on_drop(
+        cx.listener(move |this, drag: &DraggedCenterTab, window, cx| {
+          if this
+            .center_drag_target
+            .is_some_and(|target| target.pane_id == pane_id)
+            && let Some(tab) = this.center_group_tab(drag.group_id)
+          {
+            this.drop_center_tab(tab, window, cx);
+          }
+        }),
+      )
       .into_any_element()
   }
 
@@ -1785,7 +1861,11 @@ impl SessionPage {
       return;
     };
 
-    if let Some((representative, layout)) = self.center_drag_layout_for_tab(&tab) {
+    let representative = self
+      .active_center_tab
+      .clone()
+      .unwrap_or_else(|| tab.clone());
+    if let Some((_, layout)) = self.center_drag_layout_for_tab(&tab) {
       let focused_tab = layout.active_tab().clone();
       let changed = self
         .center_layout
@@ -1819,7 +1899,7 @@ impl SessionPage {
         self.focus_terminal_tab(&tab, window, cx);
       }
       self.ensure_center_layout_chat_panels(window, cx);
-      self.remember_center_layout_tab(tab.clone());
+      self.remember_center_layout_tab(representative);
       self.center = Self::center_view_for_tab(&tab);
       self.sync_agent_chat_close_control(cx);
       self.persist_current_center_workspace(cx);
@@ -2213,19 +2293,26 @@ impl SessionPage {
     .into_any_element()
   }
 
-  pub(super) fn render_diff_header(&self, cx: &mut Context<Self>) -> AnyElement {
-    let active_editor = self.shown_editor();
-    let active_binary_preview = self.shown_binary_preview();
+  fn render_diff_header(&self, tab: &CenterTab, cx: &mut Context<Self>) -> AnyElement {
+    let state = self.editor_states.get(tab);
+    let path = state.and_then(|state| state.selected_file.as_deref());
+    let snapshot = state.and_then(|state| state.opened_snapshot.as_ref());
+    let active_editor = state.and_then(|state| state.editor.clone());
+    let active_binary_preview = state.and_then(|state| state.binary_preview.as_ref());
+    let previewable = path.is_some_and(|path| {
+      crate::file_preview::is_markdown_path(path) || crate::file_preview::is_svg_path(path)
+    });
     let file_dirty = active_editor
       .as_ref()
       .is_some_and(|editor| editor.read(cx).is_dirty);
-    let file_status = self.shown_file_status(cx);
-    let old_path = self.shown_selected_file_old_path(cx);
-    let previewing = self.show_preview && self.shown_previewable();
-    let showing_git_diff = self
-      .active_center_tab
-      .as_ref()
-      .is_none_or(|tab| tab.kind == CenterTabKind::Diff);
+    let file_status = path
+      .filter(|_| snapshot.is_none())
+      .and_then(|path| self.status_for_path(path, cx));
+    let old_path = path
+      .filter(|_| snapshot.is_none())
+      .and_then(|path| self.old_path_for(path, cx));
+    let previewing = self.show_preview && previewable;
+    let showing_git_diff = tab.kind == CenterTabKind::Diff;
     let has_editor = active_editor.is_some();
     // A snapshot of a commit or of a pull request cannot be written back.
     let can_save = active_editor
@@ -2234,10 +2321,10 @@ impl SessionPage {
 
     let mut toolbar = DiffToolbar::new("session-page");
 
-    if let Some(path) = self.shown_selected_file().map(Path::to_path_buf) {
+    if let Some(path) = path {
       toolbar =
-        toolbar.title(self.render_editor_path_title(&path, old_path.as_deref(), file_status, cx));
-    } else if let Some(tab) = self.shown_editor_tab().filter(|tab| tab.is_untitled()) {
+        toolbar.title(self.render_editor_path_title(path, old_path.as_deref(), file_status, cx));
+    } else if tab.is_untitled() {
       let title = match tab.untitled_id().unwrap_or(1) {
         1 => "Untitled".to_string(),
         id => format!("Untitled {id}"),
@@ -2253,14 +2340,16 @@ impl SessionPage {
       );
     }
 
-    if has_editor && self.shown_previewable() {
+    if has_editor && previewable {
       let view = cx.entity();
+      let tab = tab.clone();
       toolbar = toolbar.preview(ToggleControl {
         active: self.show_preview,
         disabled: false,
         debug_selector: PREVIEW_TOGGLE_DEBUG_SELECTOR,
         on_toggle: Rc::new(move |window, cx| {
           view.update(cx, |this, cx| {
+            this.activate_center_surface(&tab, window, cx);
             this.toggle_preview(cx);
             let focus_handle = this.focus_handle(cx);
             window.focus(&focus_handle, cx);
@@ -2270,26 +2359,41 @@ impl SessionPage {
       });
     }
 
-    if showing_git_diff && has_editor && self.shown_file_has_changes(cx) && !previewing {
+    if showing_git_diff
+      && has_editor
+      && path.is_some_and(|path| self.path_has_changes(path, snapshot.is_some(), cx))
+      && !previewing
+    {
       if active_binary_preview.is_none() {
         let view = cx.entity();
+        let tab = tab.clone();
         toolbar = toolbar.whitespace(ToggleControl {
           active: self.hide_whitespace,
           disabled: false,
           debug_selector: WHITESPACE_TOGGLE_DEBUG_SELECTOR,
-          on_toggle: Rc::new(move |_, cx| {
-            view.update(cx, |this, cx| this.toggle_hide_whitespace(cx));
+          on_toggle: Rc::new(move |window, cx| {
+            view.update(cx, |this, cx| {
+              this.activate_center_surface(&tab, window, cx);
+              this.toggle_hide_whitespace(cx);
+            });
           }),
         });
       }
 
       let view = cx.entity();
+      let tab = tab.clone();
       toolbar = toolbar.split(SplitControl {
         mode: self.diff_view,
-        disabled: self.split_disabled(cx),
+        disabled: active_binary_preview.is_some()
+          || path.is_none_or(|path| {
+            self.whole_file_change_for(path, snapshot, cx) || self.path_is_conflicted(path, cx)
+          }),
         debug_selector: DIFF_VIEW_TOGGLE_DEBUG_SELECTOR,
-        on_toggle: Rc::new(move |_, cx| {
-          view.update(cx, |this, cx| this.toggle_diff_view(cx));
+        on_toggle: Rc::new(move |window, cx| {
+          view.update(cx, |this, cx| {
+            this.activate_center_surface(&tab, window, cx);
+            this.toggle_diff_view(cx);
+          });
         }),
       });
     }
@@ -2302,7 +2406,7 @@ impl SessionPage {
           .label("Save")
           .xsmall()
           .ghost()
-          .disabled(!file_dirty && !self.shown_editor_tab().is_some_and(CenterTab::is_untitled))
+          .disabled(!file_dirty && !tab.is_untitled())
           .on_click(move |_, _, cx| {
             if let Some(editor) = save_editor.clone() {
               editor.update(cx, |editor, cx| editor.save(cx));
@@ -2312,9 +2416,8 @@ impl SessionPage {
       );
     }
 
-    if self.center_layout.surface_count() > 1
-      && let Some(tab) = self.shown_editor_tab().cloned()
-    {
+    if self.center_layout.surface_count() > 1 {
+      let tab = tab.clone();
       let close_button_id =
         Self::center_surface_control_id("session-page-close-center-surface", &tab);
       let page = cx.entity().clone();
@@ -2345,24 +2448,29 @@ impl SessionPage {
     toolbar.render(cx)
   }
 
-  pub(super) fn render_diff_view(
-    &mut self,
+  fn render_diff_view(
+    &self,
+    tab: &CenterTab,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
-    let active_editor = self.shown_editor();
-    let body: AnyElement = if let Some(preview) = self.shown_binary_preview() {
+    let state = self.editor_states.get(tab);
+    let path = state.and_then(|state| state.selected_file.as_deref());
+    let snapshot = state.and_then(|state| state.opened_snapshot.as_ref());
+    let active_editor = state.and_then(|state| state.editor.clone());
+    let binary_preview = state.and_then(|state| state.binary_preview.as_ref());
+    let previewable = path.is_some_and(|path| {
+      crate::file_preview::is_markdown_path(path) || crate::file_preview::is_svg_path(path)
+    });
+    let body: AnyElement = if let Some(preview) = binary_preview {
       render_binary_preview(preview, cx)
     } else if let Some(editor) = active_editor.clone() {
       // Actions of the hovered hunk or conflict float over the editor.
-      let showing_git_diff = self
-        .active_center_tab
-        .as_ref()
-        .is_none_or(|tab| tab.kind == CenterTabKind::Diff);
-      let hunk_actions = (showing_git_diff && self.shown_opened_snapshot().is_none())
+      let showing_git_diff = tab.kind == CenterTabKind::Diff;
+      let hunk_actions = (showing_git_diff && snapshot.is_none())
         .then(|| {
-          let file_status = self.shown_file_status(cx);
+          let file_status = path.and_then(|path| self.status_for_path(path, cx));
           let conflict_labels =
             ConflictActionLabels::for_rebase(self.dock_panel.read(cx).rebase_in_progress());
           render_hunk_actions(&editor, file_status, conflict_labels, window, cx)
@@ -2381,14 +2489,14 @@ impl SessionPage {
         .children(hunk_actions)
         .into_any_element();
 
-      if self.show_preview && self.shown_previewable() {
+      if self.show_preview && previewable {
         // A toggle, not a split: the rendered file takes the pane. Its children
         // size themselves with flex_1, hence the flex column here.
         let preview_pane = crate::file_preview::render_preview_pane(
           "session-preview-text",
           &editor,
           &self.svg_preview,
-          self.shown_file_is_svg(),
+          path.is_some_and(crate::file_preview::is_svg_path),
           window,
           cx,
         );
@@ -2423,7 +2531,7 @@ impl SessionPage {
       .min_w(px(0.0))
       .min_h_0()
       .bg(theme.background)
-      .child(self.render_diff_header(cx))
+      .child(self.render_diff_header(tab, cx))
       .child(body)
       .into_any_element()
   }
@@ -2573,7 +2681,7 @@ impl Render for DraggedPanel {
 
 #[derive(Clone)]
 struct DraggedCenterTab {
-  tab: CenterTab,
+  group_id: center_layout::CenterGroupId,
 }
 
 impl Render for DraggedCenterTab {
@@ -2868,6 +2976,8 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::close_active_center_tab_action))
       .on_action(cx.listener(Self::activate_next_center_tab_action))
       .on_action(cx.listener(Self::activate_previous_center_tab_action))
+      .on_action(cx.listener(Self::move_center_tab_left_action))
+      .on_action(cx.listener(Self::move_center_tab_right_action))
       .on_action(cx.listener(Self::close_file_view_action))
       .on_action(cx.listener(Self::find_action))
       .on_action(cx.listener(Self::add_selection_to_agent_action))
@@ -4869,8 +4979,9 @@ mod tests {
       assert!(
         page
           .center_layouts_by_tab
-          .values()
-          .all(|layout| !layout.contains_tab(&CenterTab::project_search()))
+          .iter()
+          .filter(|(tab, _)| **tab != CenterTab::project_search())
+          .all(|(_, layout)| !layout.contains_tab(&CenterTab::project_search()))
       );
     });
   }
@@ -7218,6 +7329,15 @@ mod tests {
       after.size.width >= before.size.width + px(60.0),
       "dragging right should widen the left pane: {before:?} -> {after:?}"
     );
+    page.read_with(cx, |page, _| {
+      let CenterNode::Split(split) = page.center_layout.root() else {
+        panic!("split")
+      };
+      assert!(
+        split.first_fraction() > 0.5,
+        "resize must update the persisted layout"
+      );
+    });
   }
 
   #[gpui::test]
@@ -8312,8 +8432,8 @@ mod tests {
       assert!(page.center_layout.contains_tab(&first_terminal));
       assert!(page.center_layout.contains_tab(&second_terminal));
       assert_eq!(page.center_layout.active_tab(), &first_terminal);
-      assert_eq!(page.active_center_tab.as_ref(), Some(&first_terminal));
-      assert_eq!(page.center_tabs_for_navigation(), vec![first_terminal]);
+      assert_eq!(page.active_center_tab.as_ref(), Some(&second_terminal));
+      assert_eq!(page.center_tabs_for_navigation(), vec![second_terminal]);
     });
   }
 

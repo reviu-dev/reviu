@@ -52,10 +52,12 @@ pub(super) enum UnsavedEditorAction {
   RunBranchCommand {
     command: RepoCommand,
   },
-  CloseCenterTab {
+  CloseCenterSurface {
     tab: CenterTab,
   },
-  CloseCenterSurface {
+  CloseCenterGroups {
+    groups: Vec<center_layout::CenterGroupId>,
+    discarded: Vec<gpui::EntityId>,
     tab: CenterTab,
   },
   CloseWindow {
@@ -108,7 +110,11 @@ fn deduplicate_center_tabs(tabs: &mut Vec<CenterTab>) {
   tabs.retain(|tab| seen.insert(tab.clone()));
 }
 
-fn replace_center_tabs(tabs: &mut Vec<CenterTab>, old_tab: &CenterTab, new_tab: &CenterTab) {
+pub(super) fn replace_center_tabs(
+  tabs: &mut Vec<CenterTab>,
+  old_tab: &CenterTab,
+  new_tab: &CenterTab,
+) {
   for tab in tabs.iter_mut() {
     if tab == old_tab {
       *tab = new_tab.clone();
@@ -427,14 +433,6 @@ impl SessionPage {
     replace_center_tab_option(&mut self.editor_tab, &old_tab, &new_tab);
     self.center_layout.replace_tab(&old_tab, &new_tab);
     replace_center_layouts(&mut self.center_layouts_by_tab, &old_tab, &new_tab);
-    for tabs in self.center_tabs_by_checkout.values_mut() {
-      replace_center_tabs(tabs, &old_tab, &new_tab);
-    }
-    for active_tab in self.center_active_tab_by_checkout.values_mut() {
-      if active_tab == &old_tab {
-        *active_tab = new_tab.clone();
-      }
-    }
     if let Some(mut state) = self.editor_states.remove(&old_tab) {
       state.selected_file = Some(relative_path.clone());
       state.file_modified = worktree_file_modified(absolute_path);
@@ -748,17 +746,6 @@ impl SessionPage {
       replace_center_tab_option(&mut self.editor_tab, old_tab, new_tab);
       self.center_layout.replace_tab(old_tab, new_tab);
       replace_center_layouts(&mut self.center_layouts_by_tab, old_tab, new_tab);
-      if let Some(checkout_root) = &self.synced_checkout
-        && let Some(tabs) = self.center_tabs_by_checkout.get_mut(checkout_root)
-      {
-        replace_center_tabs(tabs, old_tab, new_tab);
-      }
-      if let Some(checkout_root) = &self.synced_checkout
-        && let Some(tab) = self.center_active_tab_by_checkout.get_mut(checkout_root)
-        && tab == old_tab
-      {
-        *tab = new_tab.clone();
-      }
     }
 
     self.rename_editor_states(old_path, new_path, checkout_root.as_deref(), cx);
@@ -800,14 +787,6 @@ impl SessionPage {
     }
     if let Some(tab) = &self.editor_tab {
       tabs.push(tab.clone());
-    }
-    if let Some(checkout_root) = &self.synced_checkout {
-      if let Some(checkout_tabs) = self.center_tabs_by_checkout.get(checkout_root) {
-        tabs.extend(checkout_tabs.clone());
-      }
-      if let Some(tab) = self.center_active_tab_by_checkout.get(checkout_root) {
-        tabs.push(tab.clone());
-      }
     }
 
     let mut replacements = Vec::new();
@@ -1088,9 +1067,7 @@ impl SessionPage {
     if self.center != CenterView::Diff {
       return None;
     }
-    self
-      .active_center_tab
-      .as_ref()
+    Some(self.center_layout.active_tab())
       .filter(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
       .or_else(|| {
         self
@@ -1679,7 +1656,7 @@ impl SessionPage {
     self.path_has_changes(path, self.shown_opened_snapshot().is_some(), cx)
   }
 
-  fn path_has_changes(&self, path: &Path, snapshot_open: bool, cx: &App) -> bool {
+  pub(super) fn path_has_changes(&self, path: &Path, snapshot_open: bool, cx: &App) -> bool {
     // A snapshot always carries its own patch.
     if snapshot_open {
       return true;
@@ -1692,7 +1669,7 @@ impl SessionPage {
       .any(|entry| entry.path == path)
   }
 
-  fn path_is_conflicted(&self, path: &Path, cx: &App) -> bool {
+  pub(super) fn path_is_conflicted(&self, path: &Path, cx: &App) -> bool {
     self
       .dock_panel
       .read(cx)
@@ -1762,7 +1739,7 @@ impl SessionPage {
     self.whole_file_change_for(path, self.shown_opened_snapshot(), cx)
   }
 
-  fn whole_file_change_for(
+  pub(super) fn whole_file_change_for(
     &self,
     path: &Path,
     opened_snapshot: Option<&OpenedSnapshot>,
@@ -1847,7 +1824,7 @@ impl SessionPage {
     self.status_for_path(self.shown_selected_file()?, cx)
   }
 
-  fn status_for_path(&self, path: &Path, cx: &App) -> Option<RepoStatusKind> {
+  pub(super) fn status_for_path(&self, path: &Path, cx: &App) -> Option<RepoStatusKind> {
     self
       .dock_panel
       .read(cx)
@@ -1870,15 +1847,7 @@ impl SessionPage {
     editor.update(cx, |editor, cx| editor.set_is_unmerged(is_unmerged, cx));
   }
 
-  /// The path a renamed file came from, so the diff header can name both sides.
-  pub(super) fn shown_selected_file_old_path(&self, cx: &App) -> Option<PathBuf> {
-    if self.shown_opened_snapshot().is_some() {
-      return None;
-    }
-    self.old_path_for(self.shown_selected_file()?, cx)
-  }
-
-  fn old_path_for(&self, path: &Path, cx: &App) -> Option<PathBuf> {
+  pub(super) fn old_path_for(&self, path: &Path, cx: &App) -> Option<PathBuf> {
     self
       .dock_panel
       .read(cx)
@@ -2124,17 +2093,11 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let tab = match self.center {
-      CenterView::Conversation => self.active_chat_tab(cx),
-      CenterView::Diff => self
-        .shown_editor_tab()
-        .cloned()
-        .unwrap_or_else(CenterTab::chat),
-      CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
-      CenterView::ProjectSearch => CenterTab::project_search(),
-      CenterView::Terminal => self.center_layout.active_tab().clone(),
-    };
-    if !tab.is_closeable() {
+    let tab = self
+      .active_center_tab
+      .clone()
+      .unwrap_or_else(|| self.center_layout.active_tab().clone());
+    if !self.center_group_is_closeable(&tab) {
       cx.propagate();
       return;
     }
@@ -2184,43 +2147,25 @@ impl SessionPage {
     if tab.kind == CenterTabKind::Terminal {
       self.clear_terminal_tab(&tab);
     }
+    let remaining_tab = self.center_layout.active_tab().clone();
+    let representative = old_representative
+      .clone()
+      .filter(|representative| self.center_layout.contains_tab(representative))
+      .unwrap_or_else(|| remaining_tab.clone());
+    if let Some(old) = old_representative.as_ref() {
+      self.replace_center_group_representative(old, &representative);
+    }
     if tab.kind == CenterTabKind::ProjectSearch {
       self.forget_project_search_tab(true);
     }
-
     self.center_tabs.retain(|candidate| candidate != &tab);
     self
       .center_tab_history
       .retain(|candidate| candidate != &tab);
     self.center_layouts_by_tab.remove(&tab);
-
-    let remaining_tab = self.center_layout.active_tab().clone();
-    let representative = if old_representative.as_ref() == Some(&tab) {
-      if let Some(old_representative) = old_representative.as_ref() {
-        self
-          .center_tabs
-          .retain(|candidate| candidate != old_representative);
-        self
-          .center_tab_history
-          .retain(|candidate| candidate != old_representative);
-        self.center_layouts_by_tab.remove(old_representative);
-      }
-      remaining_tab.clone()
-    } else {
-      old_representative.unwrap_or_else(|| remaining_tab.clone())
-    };
-
     self.center = Self::center_view_for_tab(&remaining_tab);
-    if self.center_layout.surface_count() > 1 {
-      self.remember_center_layout_tab(representative);
-    } else {
-      self.set_active_center_tab_and_reveal(remaining_tab.clone(), cx);
-      self.center_layouts_by_tab.remove(&remaining_tab);
-      if !self.center_tabs.contains(&remaining_tab) {
-        self.center_tabs.push(remaining_tab.clone());
-      }
-      self.remember_center_tab_visit(remaining_tab.clone());
-    }
+    self.remember_center_layout_tab(representative);
+    self.reveal_center_tab_in_files_panel(&remaining_tab, cx);
     self.sync_agent_chat_close_control(cx);
     match self.center {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
@@ -2240,6 +2185,10 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let representative = self
+      .active_center_tab
+      .clone()
+      .unwrap_or_else(|| tab.clone());
     if !self.center_layout.move_surface_to_edge(&tab, direction) {
       cx.notify();
       return;
@@ -2250,7 +2199,7 @@ impl SessionPage {
       self.activate_session_panel(conversation_id, window, cx);
     }
     self.ensure_center_layout_chat_panels(window, cx);
-    self.remember_center_layout_tab(tab.clone());
+    self.remember_center_layout_tab(representative);
     self.sync_agent_chat_close_control(cx);
     match self.center {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
@@ -2269,7 +2218,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let old_layout_tabs = self.center_layout.tabs();
     let old_representative = self.active_center_tab.clone();
     let Some(surface) = self.center_layout.extract_surface(&tab) else {
       cx.notify();
@@ -2277,34 +2225,23 @@ impl SessionPage {
     };
     let remaining_tab = self.center_layout.active_tab().clone();
 
-    self
+    let representative = old_representative
+      .clone()
+      .filter(|representative| self.center_layout.contains_tab(representative))
+      .unwrap_or(remaining_tab);
+    if let Some(old) = old_representative.as_ref() {
+      self.replace_center_group_representative(old, &representative);
+    }
+    self.remember_center_layout_tab(representative.clone());
+    let insertion_index = self
       .center_tabs
-      .retain(|candidate| !old_layout_tabs.iter().any(|tab| tab == candidate));
-    self
-      .center_tab_history
-      .retain(|candidate| !old_layout_tabs.iter().any(|tab| tab == candidate));
-    for layout_tab in &old_layout_tabs {
-      self.center_layouts_by_tab.remove(layout_tab);
-    }
-
-    if self.center_layout.surface_count() > 1 {
-      let representative = old_representative
-        .filter(|representative| {
-          representative != &tab && self.center_layout.contains_tab(representative)
-        })
-        .unwrap_or_else(|| remaining_tab.clone());
-      self.center_tabs.push(representative.clone());
-      self
-        .center_layouts_by_tab
-        .insert(representative, self.center_layout.clone());
-    } else {
-      self.center_tabs.push(remaining_tab);
-    }
-
+      .iter()
+      .position(|tab| tab == &representative)
+      .map_or(self.center_tabs.len(), |index| index + 1);
     self.center_layout = CenterLayout::single(surface);
     self.center = Self::center_view_for_tab(&tab);
     self.set_active_center_tab_and_reveal(tab.clone(), cx);
-    self.center_tabs.push(tab.clone());
+    self.center_tabs.insert(insertion_index, tab.clone());
     self.remember_center_tab_visit(tab.clone());
     if let Some(conversation_id) = tab.conversation_id() {
       self.activate_session_panel(conversation_id, window, cx);
@@ -2328,34 +2265,85 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let closes_active_group =
-      self.active_center_tab.as_ref() == Some(&tab) && self.center_layout.surface_count() > 1;
-    let closes_saved_group = self
-      .center_layouts_by_tab
-      .get(&tab)
-      .is_some_and(|layout| layout.surface_count() > 1);
-    if closes_active_group || closes_saved_group {
-      self.close_center_layout_tab_without_unsaved_prompt(tab, window, cx);
-      return;
-    }
+    let tab = self
+      .center_split_representative_for_tab(&tab)
+      .unwrap_or(tab);
+    self.request_close_center_tabs(vec![tab], window, cx);
+  }
 
-    match tab.kind {
-      CenterTabKind::Chat => {
-        self.close_center_chat_tab(tab, window, cx);
-        return;
-      }
-      CenterTabKind::InteractiveRebase => {
-        self.close_interactive_rebase_todo(window, cx);
-        return;
-      }
-      CenterTabKind::Terminal | CenterTabKind::ProjectSearch => {}
-      CenterTabKind::File | CenterTabKind::Diff => {}
-    }
-    if self.editor_tab_is_dirty(&tab, cx) {
-      self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseCenterTab { tab }, window, cx);
+  pub(super) fn request_close_center_tabs(
+    &mut self,
+    tabs: Vec<CenterTab>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let groups = tabs
+      .into_iter()
+      .map(|tab| {
+        if let Some(id) = self.center_group_id(&tab) {
+          id
+        } else {
+          let layout = self
+            .center_layouts_by_tab
+            .entry(tab.clone())
+            .or_insert_with(|| CenterLayout::single(CenterSurface::from_tab(tab)));
+          layout.id()
+        }
+      })
+      .collect();
+    self.close_center_groups(groups, Vec::new(), window, cx);
+  }
+
+  fn close_center_groups(
+    &mut self,
+    groups: Vec<center_layout::CenterGroupId>,
+    discarded: Vec<gpui::EntityId>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tabs = groups
+      .iter()
+      .filter_map(|id| self.center_group_tab(*id))
+      .collect::<Vec<_>>();
+    let dirty_tab = tabs
+      .iter()
+      .filter_map(|tab| self.center_group_layout(tab))
+      .flat_map(CenterLayout::tabs)
+      .find(|tab| {
+        self
+          .editor_states
+          .get(tab)
+          .and_then(|state| state.editor.as_ref())
+          .is_some_and(|editor| {
+            editor.read(cx).is_dirty && !discarded.contains(&editor.entity_id())
+          })
+      });
+    if let Some(tab) = dirty_tab {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::CloseCenterGroups {
+          groups,
+          discarded,
+          tab,
+        },
+        window,
+        cx,
+      );
       return;
     }
-    self.close_center_tab_without_unsaved_prompt(tab, window, cx);
+    for tab in tabs {
+      if self
+        .center_group_layout(&tab)
+        .is_some_and(|layout| layout.surface_count() > 1)
+      {
+        self.close_center_layout_tab_without_unsaved_prompt(tab, window, cx);
+      } else {
+        match tab.kind {
+          CenterTabKind::Chat => self.close_center_chat_tab(tab, window, cx),
+          CenterTabKind::InteractiveRebase => self.close_interactive_rebase_todo(window, cx),
+          _ => self.close_center_tab_without_unsaved_prompt(tab, window, cx),
+        }
+      }
+    }
   }
 
   fn close_center_chat_tab(&mut self, tab: CenterTab, window: &mut Window, cx: &mut Context<Self>) {
@@ -2376,12 +2364,13 @@ impl SessionPage {
       .center_tab_history
       .retain(|candidate| candidate != &tab);
     self.center_layouts_by_tab.remove(&tab);
-    for tabs in self.center_tabs_by_checkout.values_mut() {
-      tabs.retain(|candidate| candidate != &tab);
+    for state in self.center_checkouts.values_mut() {
+      state.tabs.retain(|candidate| candidate != &tab);
+      state.history.retain(|candidate| candidate != &tab);
+      if state.active_tab.as_ref() == Some(&tab) {
+        state.active_tab = None;
+      }
     }
-    self
-      .center_active_tab_by_checkout
-      .retain(|_, candidate| candidate != &tab);
     if active_chat_closed {
       self.park_active_chat_panel(cx);
     }
@@ -2438,6 +2427,15 @@ impl SessionPage {
         .unwrap_or_else(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())))
     };
     let layout_tabs = layout.tabs();
+    if self
+      .editor_tab
+      .as_ref()
+      .is_some_and(|tab| layout_tabs.contains(tab))
+    {
+      self.open_file_task = None;
+      self.open_file_generation = self.open_file_generation.wrapping_add(1);
+      self.svg_preview.update(cx, |preview, _| preview.clear());
+    }
 
     self.center_tabs.retain(|candidate| candidate != &tab);
     self
@@ -2460,6 +2458,14 @@ impl SessionPage {
       }
       if layout_tab.kind == CenterTabKind::Terminal {
         self.clear_terminal_tab(&layout_tab);
+      }
+      if layout_tab.conversation_id().is_some_and(|id| {
+        self
+          .agent_chat_view
+          .as_ref()
+          .is_some_and(|panel| panel.read(cx).current_conversation().id == id)
+      }) {
+        self.park_active_chat_panel(cx);
       }
       if layout_tab.kind == CenterTabKind::ProjectSearch {
         self.forget_project_search_tab(true);
@@ -2494,6 +2500,7 @@ impl SessionPage {
       .center_tab_history
       .retain(|candidate| candidate != &tab);
     self.center_layout.close_surface(&tab);
+    self.center_layouts_by_tab.remove(&tab);
     let editor_closed = self.editor_tab.as_ref() == Some(&tab);
     self.remove_untitled_buffer(&tab, cx);
     self.clear_editor_tab(&tab);
@@ -2616,9 +2623,11 @@ impl SessionPage {
         Some(Box::new(move |cx| {
           let view = view.clone();
           let action = action.clone();
-          let _ = cx.update_window(window_handle, move |_, window, cx| {
-            view.update(cx, move |view, cx| {
-              view.perform_unsaved_editor_action_after_save(action, &saved_editor, window, cx);
+          cx.defer(move |cx| {
+            let _ = cx.update_window(window_handle, move |_, window, cx| {
+              view.update(cx, move |view, cx| {
+                view.perform_unsaved_editor_action_after_save(action, &saved_editor, window, cx);
+              });
             });
           });
         })),
@@ -2634,11 +2643,6 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let action = match action {
-      UnsavedEditorAction::CloseCenterTab { tab } if !self.editor_states.contains_key(&tab) => self
-        .tab_for_editor(editor)
-        .map_or(UnsavedEditorAction::CloseCenterTab { tab }, |tab| {
-          UnsavedEditorAction::CloseCenterTab { tab }
-        }),
       UnsavedEditorAction::CloseCenterSurface { tab } if !self.editor_states.contains_key(&tab) => {
         self
           .tab_for_editor(editor)
@@ -2709,12 +2713,12 @@ impl SessionPage {
           window.push_notification(Notification::warning(error), cx);
         }
       }
-      UnsavedEditorAction::CloseCenterTab { tab } => {
-        self.close_center_tab_without_unsaved_prompt(tab, window, cx)
-      }
       UnsavedEditorAction::CloseCenterSurface { tab } => {
         self.close_center_surface_without_unsaved_prompt(tab, window, cx)
       }
+      UnsavedEditorAction::CloseCenterGroups {
+        groups, discarded, ..
+      } => self.close_center_groups(groups, discarded, window, cx),
       UnsavedEditorAction::CloseWindow { .. } => self.request_close_window(window, cx),
       UnsavedEditorAction::Quit { .. } => self.request_quit(window, cx),
     }
@@ -2728,8 +2732,8 @@ impl SessionPage {
   ) {
     let view = cx.entity();
     let editor_tab = match &action {
-      UnsavedEditorAction::CloseCenterTab { tab }
-      | UnsavedEditorAction::CloseCenterSurface { tab }
+      UnsavedEditorAction::CloseCenterSurface { tab }
+      | UnsavedEditorAction::CloseCenterGroups { tab, .. }
       | UnsavedEditorAction::CloseWindow { tab }
       | UnsavedEditorAction::Quit { tab } => tab.clone(),
       _ => self.editor_tab.clone().unwrap_or_else(CenterTab::chat),
@@ -2738,6 +2742,11 @@ impl SessionPage {
       .editor_states
       .get(&editor_tab)
       .and_then(|state| state.editor.clone());
+    let file_name = editor_tab
+      .path()
+      .map(|path| path.display().to_string())
+      .or_else(|| editor_tab.untitled_id().map(|id| format!("Untitled {id}")))
+      .unwrap_or_else(|| "this file".to_string());
     window.open_alert_dialog(cx, move |alert, _, _| {
       let save_view = view.clone();
       let discard_view = view.clone();
@@ -2748,7 +2757,9 @@ impl SessionPage {
 
       alert
         .title("Save file changes?")
-        .description(div().child("Save your edits before closing, or discard them permanently."))
+        .description(div().child(format!(
+          "Save your edits to {file_name} before closing, or discard them permanently."
+        )))
         .close_button(true)
         .footer(
           DialogFooter::new()
@@ -2773,7 +2784,20 @@ impl SessionPage {
                   let discard_action = discard_action.clone();
                   let discard_editor_tab = discard_editor_tab.clone();
                   discard_view.update(cx, move |view, cx| {
-                    view.discard_editor(&discard_editor_tab, cx);
+                    let mut discard_action = discard_action;
+                    if let UnsavedEditorAction::CloseCenterGroups { discarded, .. } =
+                      &mut discard_action
+                    {
+                      if let Some(editor) = view
+                        .editor_states
+                        .get(&discard_editor_tab)
+                        .and_then(|state| state.editor.as_ref())
+                      {
+                        discarded.push(editor.entity_id());
+                      }
+                    } else {
+                      view.discard_editor(&discard_editor_tab, cx);
+                    }
                     view.perform_unsaved_editor_action(discard_action, window, cx);
                   });
                 }),
@@ -2854,7 +2878,7 @@ impl SessionPage {
       return Err("Select code in the diff first");
     };
     let path = self
-      .warm_selected_file()
+      .shown_selected_file()
       .map(|path| path.to_string_lossy().to_string())
       .unwrap_or_else(|| "selection".to_string());
     Ok((path, text))
@@ -3026,7 +3050,11 @@ mod tests {
       window.close_dialog(cx);
       page.save_editor_before_unsaved_action(
         editor.clone(),
-        UnsavedEditorAction::CloseCenterTab { tab },
+        UnsavedEditorAction::CloseCenterGroups {
+          groups: vec![page.center_layout.id()],
+          discarded: Vec::new(),
+          tab,
+        },
         window,
         cx,
       );

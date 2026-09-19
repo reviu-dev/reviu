@@ -32,7 +32,7 @@ impl Render for SessionPageTestHost {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
       .size_full()
-      .key_context(crate::shortcuts::WORKSPACE_SESSION_CONTEXT)
+      .key_context(crate::shortcuts::current_workspace_key_context(cx).as_str())
       .child(self.page.clone())
       .children(gpui_component::Root::render_dialog_layer(window, cx))
   }
