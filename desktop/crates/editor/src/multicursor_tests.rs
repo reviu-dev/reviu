@@ -173,6 +173,17 @@ fn batch_newlines_indent_each_context_and_merge_shared_indentation(cx: &mut Test
 }
 
 #[gpui::test]
+fn line_indentation_deduplicates_cursors_on_the_same_line(cx: &mut TestAppContext) {
+  let (editor, cx) = setup(cx, "abcd\néfgh", &[1..1, 3..3, 6..6]);
+  editor.update(cx, |editor, cx| editor.indent_lines(cx));
+  assert_eq!(text(&editor, cx), "    abcd\n    éfgh");
+  assert_eq!(ranges(&editor, cx), vec![5..5, 7..7, 14..14]);
+  undo(&editor, false, cx);
+  assert_eq!(text(&editor, cx), "abcd\néfgh");
+  assert_eq!(ranges(&editor, cx), vec![1..1, 3..3, 6..6]);
+}
+
+#[gpui::test]
 fn indentation_deduplicates_shared_lines(cx: &mut TestAppContext) {
   let (editor, cx) = setup(cx, "abcd\nefgh", &[0..1, 2..3, 6..7]);
   editor.update(cx, |editor, cx| editor.indent_selection(false, cx));

@@ -2365,7 +2365,7 @@ impl SessionPage {
           let file_status = self.shown_file_status(cx);
           let conflict_labels =
             ConflictActionLabels::for_rebase(self.dock_panel.read(cx).rebase_in_progress());
-          render_hunk_actions(&editor, file_status, conflict_labels, cx)
+          render_hunk_actions(&editor, file_status, conflict_labels, window, cx)
         })
         .flatten();
       let editor_pane = div()
@@ -4977,7 +4977,7 @@ mod tests {
       git::RepoStage::Unstaged
     );
 
-    // `cmd-shift-backspace` throws the change away from the changes list.
+    // Restoring from the changes list discards the file's changes.
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -6507,7 +6507,7 @@ mod tests {
       "the hovered conflict offers current, incoming and both"
     );
 
-    // `shift-enter` on the first conflict keeps the current side, and only it.
+    // Accept only the current side of the first conflict.
     page.update_in(cx, |page, window, cx| {
       page.toggle_hunk_stage_action(&crate::ToggleHunkStage, window, cx)
     });
@@ -6523,7 +6523,7 @@ mod tests {
       assert_eq!(navigation.total, 1);
     });
 
-    // `cmd-shift-enter` on the one left keeps both sides.
+    // Keep both sides of the remaining conflict.
     page.update_in(cx, |page, window, cx| {
       page.accept_both_conflict_action(&crate::AcceptBothConflict, window, cx)
     });

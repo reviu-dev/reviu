@@ -121,6 +121,7 @@ mod session_list;
 mod session_page;
 mod settings_file;
 mod settings_page;
+mod shortcut_bindings;
 mod shortcuts;
 pub mod status_bar;
 mod status_poll;

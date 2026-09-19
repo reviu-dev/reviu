@@ -15,6 +15,7 @@ actions!(
   [
     Enter,
     Tab,
+    Indent,
     Outdent,
     MoveLineUp,
     MoveLineDown,
@@ -72,6 +73,7 @@ actions!(
     ReloadFromDisk,
     OverwriteDisk,
     Find,
+    FindReplace,
     FindNext,
     FindPrevious,
     ToggleFindCaseSensitive,
@@ -92,6 +94,10 @@ pub fn enter(editor: &mut Editor, _: &Enter, _window: &mut Window, cx: &mut Cont
 
 pub fn tab(editor: &mut Editor, _: &Tab, _window: &mut Window, cx: &mut Context<Editor>) {
   editor.indent_selection(false, cx);
+}
+
+pub fn indent(editor: &mut Editor, _: &Indent, _: &mut Window, cx: &mut Context<Editor>) {
+  editor.indent_lines(cx);
 }
 
 pub fn outdent(editor: &mut Editor, _: &Outdent, _window: &mut Window, cx: &mut Context<Editor>) {
@@ -562,21 +568,11 @@ pub fn cmd_down(editor: &mut Editor, _: &CmdDown, window: &mut Window, cx: &mut 
 }
 
 pub fn home(editor: &mut Editor, _: &Home, window: &mut Window, cx: &mut Context<Editor>) {
-  if editor.navigate_selections(window, cx, |editor, window, cx| {
-    home(editor, &Home, window, cx)
-  }) {
-    return;
-  }
-  editor.navigate_document_boundary(true, false, window, cx);
+  cmd_left(editor, &CmdLeft, window, cx);
 }
 
 pub fn end(editor: &mut Editor, _: &End, window: &mut Window, cx: &mut Context<Editor>) {
-  if editor.navigate_selections(window, cx, |editor, window, cx| {
-    end(editor, &End, window, cx)
-  }) {
-    return;
-  }
-  editor.navigate_document_boundary(false, false, window, cx);
+  cmd_right(editor, &CmdRight, window, cx);
 }
 
 pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mut Context<Editor>) {
@@ -879,6 +875,15 @@ pub fn overwrite_disk(
 
 pub fn save(editor: &mut Editor, _: &Save, _window: &mut Window, cx: &mut Context<Editor>) {
   editor.save(cx);
+}
+
+pub fn find_replace(
+  editor: &mut Editor,
+  _: &FindReplace,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.open_replace_panel(window, cx);
 }
 
 pub fn find(editor: &mut Editor, _: &Find, window: &mut Window, cx: &mut Context<Editor>) {

@@ -4708,6 +4708,11 @@ impl Editor {
     }
   }
 
+  pub(crate) fn open_replace_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.replace_panel_open = true;
+    self.open_find_panel(window, cx);
+  }
+
   pub(crate) fn open_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.find_panel_open = true;
     let input = self.ensure_find_input(window, cx);
@@ -10374,6 +10379,7 @@ impl Render for Editor {
           el.on_action(cx.listener(crate::actions::enter))
             .on_action(cx.listener(crate::actions::tab))
             .on_action(cx.listener(crate::actions::outdent))
+            .on_action(cx.listener(crate::actions::indent))
             .on_action(cx.listener(crate::actions::move_line_up))
             .on_action(cx.listener(crate::actions::move_line_down))
             .on_action(cx.listener(crate::actions::duplicate_line_up))
@@ -10433,6 +10439,7 @@ impl Render for Editor {
           .on_action(cx.listener(crate::actions::overwrite_disk))
           .on_action(cx.listener(crate::actions::copy))
           .on_action(cx.listener(crate::actions::find))
+          .on_action(cx.listener(crate::actions::find_replace))
           .on_action(cx.listener(crate::actions::find_next))
           .on_action(cx.listener(crate::actions::find_previous))
           .on_action(cx.listener(crate::actions::toggle_find_case_sensitive))
@@ -15090,6 +15097,23 @@ pub mod tests {
         editor.scroll_handle.offset().x < px(0.0),
         "find should reveal matches outside the horizontal viewport"
       );
+    });
+  }
+
+  #[gpui::test]
+  fn replace_action_opens_both_controls_without_toggling_them_closed(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let editor = EditorTestContext::with_text(cx.clone(), "foo bar foo").editor;
+    let view = editor.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| gpui_component::Root::new(view, window, cx));
+    editor.update_in(cx, |editor, window, cx| {
+      editor.selections.primary_mut().range = 0..3;
+      for _ in 0..2 {
+        crate::actions::find_replace(editor, &crate::FindReplace, window, cx);
+        assert!(editor.find_panel_open);
+        assert!(editor.replace_panel_open);
+        assert_eq!(editor.find.matches().len(), 2);
+      }
     });
   }
 

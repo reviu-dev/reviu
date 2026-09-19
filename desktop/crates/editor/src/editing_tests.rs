@@ -205,6 +205,27 @@ fn tab_uses_file_style_and_next_stop_instead_of_fixed_spaces(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn line_indent_moves_the_whole_line_instead_of_inserting_at_the_cursor(cx: &mut TestAppContext) {
+  for (before, after) in [
+    ("x|y", "    xy"),
+    ("  first\né|clair", "  first\n  éclair"),
+    ("\tfirst\né|clair", "\tfirst\n\téclair"),
+  ] {
+    let (editor, cx) = setup(cx, before, None);
+    cx.update(|window, cx| {
+      editor.update(cx, |editor, cx| {
+        actions::indent(editor, &actions::Indent, window, cx)
+      })
+    });
+    assert_eq!(text(&editor, cx), after);
+    undo(&editor, false, cx);
+    assert_eq!(text(&editor, cx), before.replace('|', ""));
+    undo(&editor, true, cx);
+    assert_eq!(text(&editor, cx), after);
+  }
+}
+
+#[gpui::test]
 fn indent_selection_keeps_text_direction_and_excludes_final_line_start(cx: &mut TestAppContext) {
   let (editor, cx) = setup(cx, "|é\n  two\nlast", None);
   editor.update(cx, |editor, _| {
@@ -279,6 +300,7 @@ fn read_only_views_reject_indentation_and_newlines(cx: &mut TestAppContext) {
       editor.insert_indented_newline(cx);
       editor.indent_selection(false, cx);
       editor.indent_selection(true, cx);
+      editor.indent_lines(cx);
     });
     assert_eq!(text(&editor, cx), "  text");
   }

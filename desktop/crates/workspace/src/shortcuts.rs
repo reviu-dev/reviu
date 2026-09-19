@@ -1,16 +1,11 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use editor::{
-  AddSelectionAbove, AddSelectionBelow, AltLeft, AltRight, Backspace, BackspaceAll, BackspaceWord,
-  CloseFind, CmdDown, CmdLeft, CmdRight, CmdUp, Copy, Cut, Delete, DeleteLine, Down,
-  DuplicateLineDown, DuplicateLineUp, End, Enter, Find, FindNext, FindPrevious, GoToLine, Home,
-  Left, MoveLineDown, MoveLineUp, NewlineAbove, NewlineBelow, Outdent, PageDown, PageUp, Paste,
-  Quit, Redo, Right, Save, SelectAll, SelectAllOccurrences, SelectCmdDown, SelectCmdLeft,
-  SelectCmdRight, SelectCmdUp, SelectDown, SelectLeft, SelectNextOccurrence, SelectPageDown,
-  SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShowCharacterPalette, Tab,
-  ToggleComments, ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, ToggleSoftWrap,
-  Undo, Up,
+use crate::shortcut_bindings::{
+  application_key_bindings, editor_key_bindings, reserved_editor_shortcut, same_keystroke,
 };
+#[cfg(test)]
+use editor::*;
+use editor::{FindNext, FindPrevious, ToggleSoftWrap};
 use gpui::{Action, App, Global, KeyBinding, KeyContext, Keystroke, Window};
 use ui::{COMMAND_PALETTE_CONTEXT, CommandPaletteCommand, CommandPaletteCommandId};
 
@@ -33,7 +28,7 @@ use crate::{
   ToggleHideWhitespace, ToggleHunkStage,
 };
 
-pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
+pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-shift-p";
 const SHORTCUT_KEYMAP_GENERATION_CONTEXT_KEY: &str = "workspace_shortcuts_generation";
 pub const WORKSPACE_SHORTCUT_RECORDING_CONTEXT: &str = "WorkspaceShortcutRecording";
 
@@ -63,10 +58,10 @@ const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceSession";
 const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_SESSION_CONTEXT: &str = "WorkspaceSession";
-const HUNK_OR_CONFLICT_ACTION_FOCUS: &str = "List || (Editor && !CodeEditor)";
-const FILE_ACTION_FOCUS: &str = "List";
+const HUNK_OR_CONFLICT_ACTION_FOCUS: &str = "Editor && !CodeEditor";
+const FILE_ACTION_FOCUS: &str = "ChangesList > List";
 const COMMENT_HUNK_CONTEXT: &str = "WorkspaceSession";
-const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
+const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || (Editor && !CodeEditor) || Tree";
 
 const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
@@ -316,9 +311,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::PreviousAnnotation,
     title: "Previous Change",
     description: "Jump to the previous conflict or change in the diff.",
-    scope_label: "Conflicts and changes, PR Changes, Projects",
+    scope_label: "Diff editor",
     category: ShortcutCategory::Review,
-    keystroke: "cmd-alt-up",
+    keystroke: "alt-shift-f5",
     context: REVIEW_ANNOTATION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
@@ -327,9 +322,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::NextAnnotation,
     title: "Next Change",
     description: "Jump to the next conflict or change in the diff.",
-    scope_label: "Conflicts and changes, PR Changes, Projects",
+    scope_label: "Diff editor",
     category: ShortcutCategory::Review,
-    keystroke: "cmd-alt-down",
+    keystroke: "alt-f5",
     context: REVIEW_ANNOTATION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
@@ -340,7 +335,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Start a review comment on the focused hunk.",
     scope_label: "PR Changes and Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-alt-enter",
+    keystroke: "ctrl-alt-c",
     context: COMMENT_HUNK_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
@@ -351,7 +346,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Send all local review comments to the in-app agent.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-a",
+    keystroke: "ctrl-alt-s",
     context: "WorkspaceSession",
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -360,9 +355,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::AddSelectionToAgent,
     title: "Send Selection To Agent",
     description: "Attach the selected diff lines to the agent message as context.",
-    scope_label: "Projects",
+    scope_label: "Editor",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-l",
+    keystroke: "cmd->",
     context: HUNK_ACTION_SESSION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -373,7 +368,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Start a new agent chat in the current project.",
     scope_label: "Projects",
     category: ShortcutCategory::Core,
-    keystroke: "cmd-t",
+    keystroke: "ctrl-alt-n",
     context: "WorkspaceSession",
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -384,7 +379,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Start a new agent chat in its own git worktree.",
     scope_label: "Projects",
     category: ShortcutCategory::Core,
-    keystroke: "cmd-shift-t",
+    keystroke: "ctrl-alt-shift-n",
     context: "WorkspaceSession",
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -395,7 +390,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Scroll the conversation to the newest message and keep following the reply.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-j",
+    keystroke: "ctrl-alt-j",
     context: "WorkspaceSession",
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -404,9 +399,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::ToggleHunkStage,
     title: "Stage / Unstage Hunk · Accept Current",
     description: "Stage the focused hunk (or unstage it if staged). On a file with unresolved conflicts, accept the active conflict's current change instead.",
-    scope_label: "Projects",
+    scope_label: "Diff editor",
     category: ShortcutCategory::LocalGit,
-    keystroke: "shift-enter",
+    keystroke: "cmd-alt-y",
     context: HUNK_ACTION_SESSION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -415,9 +410,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::RestoreHunk,
     title: "Restore Hunk · Accept Incoming",
     description: "Discard the focused hunk and restore the file. On a file with unresolved conflicts, accept the active conflict's incoming change instead.",
-    scope_label: "Projects",
+    scope_label: "Diff editor",
     category: ShortcutCategory::LocalGit,
-    keystroke: "shift-backspace",
+    keystroke: "cmd-alt-z",
     context: HUNK_ACTION_SESSION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -426,9 +421,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::ToggleFileStage,
     title: "Stage / Unstage File",
     description: "Stage the selected file, or unstage it if already staged.",
-    scope_label: "Projects",
+    scope_label: "Changes list",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-enter",
+    keystroke: "cmd-alt-y",
     context: HUNK_ACTION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -437,9 +432,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::RestoreFile,
     title: "Restore File",
     description: "Discard all changes in the selected file.",
-    scope_label: "Projects",
+    scope_label: "Changes list",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-backspace",
+    keystroke: "cmd-alt-z",
     context: HUNK_ACTION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -448,9 +443,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::AcceptBothConflict,
     title: "Accept Both Conflict Changes",
     description: "Keep the current and incoming changes in the active conflict.",
-    scope_label: "Projects",
+    scope_label: "Diff editor",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-enter",
+    keystroke: "cmd-alt-shift-y",
     context: HUNK_ACTION_SESSION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -459,9 +454,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::ToggleDiffView,
     title: "Toggle Diff View",
     description: "Switch between inline and split diff view.",
-    scope_label: "PR Changes and Projects",
+    scope_label: "Diff editor",
     category: ShortcutCategory::Review,
-    keystroke: "cmd-/",
+    keystroke: "ctrl-alt-v",
     context: TOGGLE_DIFF_VIEW_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
@@ -481,9 +476,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::ToggleHideWhitespace,
     title: "Toggle Hide Whitespace",
     description: "Show or hide whitespace-only changes in the diff.",
-    scope_label: "PR Changes and Projects",
+    scope_label: "Diff editor",
     category: ShortcutCategory::Review,
-    keystroke: "cmd-alt-/",
+    keystroke: "ctrl-alt-w",
     context: TOGGLE_DIFF_VIEW_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
@@ -503,7 +498,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     id: ShortcutId::CommitChanges,
     title: "Commit Changes",
     description: "Commit the staged changes.",
-    scope_label: "Projects",
+    scope_label: "Commit input",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-enter",
     context: COMMIT_CHANGES_CONTEXT,
@@ -516,7 +511,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Pull the current branch from its upstream remote.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-u",
+    keystroke: "ctrl-alt-u",
     context: PULL_CHANGES_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -527,7 +522,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Push the current branch to its upstream remote.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-y",
+    keystroke: "ctrl-alt-y",
     context: PUSH_CHANGES_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -538,7 +533,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Force push the current branch to its upstream remote with lease.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-y",
+    keystroke: "ctrl-alt-shift-y",
     context: FORCE_PUSH_CHANGES_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -549,7 +544,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Switch branch.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-b",
+    keystroke: "ctrl-cmd-b",
     context: SHOW_BRANCH_SWITCHER_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -560,7 +555,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Switch the Git sidebar to History and focus the commit tree.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-h",
+    keystroke: "ctrl-alt-i",
     context: OPEN_GIT_HISTORY_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -571,7 +566,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Switch the Git sidebar to Changes and focus the file list.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-shift-c",
+    keystroke: "ctrl-shift-g",
     context: OPEN_GIT_CHANGES_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -593,7 +588,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Switch the right panel to the review waiting to be sent.",
     scope_label: "Projects",
     category: ShortcutCategory::Review,
-    keystroke: "cmd-shift-r",
+    keystroke: "ctrl-alt-r",
     context: OPEN_REVIEW_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -604,7 +599,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     description: "Switch the right panel to the pull request of the current branch.",
     scope_label: "Projects",
     category: ShortcutCategory::Review,
-    keystroke: "cmd-shift-p",
+    keystroke: "ctrl-alt-g",
     context: OPEN_PULL_REQUEST_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -704,237 +699,19 @@ impl ShortcutOverrideError {
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ReservedAppBinding {
-  title: &'static str,
-  keystroke: &'static str,
-}
-
-const RESERVED_APP_BINDINGS: &[ReservedAppBinding] = &[
-  ReservedAppBinding {
-    title: "Confirm",
-    keystroke: "enter",
-  },
-  ReservedAppBinding {
-    title: "Next Field",
-    keystroke: "tab",
-  },
-  ReservedAppBinding {
-    title: "Delete Backward",
-    keystroke: "backspace",
-  },
-  ReservedAppBinding {
-    title: "Delete Word Backward",
-    keystroke: "alt-backspace",
-  },
-  ReservedAppBinding {
-    title: "Delete to Start of Line",
-    keystroke: "cmd-backspace",
-  },
-  ReservedAppBinding {
-    title: "Delete Forward",
-    keystroke: "delete",
-  },
-  ReservedAppBinding {
-    title: "Move Up",
-    keystroke: "up",
-  },
-  ReservedAppBinding {
-    title: "Move Down",
-    keystroke: "down",
-  },
-  ReservedAppBinding {
-    title: "Move Left",
-    keystroke: "left",
-  },
-  ReservedAppBinding {
-    title: "Move Word Left",
-    keystroke: "alt-left",
-  },
-  ReservedAppBinding {
-    title: "Move to Line Start",
-    keystroke: "cmd-left",
-  },
-  ReservedAppBinding {
-    title: "Move Right",
-    keystroke: "right",
-  },
-  ReservedAppBinding {
-    title: "Move Word Right",
-    keystroke: "alt-right",
-  },
-  ReservedAppBinding {
-    title: "Move to Line End",
-    keystroke: "cmd-right",
-  },
-  ReservedAppBinding {
-    title: "Move to Document Start",
-    keystroke: "cmd-up",
-  },
-  ReservedAppBinding {
-    title: "Move to Document End",
-    keystroke: "cmd-down",
-  },
-  ReservedAppBinding {
-    title: "Select Up",
-    keystroke: "shift-up",
-  },
-  ReservedAppBinding {
-    title: "Select Down",
-    keystroke: "shift-down",
-  },
-  ReservedAppBinding {
-    title: "Select to Line Start",
-    keystroke: "shift-cmd-left",
-  },
-  ReservedAppBinding {
-    title: "Select to Line End",
-    keystroke: "shift-cmd-right",
-  },
-  ReservedAppBinding {
-    title: "Select to Document Start",
-    keystroke: "shift-cmd-up",
-  },
-  ReservedAppBinding {
-    title: "Select to Document End",
-    keystroke: "shift-cmd-down",
-  },
-  ReservedAppBinding {
-    title: "Select Left",
-    keystroke: "shift-left",
-  },
-  ReservedAppBinding {
-    title: "Select Word Left",
-    keystroke: "shift-alt-left",
-  },
-  ReservedAppBinding {
-    title: "Select Right",
-    keystroke: "shift-right",
-  },
-  ReservedAppBinding {
-    title: "Select Word Right",
-    keystroke: "shift-alt-right",
-  },
-  ReservedAppBinding {
-    title: "Select All",
-    keystroke: "cmd-a",
-  },
-  ReservedAppBinding {
-    title: "Paste",
-    keystroke: "cmd-v",
-  },
-  ReservedAppBinding {
-    title: "Copy",
-    keystroke: "cmd-c",
-  },
-  ReservedAppBinding {
-    title: "Cut",
-    keystroke: "cmd-x",
-  },
-  ReservedAppBinding {
-    title: "Undo",
-    keystroke: "cmd-z",
-  },
-  ReservedAppBinding {
-    title: "Redo",
-    keystroke: "cmd-shift-z",
-  },
-  ReservedAppBinding {
-    title: "Save",
-    keystroke: "cmd-s",
-  },
-  ReservedAppBinding {
-    title: "Find",
-    keystroke: "cmd-f",
-  },
-  ReservedAppBinding {
-    title: "Close Find",
-    keystroke: "escape",
-  },
-  ReservedAppBinding {
-    title: "Home",
-    keystroke: "home",
-  },
-  ReservedAppBinding {
-    title: "End",
-    keystroke: "end",
-  },
-  ReservedAppBinding {
-    title: "Move Line Up",
-    keystroke: "alt-up",
-  },
-  ReservedAppBinding {
-    title: "Move Line Down",
-    keystroke: "alt-down",
-  },
-  ReservedAppBinding {
-    title: "Duplicate Line Up",
-    keystroke: "alt-shift-up",
-  },
-  ReservedAppBinding {
-    title: "Duplicate Line Down",
-    keystroke: "alt-shift-down",
-  },
-  ReservedAppBinding {
-    title: "Add Cursor Above",
-    keystroke: "ctrl-shift-up",
-  },
-  ReservedAppBinding {
-    title: "Add Cursor Below",
-    keystroke: "ctrl-shift-down",
-  },
-  ReservedAppBinding {
-    title: "Select Next Occurrence",
-    keystroke: "cmd-d",
-  },
-  ReservedAppBinding {
-    title: "Select All Occurrences",
-    keystroke: "ctrl-cmd-g",
-  },
-  ReservedAppBinding {
-    title: "Delete Line",
-    keystroke: "cmd-shift-k",
-  },
-  ReservedAppBinding {
-    title: "Insert Line Below",
-    keystroke: "ctrl-enter",
-  },
-  ReservedAppBinding {
-    title: "Insert Line Above",
-    keystroke: "ctrl-shift-enter",
-  },
-  ReservedAppBinding {
-    title: "Toggle Comments",
-    keystroke: "ctrl-/",
-  },
-  ReservedAppBinding {
-    title: "Character Palette",
-    keystroke: "ctrl-cmd-space",
-  },
-  ReservedAppBinding {
-    title: "Quit",
-    keystroke: "cmd-q",
-  },
-];
-
 impl ShortcutDefinition {
   fn key_binding_with_keystroke(self, keystroke: &str, generation: u32) -> KeyBinding {
-    let context = if self.id == ShortcutId::ToggleDiffView {
-      format!("{} && !CodeEditor", self.context)
-    } else {
-      self.context.to_string()
-    };
-    let base = shortcut_binding_context(&guarded_shortcut_context(&context), generation);
+    let base = shortcut_binding_context(&guarded_shortcut_context(self.context), generation);
     let context = if let Some(descendant_focus) = self.descendant_focus() {
       format!("({}) > ({})", base, descendant_focus)
     } else {
       base
     };
 
-    let context = if self.id == ShortcutId::ToggleSoftWrap {
-      format!("({context}) && !Input")
-    } else {
+    let context = if self.is_editing_safe_global() {
       context
+    } else {
+      format!("({context}) && !Input && !Terminal && !TerminalSearch")
     };
 
     match self.id {
@@ -1005,9 +782,33 @@ impl ShortcutDefinition {
     }
   }
 
+  fn is_editing_safe_global(self) -> bool {
+    matches!(
+      self.id,
+      ShortcutId::ShowCommandPalette
+        | ShortcutId::NextCenterTab
+        | ShortcutId::PreviousCenterTab
+        | ShortcutId::CloseCenterTab
+        | ShortcutId::NewFile
+        | ShortcutId::SaveFileAs
+        | ShortcutId::ShowFileSearch
+        | ShortcutId::ShowGlobalSearch
+        | ShortcutId::OpenProject
+        | ShortcutId::OpenSettingsPage
+        | ShortcutId::OpenFilesSidebar
+        | ShortcutId::OpenGitChangesSidebar
+        | ShortcutId::CommitChanges
+    )
+  }
+
   fn descendant_focus(self) -> Option<&'static str> {
     match self.id {
       ShortcutId::CommentHunk => Some(COMMENT_HUNK_DESCENDANT_FOCUS),
+      ShortcutId::AddSelectionToAgent => Some("Editor"),
+      ShortcutId::PreviousAnnotation
+      | ShortcutId::NextAnnotation
+      | ShortcutId::ToggleDiffView
+      | ShortcutId::ToggleHideWhitespace => Some("Editor && !CodeEditor"),
       ShortcutId::ToggleSoftWrap => Some("Editor"),
       ShortcutId::ToggleHunkStage | ShortcutId::RestoreHunk | ShortcutId::AcceptBothConflict => {
         Some(HUNK_OR_CONFLICT_ACTION_FOCUS)
@@ -1052,8 +853,9 @@ pub fn load_shortcut_overrides() -> ShortcutOverrides {
 }
 
 pub fn set_shortcut_override(cx: &mut App, id: ShortcutId, keystroke: &Keystroke) {
+  let is_default = same_keystroke(shortcut_definition(id).keystroke, keystroke);
   let keystroke = serialize_keystroke(keystroke);
-  let keystroke = (keystroke != shortcut_definition(id).keystroke).then_some(keystroke.as_str());
+  let keystroke = (!is_default).then_some(keystroke.as_str());
   save_shortcut_override(cx, id, keystroke);
 }
 
@@ -1086,23 +888,29 @@ pub fn validate_shortcut_override(
     return Err(ShortcutOverrideError::MissingModifier);
   }
 
-  let keystroke_text = serialize_keystroke(keystroke);
-  if let Some(binding) = RESERVED_APP_BINDINGS
-    .iter()
-    .find(|binding| binding.keystroke == keystroke_text)
-  {
-    return Err(ShortcutOverrideError::ReservedBinding {
-      title: binding.title,
-    });
+  let own_context_binding =
+    id == ShortcutId::CommitChanges && same_keystroke("cmd-enter", keystroke);
+  if !own_context_binding && let Some(title) = reserved_editor_shortcut(keystroke) {
+    return Err(ShortcutOverrideError::ReservedBinding { title });
   }
 
   for definition in shortcut_definitions() {
     if definition.id == id {
       continue;
     }
+    if (definition.is_editing_safe_global() || definition.id == ShortcutId::ToggleSoftWrap)
+      && definition.id != ShortcutId::CommitChanges
+      && same_keystroke(definition.keystroke, keystroke)
+    {
+      return Err(ShortcutOverrideError::ReservedBinding {
+        title: definition.title,
+      });
+    }
 
-    if effective_shortcut_keystroke_text(definition.id, overrides) == keystroke_text
-      && active_contexts_overlap(shortcut_definition(id), definition)
+    if same_keystroke(
+      effective_shortcut_keystroke_text(definition.id, overrides).as_ref(),
+      keystroke,
+    ) && active_contexts_overlap(shortcut_definition(id), definition)
     {
       return Err(ShortcutOverrideError::ShortcutConflict {
         shortcut_id: definition.id,
@@ -1249,6 +1057,13 @@ pub fn with_palette_keybindings(
     .collect()
 }
 
+pub(crate) fn shortcut_tooltip(title: &str, id: ShortcutId, window: &Window, cx: &App) -> String {
+  format!(
+    "{title} ({})",
+    resolved_display_shortcut_keystroke_in(cx, window, id)
+  )
+}
+
 pub fn resolved_display_shortcut_keystroke_in(
   cx: &App,
   window: &Window,
@@ -1284,26 +1099,29 @@ fn workspace_key_bindings_with_overrides_and_generation(
   overrides: &ShortcutOverrides,
   generation: u32,
 ) -> Vec<KeyBinding> {
-  let mut bindings: Vec<KeyBinding> = shortcut_definitions()
-    .iter()
-    .copied()
-    .map(|definition| {
-      definition.key_binding_with_keystroke(
-        effective_shortcut_keystroke_text(definition.id, overrides).as_ref(),
-        generation,
-      )
-    })
-    .collect();
-  bindings.extend(fixed_workspace_key_bindings());
+  let mut bindings = fixed_workspace_key_bindings();
+  bindings.extend(shortcut_definitions().iter().copied().map(|definition| {
+    definition.key_binding_with_keystroke(
+      effective_shortcut_keystroke_text(definition.id, overrides).as_ref(),
+      generation,
+    )
+  }));
   bindings
 }
 
 fn fixed_workspace_key_bindings() -> Vec<KeyBinding> {
-  vec![KeyBinding::new(
-    "escape",
-    CloseCenterPane,
-    Some(&guarded_shortcut_context(CENTER_TAB_CONTEXT)),
-  )]
+  vec![
+    KeyBinding::new(
+      "escape",
+      CloseCenterPane,
+      Some(&guarded_shortcut_context(CENTER_TAB_CONTEXT)),
+    ),
+    KeyBinding::new(
+      "f1",
+      ShowCommandPalette,
+      Some(&guarded_shortcut_context(WORKSPACE_CONTEXT)),
+    ),
+  ]
 }
 
 pub fn current_workspace_key_context(cx: &App) -> String {
@@ -1327,91 +1145,16 @@ fn guarded_shortcut_context(context: &str) -> String {
 }
 
 fn default_app_key_bindings() -> Vec<KeyBinding> {
-  let mut bindings = vec![
-    KeyBinding::new("enter", Enter, None),
-    KeyBinding::new("tab", Tab, None),
-    KeyBinding::new("shift-tab", Outdent, Some("Editor && !Input")),
-    KeyBinding::new("alt-up", MoveLineUp, Some("Editor && !Input")),
-    KeyBinding::new("alt-down", MoveLineDown, Some("Editor && !Input")),
-    KeyBinding::new("alt-shift-up", DuplicateLineUp, Some("Editor && !Input")),
-    KeyBinding::new(
-      "alt-shift-down",
-      DuplicateLineDown,
-      Some("Editor && !Input"),
-    ),
-    KeyBinding::new("cmd-shift-k", DeleteLine, Some("Editor && !Input")),
-    KeyBinding::new("cmd-enter", NewlineBelow, Some("CodeEditor && !Input")),
-    KeyBinding::new(
-      "cmd-shift-enter",
-      NewlineAbove,
-      Some("CodeEditor && !Input"),
-    ),
-    KeyBinding::new("cmd-/", ToggleComments, Some("CodeEditor && !Input")),
-    KeyBinding::new("ctrl-enter", NewlineBelow, Some("Editor && !Input")),
-    KeyBinding::new("ctrl-shift-enter", NewlineAbove, Some("Editor && !Input")),
-    KeyBinding::new("ctrl-/", ToggleComments, Some("Editor && !Input")),
-    KeyBinding::new("backspace", Backspace, None),
-    KeyBinding::new("alt-backspace", BackspaceWord, None),
-    KeyBinding::new("cmd-backspace", BackspaceAll, None),
-    KeyBinding::new("delete", Delete, None),
-    KeyBinding::new("up", Up, None),
-    KeyBinding::new("down", Down, None),
-    KeyBinding::new("pageup", PageUp, Some("Editor && !Input")),
-    KeyBinding::new("pagedown", PageDown, Some("Editor && !Input")),
-    KeyBinding::new("shift-pageup", SelectPageUp, Some("Editor && !Input")),
-    KeyBinding::new("shift-pagedown", SelectPageDown, Some("Editor && !Input")),
-    KeyBinding::new("ctrl-g", GoToLine, Some("Editor && !Input")),
-    KeyBinding::new("ctrl-shift-up", AddSelectionAbove, Some("Editor && !Input")),
-    KeyBinding::new(
-      "ctrl-shift-down",
-      AddSelectionBelow,
-      Some("Editor && !Input"),
-    ),
-    KeyBinding::new("cmd-d", SelectNextOccurrence, Some("Editor && !Input")),
-    KeyBinding::new("ctrl-cmd-g", SelectAllOccurrences, Some("Editor && !Input")),
-    KeyBinding::new("left", Left, None),
-    KeyBinding::new("alt-left", AltLeft, None),
-    KeyBinding::new("cmd-left", CmdLeft, None),
-    KeyBinding::new("right", Right, None),
-    KeyBinding::new("alt-right", AltRight, None),
-    KeyBinding::new("cmd-right", CmdRight, None),
-    KeyBinding::new("cmd-up", CmdUp, None),
-    KeyBinding::new("cmd-down", CmdDown, None),
-    KeyBinding::new("shift-up", SelectUp, None),
-    KeyBinding::new("shift-down", SelectDown, None),
-    KeyBinding::new("shift-cmd-left", SelectCmdLeft, None),
-    KeyBinding::new("shift-cmd-right", SelectCmdRight, None),
-    KeyBinding::new("shift-cmd-up", SelectCmdUp, None),
-    KeyBinding::new("shift-cmd-down", SelectCmdDown, None),
-    KeyBinding::new("shift-left", SelectLeft, None),
-    KeyBinding::new("shift-alt-left", SelectWordLeft, None),
-    KeyBinding::new("shift-right", SelectRight, None),
-    KeyBinding::new("shift-alt-right", SelectWordRight, None),
-    KeyBinding::new("cmd-a", SelectAll, None),
-    KeyBinding::new("cmd-v", Paste, None),
-    KeyBinding::new("cmd-c", Copy, None),
-    KeyBinding::new("cmd-x", Cut, None),
-    KeyBinding::new("cmd-z", Undo, None),
-    KeyBinding::new("cmd-shift-z", Redo, None),
-    KeyBinding::new("cmd-s", Save, None),
-    KeyBinding::new("cmd-f", Find, None),
-    KeyBinding::new("cmd-g", FindNext, Some("Editor")),
-    KeyBinding::new("cmd-shift-g", FindPrevious, Some("Editor")),
+  let mut bindings = application_key_bindings();
+  bindings.extend(editor_key_bindings());
+  bindings.extend([
     KeyBinding::new("cmd-g", FindNext, Some(PROJECT_SEARCH_CONTEXT)),
     KeyBinding::new("cmd-shift-g", FindPrevious, Some(PROJECT_SEARCH_CONTEXT)),
-    KeyBinding::new("alt-cmd-c", ToggleFindCaseSensitive, Some("Editor")),
-    KeyBinding::new("alt-cmd-w", ToggleFindWholeWord, Some("Editor")),
-    KeyBinding::new("alt-cmd-x", ToggleFindRegex, Some("Editor")),
-    KeyBinding::new("escape", CloseFind, Some("Editor")),
     KeyBinding::new("escape", ReturnFocusToEditor, Some(DOCK_PANEL_CONTEXT)),
     KeyBinding::new("cmd-n", NewFileInFilesPanel, Some(FILES_TREE_CONTEXT)),
     KeyBinding::new("f2", RenameSelectedFileItem, Some(FILES_TREE_CONTEXT)),
     KeyBinding::new("delete", DeleteSelectedFileItem, Some(FILES_TREE_CONTEXT)),
-    KeyBinding::new("home", Home, None),
-    KeyBinding::new("end", End, None),
-    KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
-    KeyBinding::new("cmd-q", Quit, None),
-  ];
+  ]);
   bindings.extend(terminal_key_bindings());
   bindings
 }
@@ -1621,6 +1364,24 @@ fn serialize_keystroke(keystroke: &Keystroke) -> String {
 }
 
 fn active_contexts_overlap(a: &ShortcutDefinition, b: &ShortcutDefinition) -> bool {
+  if matches!(
+    (a.id, b.id),
+    (
+      ShortcutId::ToggleHunkStage | ShortcutId::RestoreHunk | ShortcutId::AcceptBothConflict,
+      ShortcutId::ToggleFileStage | ShortcutId::RestoreFile | ShortcutId::CommitChanges
+    ) | (
+      ShortcutId::ToggleFileStage | ShortcutId::RestoreFile | ShortcutId::CommitChanges,
+      ShortcutId::ToggleHunkStage | ShortcutId::RestoreHunk | ShortcutId::AcceptBothConflict
+    ) | (
+      ShortcutId::CommitChanges,
+      ShortcutId::ToggleFileStage | ShortcutId::RestoreFile
+    ) | (
+      ShortcutId::ToggleFileStage | ShortcutId::RestoreFile,
+      ShortcutId::CommitChanges
+    )
+  ) {
+    return false;
+  }
   a.active_contexts
     .iter()
     .any(|context| b.active_contexts.contains(context))
@@ -1824,7 +1585,7 @@ mod tests {
   }
 
   #[test]
-  fn line_editing_shortcuts_are_scoped_and_preserve_review_commands() {
+  fn editing_shortcuts_are_identical_in_code_and_diff_editors() {
     for (key, action) in [
       ("alt-up", MoveLineUp::name_for_type()),
       ("alt-down", MoveLineDown::name_for_type()),
@@ -1834,25 +1595,30 @@ mod tests {
       ("cmd-enter", NewlineBelow::name_for_type()),
       ("cmd-shift-enter", NewlineAbove::name_for_type()),
       ("cmd-/", ToggleComments::name_for_type()),
-      ("ctrl-enter", NewlineBelow::name_for_type()),
-      ("ctrl-shift-enter", NewlineAbove::name_for_type()),
-      ("ctrl-/", ToggleComments::name_for_type()),
-      ("ctrl-shift-up", AddSelectionAbove::name_for_type()),
-      ("ctrl-shift-down", AddSelectionBelow::name_for_type()),
+      ("cmd-alt-up", AddSelectionAbove::name_for_type()),
+      ("cmd-alt-down", AddSelectionBelow::name_for_type()),
       ("cmd-d", SelectNextOccurrence::name_for_type()),
-      ("ctrl-cmd-g", SelectAllOccurrences::name_for_type()),
+      ("cmd-shift-l", SelectAllOccurrences::name_for_type()),
+      ("cmd-f2", SelectAllOccurrences::name_for_type()),
+      ("cmd-]", Indent::name_for_type()),
+      ("cmd-[", Outdent::name_for_type()),
+      ("shift-enter", Enter::name_for_type()),
+      ("shift-backspace", Backspace::name_for_type()),
     ] {
-      assert_eq!(
-        first_binding_action_name(
-          "workspace",
-          &["Editor CodeEditor"],
-          key,
-          app_and_workspace_key_bindings()
-        ),
-        Some(action),
-        "{key}"
-      );
+      for context in ["Editor", "Editor CodeEditor"] {
+        assert_eq!(
+          first_binding_action_name(
+            "workspace",
+            &[context],
+            key,
+            app_and_workspace_key_bindings()
+          ),
+          Some(action),
+          "{key}: {context}"
+        );
+      }
       for contexts in [
+        &["Editor", "Input"][..],
         &["Editor CodeEditor", "Input"][..],
         &["Input"][..],
         &["Terminal"][..],
@@ -1865,33 +1631,67 @@ mod tests {
         );
       }
     }
-    assert_eq!(
-      first_binding_action_name(
-        "workspace",
-        &["Editor"],
-        "cmd-/",
-        app_and_workspace_key_bindings()
-      ),
-      Some(ToggleDiffView::name_for_type())
-    );
-    assert_eq!(
-      first_binding_action_name(
-        "workspace",
-        &["Editor"],
-        "cmd-shift-enter",
-        app_and_workspace_key_bindings()
-      ),
-      Some(AcceptBothConflict::name_for_type())
-    );
-    assert_eq!(
-      first_binding_action_name(
-        "workspace",
-        &["List"],
-        "cmd-enter",
-        app_and_workspace_key_bindings()
-      ),
-      Some(ToggleFileStage::name_for_type())
-    );
+  }
+
+  #[test]
+  fn search_commands_remain_available_from_nested_find_inputs() {
+    for (key, action) in [
+      ("cmd-alt-f", FindReplace::name_for_type()),
+      ("cmd-g", FindNext::name_for_type()),
+      ("cmd-shift-g", FindPrevious::name_for_type()),
+      ("cmd-alt-c", ToggleFindCaseSensitive::name_for_type()),
+      ("cmd-alt-w", ToggleFindWholeWord::name_for_type()),
+      ("cmd-alt-r", ToggleFindRegex::name_for_type()),
+      ("escape", CloseFind::name_for_type()),
+    ] {
+      for context in ["Editor", "Editor CodeEditor"] {
+        assert_eq!(
+          first_binding_action_name(
+            "workspace",
+            &[context, "Input"],
+            key,
+            app_and_workspace_key_bindings()
+          ),
+          Some(action)
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn retired_defaults_do_not_leave_editor_conflicting_aliases() {
+    for key in [
+      "cmd-k",
+      "cmd-u",
+      "cmd-t",
+      "cmd-shift-t",
+      "cmd-shift-h",
+      "cmd-y",
+      "cmd-shift-y",
+      "cmd-shift-r",
+      "cmd-shift-c",
+      "cmd-shift-b",
+      "ctrl-enter",
+      "ctrl-shift-enter",
+      "ctrl-/",
+      "ctrl-shift-up",
+      "ctrl-shift-down",
+      "ctrl-cmd-g",
+      "cmd-shift-backspace",
+    ] {
+      for context in ["Editor", "Editor CodeEditor", "List"] {
+        assert_eq!(
+          first_binding_action_name(
+            "workspace",
+            &[context],
+            key,
+            app_and_workspace_key_bindings()
+          ),
+          None,
+          "{key}: {context}"
+        );
+      }
+    }
   }
 
   #[test]
@@ -1996,7 +1796,7 @@ mod tests {
   fn shortcut_definition_lookup_returns_expected_definition() {
     let definition = shortcut_definition(ShortcutId::CommitChanges);
     assert_eq!(definition.title, "Commit Changes");
-    assert_eq!(definition.scope_label, "Projects");
+    assert_eq!(definition.scope_label, "Commit input");
     assert_eq!(
       shortcut_keystroke(ShortcutId::CommitChanges),
       Keystroke::parse("cmd-enter").unwrap()
@@ -2033,34 +1833,30 @@ mod tests {
 
   #[test]
   fn session_creation_bindings_live_in_the_workspace() {
-    assert!(has_binding("workspace", "cmd-t"));
-    assert!(has_binding("workspace", "cmd-shift-t"));
+    assert!(has_binding("workspace", "ctrl-alt-n"));
+    assert!(has_binding("workspace", "ctrl-alt-shift-n"));
   }
 
   #[test]
-  fn git_shortcuts_are_scoped_to_the_repository_surfaces() {
-    assert!(has_binding("workspace", "cmd-o"));
-    assert!(has_binding_with_bindings_in_contexts(
-      "workspace",
-      &["List"],
-      "cmd-enter",
-      workspace_key_bindings(),
-    ));
-    assert!(has_binding_with_bindings_in_contexts(
-      "workspace",
-      &["Editor"],
-      "cmd-alt-enter",
-      workspace_key_bindings(),
-    ));
-    assert!(has_binding_with_bindings_in_contexts(
-      "workspace",
-      &["List"],
-      "cmd-alt-enter",
-      workspace_key_bindings(),
-    ));
-    assert!(has_binding("workspace", "cmd-u"));
-    assert!(has_binding("workspace", "cmd-y"));
-    assert!(has_binding("workspace", "cmd-shift-y"));
+  fn cmd_enter_commits_only_in_the_commit_input() {
+    for (context, expected) in [
+      ("CommitInput Input", Some(CommitChanges::name_for_type())),
+      ("Editor", Some(NewlineBelow::name_for_type())),
+      ("Editor CodeEditor", Some(NewlineBelow::name_for_type())),
+      ("List", None),
+      ("Input", None),
+    ] {
+      assert_eq!(
+        first_binding_action_name(
+          "workspace",
+          &[context],
+          "cmd-enter",
+          app_and_workspace_key_bindings()
+        ),
+        expected,
+        "{context}"
+      );
+    }
   }
 
   #[test]
@@ -2218,11 +2014,11 @@ mod tests {
   #[test]
   fn git_keyboard_first_shortcuts_reach_the_workspace() {
     for keystroke in [
-      "cmd-u",
-      "cmd-y",
-      "cmd-shift-y",
-      "cmd-shift-b",
-      "cmd-shift-h",
+      "ctrl-alt-u",
+      "ctrl-alt-y",
+      "ctrl-alt-shift-y",
+      "cmd-ctrl-b",
+      "ctrl-alt-i",
     ] {
       assert!(
         has_binding("workspace", keystroke),
@@ -2237,7 +2033,7 @@ mod tests {
       assert!(has_binding_with_bindings_in_contexts(
         "workspace",
         &[descendant],
-        "cmd-alt-enter",
+        "ctrl-alt-c",
         workspace_key_bindings(),
       ));
     }
@@ -2247,11 +2043,11 @@ mod tests {
   fn every_dock_surface_has_a_key_of_its_own() {
     // Five surfaces in the right dock, five shortcuts, none of them shared.
     let dock = [
-      (ShortcutId::OpenGitChangesSidebar, "cmd-shift-c"),
-      (ShortcutId::OpenReviewSidebar, "cmd-shift-r"),
+      (ShortcutId::OpenGitChangesSidebar, "ctrl-shift-g"),
+      (ShortcutId::OpenReviewSidebar, "ctrl-alt-r"),
       (ShortcutId::OpenFilesSidebar, "cmd-shift-e"),
-      (ShortcutId::OpenGitHistorySidebar, "cmd-shift-h"),
-      (ShortcutId::OpenPullRequestSidebar, "cmd-shift-p"),
+      (ShortcutId::OpenGitHistorySidebar, "ctrl-alt-i"),
+      (ShortcutId::OpenPullRequestSidebar, "ctrl-alt-g"),
     ];
 
     for (id, keystroke) in dock {
@@ -2270,134 +2066,228 @@ mod tests {
   }
 
   #[test]
-  fn review_shortcuts_reach_the_workspace() {
-    for keystroke in ["cmd-/", "cmd-alt-/"] {
-      assert!(has_binding("workspace", keystroke));
-    }
-  }
-
-  #[test]
-  fn annotation_shortcuts_reach_the_workspace() {
-    for keystroke in ["cmd-alt-up", "cmd-alt-down"] {
-      assert!(has_binding("workspace", keystroke));
-    }
-  }
-
-  #[test]
-  fn local_git_shortcuts_reach_the_workspace() {
-    let bound_in = |surface: &str, keystroke: &str| {
-      has_binding_with_bindings_in_contexts(
-        surface,
+  fn review_shortcuts_are_scoped_to_diff_editors() {
+    for keystroke in ["ctrl-alt-v", "ctrl-alt-w", "alt-f5", "alt-shift-f5"] {
+      assert!(has_binding_with_bindings_in_contexts(
+        "workspace",
         &["Editor"],
         keystroke,
-        workspace_key_bindings(),
-      )
+        workspace_key_bindings()
+      ));
+      for contexts in [
+        &[][..],
+        &["Editor CodeEditor"][..],
+        &["Editor", "Input"][..],
+        &["Input"][..],
+        &["Terminal"][..],
+        &["List"][..],
+      ] {
+        assert!(!has_binding_with_bindings_in_contexts(
+          "workspace",
+          contexts,
+          keystroke,
+          workspace_key_bindings()
+        ));
+      }
+    }
+  }
+
+  #[test]
+  fn command_palette_replaces_the_pull_request_shortcut_without_an_old_cmd_k_alias() {
+    for key in ["cmd-shift-p", "f1"] {
+      assert_eq!(
+        first_binding_action_name("workspace", &[], key, app_and_workspace_key_bindings()),
+        Some(ShowCommandPalette::name_for_type())
+      );
+    }
+    assert_eq!(
+      first_binding_action_name("workspace", &[], "cmd-k", app_and_workspace_key_bindings()),
+      None
+    );
+  }
+
+  #[test]
+  fn git_file_and_hunk_commands_depend_on_focus() {
+    for (key, editor_action, list_action) in [
+      (
+        "cmd-alt-y",
+        ToggleHunkStage::name_for_type(),
+        Some(ToggleFileStage::name_for_type()),
+      ),
+      (
+        "cmd-alt-z",
+        RestoreHunk::name_for_type(),
+        Some(RestoreFile::name_for_type()),
+      ),
+      ("cmd-alt-shift-y", AcceptBothConflict::name_for_type(), None),
+    ] {
+      assert_eq!(
+        first_binding_action_name(
+          "workspace",
+          &["Editor"],
+          key,
+          app_and_workspace_key_bindings()
+        ),
+        Some(editor_action)
+      );
+      assert_eq!(
+        first_binding_action_name(
+          "workspace",
+          &["ChangesList", "List"],
+          key,
+          app_and_workspace_key_bindings()
+        ),
+        list_action
+      );
+      for contexts in [
+        &["Editor CodeEditor"][..],
+        &["Editor", "Input"][..],
+        &["ChangesList", "List", "Input"][..],
+        &["List"][..],
+        &["Terminal"][..],
+        &["Input"][..],
+      ] {
+        assert_eq!(
+          first_binding_action_name("workspace", contexts, key, app_and_workspace_key_bindings()),
+          None,
+          "{key}: {contexts:?}"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn git_and_agent_commands_do_not_capture_nested_inputs_or_terminals() {
+    for definition in shortcut_definitions()
+      .iter()
+      .filter(|definition| !definition.is_editing_safe_global())
+    {
+      for contexts in [
+        &["Editor", "Input"][..],
+        &["List", "Input"][..],
+        &["Input"][..],
+        &["Terminal"][..],
+        &["TerminalSearch", "Input"][..],
+      ] {
+        assert!(
+          !has_binding_with_bindings_in_contexts(
+            "workspace",
+            contexts,
+            definition.keystroke,
+            workspace_key_bindings()
+          ),
+          "{}: {contexts:?}",
+          definition.title
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn editor_reservations_reject_new_workspace_overrides() {
+    use crate::shortcut_bindings::{
+      APPLICATION_SHORTCUTS, EDITOR_SHORTCUTS, EDITOR_SURFACE_SHORTCUTS, RESERVED_EDITOR_SHORTCUTS,
     };
-    for keystroke in [
-      "shift-enter",
-      "shift-backspace",
-      "cmd-shift-enter",
-      "cmd-shift-l",
-    ] {
+    for key in EDITOR_SHORTCUTS
+      .iter()
+      .chain(EDITOR_SURFACE_SHORTCUTS)
+      .chain(APPLICATION_SHORTCUTS)
+      .map(|shortcut| shortcut.keystroke)
+      .chain(RESERVED_EDITOR_SHORTCUTS.iter().map(|(key, _)| *key))
+    {
       assert!(
-        bound_in("workspace", keystroke),
-        "{keystroke} in the workspace"
+        validate_shortcut_override(
+          ShortcutId::PullChanges,
+          &Keystroke::parse(key).expect("reserved shortcut"),
+          &ShortcutOverrides::default()
+        )
+        .is_err(),
+        "{key}"
       );
     }
-
-    for keystroke in [
-      "cmd-o",
-      "cmd-u",
-      "cmd-y",
-      "cmd-shift-y",
-      "cmd-shift-b",
-      "cmd-shift-h",
-      "cmd-shift-c",
-      "cmd-shift-e",
+    for key in [
+      "cmd-shift-up",
+      "shift-cmd-up",
+      "alt-cmd-up",
+      "shift-cmd-l",
+      "shift-cmd-p",
+      "alt-z",
     ] {
       assert!(
-        has_binding("workspace", keystroke),
-        "{keystroke} reaches the workspace"
+        validate_shortcut_override(
+          ShortcutId::PullChanges,
+          &Keystroke::parse(key).expect("reserved shortcut"),
+          &ShortcutOverrides::default()
+        )
+        .is_err(),
+        "{key}"
       );
     }
+  }
 
-    for keystroke in ["shift-enter", "shift-backspace", "cmd-shift-enter"] {
-      assert!(has_binding_with_bindings_in_contexts(
-        "workspace",
-        &["List"],
-        keystroke,
-        workspace_key_bindings(),
-      ));
-    }
+  #[test]
+  fn product_conflicts_compare_modifiers_not_their_serialized_order() {
+    let overrides = overrides(&[(ShortcutId::PullChanges, "shift-ctrl-alt-9")]);
+    assert_eq!(
+      validate_shortcut_override(
+        ShortcutId::PushChanges,
+        &Keystroke::parse("ctrl-alt-shift-9").unwrap(),
+        &overrides
+      ),
+      Err(ShortcutOverrideError::ShortcutConflict {
+        shortcut_id: ShortcutId::PullChanges
+      })
+    );
+  }
 
-    for keystroke in ["cmd-enter", "cmd-shift-backspace"] {
-      assert!(!bound_in("workspace", keystroke));
-      assert!(has_binding_with_bindings_in_contexts(
-        "workspace",
-        &["List"],
-        keystroke,
-        workspace_key_bindings(),
+  #[test]
+  fn standard_workspace_keys_remain_reserved_when_their_owner_is_customized() {
+    let overrides = overrides(&[
+      (ShortcutId::ShowCommandPalette, "ctrl-alt-9"),
+      (ShortcutId::ToggleSoftWrap, "ctrl-alt-8"),
+    ]);
+    for key in ["cmd-shift-p", "alt-z"] {
+      assert!(matches!(
+        validate_shortcut_override(
+          ShortcutId::PullChanges,
+          &Keystroke::parse(key).unwrap(),
+          &overrides
+        ),
+        Err(ShortcutOverrideError::ReservedBinding { .. })
       ));
     }
   }
 
   #[test]
-  fn file_level_git_shortcuts_stay_out_of_the_editor() {
+  fn saved_customizations_are_not_silently_rejected_by_new_reservations() {
+    let overrides = overrides(&[(ShortcutId::PullChanges, "cmd-u")]);
     assert_eq!(
       first_binding_action_name(
         "workspace",
-        &["Editor"],
-        "cmd-backspace",
-        app_and_workspace_key_bindings(),
+        &[],
+        "cmd-u",
+        workspace_key_bindings_with_overrides(&overrides)
       ),
-      Some(<BackspaceAll as Action>::name_for_type())
+      Some(PullChanges::name_for_type())
     );
-    assert_eq!(
-      first_binding_action_name(
-        "workspace",
-        &["Editor"],
-        "cmd-enter",
-        app_and_workspace_key_bindings(),
-      ),
-      None
-    );
-    assert_eq!(
-      first_binding_action_name(
-        "workspace",
-        &["Editor"],
-        "cmd-shift-backspace",
-        app_and_workspace_key_bindings(),
-      ),
-      None
-    );
-    assert_eq!(
-      first_binding_action_name(
-        "workspace",
-        &["List"],
-        "cmd-enter",
-        app_and_workspace_key_bindings(),
-      ),
-      Some(<ToggleFileStage as Action>::name_for_type())
-    );
-    assert_eq!(
-      first_binding_action_name(
-        "workspace",
-        &["List"],
-        "cmd-shift-backspace",
-        app_and_workspace_key_bindings(),
-      ),
-      Some(<RestoreFile as Action>::name_for_type())
-    );
+    assert!(!has_binding_with_bindings(
+      "workspace",
+      "ctrl-alt-u",
+      workspace_key_bindings_with_overrides(&overrides)
+    ));
   }
 
   #[test]
-  fn default_workspace_shortcuts_do_not_reuse_reserved_app_bindings() {
+  fn every_default_shortcut_passes_collision_validation() {
     for definition in shortcut_definitions() {
-      assert!(
-        RESERVED_APP_BINDINGS
-          .iter()
-          .all(|binding| binding.keystroke != definition.keystroke),
-        "{} reuses the reserved {} shortcut",
+      assert_eq!(
+        validate_shortcut_override(
+          definition.id,
+          &definition.default_keystroke(),
+          &ShortcutOverrides::default()
+        ),
+        Ok(()),
+        "{}: {}",
         definition.title,
         definition.keystroke
       );
@@ -2517,7 +2407,7 @@ mod tests {
     let overrides = ShortcutOverrides::default();
     let error = validate_shortcut_override(
       ShortcutId::ShowFileSearch,
-      &Keystroke::parse("cmd-enter").unwrap(),
+      &Keystroke::parse("cmd-alt-y").unwrap(),
       &overrides,
     )
     .expect_err("an overlap with a staging shortcut should be rejected");
@@ -2525,7 +2415,7 @@ mod tests {
     assert_eq!(
       error,
       ShortcutOverrideError::ShortcutConflict {
-        shortcut_id: ShortcutId::ToggleFileStage,
+        shortcut_id: ShortcutId::ToggleHunkStage,
       }
     );
   }
@@ -2534,8 +2424,8 @@ mod tests {
   fn validate_shortcut_override_allows_non_overlapping_shortcuts() {
     let overrides = ShortcutOverrides::default();
     let result = validate_shortcut_override(
-      ShortcutId::OpenProject,
-      &Keystroke::parse("cmd-shift-g").unwrap(),
+      ShortcutId::ToggleHunkStage,
+      &Keystroke::parse("cmd-alt-y").unwrap(),
       &overrides,
     );
 

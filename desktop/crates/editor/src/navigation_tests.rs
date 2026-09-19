@@ -47,6 +47,44 @@ fn vertical_motion_preserves_visual_goal_across_short_lines_and_tabs(cx: &mut Te
 }
 
 #[gpui::test]
+fn home_and_end_stay_on_each_cursor_line(cx: &mut TestAppContext) {
+  let (editor, cx) = setup(cx, "first\néclair\nlast");
+  cx.update(|window, cx| {
+    editor.update(cx, |editor, cx| {
+      editor.move_to(8, cx);
+      actions::home(editor, &actions::Home, window, cx);
+      assert_eq!(editor.cursor_offset(), 6);
+      actions::end(editor, &actions::End, window, cx);
+      assert_eq!(editor.cursor_offset(), 12);
+      editor.selections.add(15..15, false);
+      actions::home(editor, &actions::Home, window, cx);
+      assert_eq!(
+        editor
+          .selections
+          .iter()
+          .map(|selection| selection.head())
+          .collect::<Vec<_>>(),
+        vec![6, 13]
+      );
+      actions::end(editor, &actions::End, window, cx);
+      assert_eq!(
+        editor
+          .selections
+          .iter()
+          .map(|selection| selection.head())
+          .collect::<Vec<_>>(),
+        vec![12, 17]
+      );
+      editor.selections.single();
+      actions::cmd_up(editor, &actions::CmdUp, window, cx);
+      assert_eq!(editor.cursor_offset(), 0);
+      actions::cmd_down(editor, &actions::CmdDown, window, cx);
+      assert_eq!(editor.cursor_offset(), 17);
+    });
+  });
+}
+
+#[gpui::test]
 fn pages_use_viewport_height_and_keep_selection_anchor(cx: &mut TestAppContext) {
   let text = (0..100).map(|_| "abcdef\n").collect::<String>();
   let (editor, cx) = setup(cx, &text);

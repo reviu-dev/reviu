@@ -449,15 +449,27 @@ impl Editor {
 
   pub(crate) fn indent_selection(&mut self, outdent: bool, cx: &mut Context<Self>) {
     self.edit_selections(cx, |editor, selection, cx| {
-      editor.indent_plan(selection, outdent, cx)
+      editor.indent_plan(selection, outdent, false, cx)
     });
   }
 
-  fn indent_plan(&self, selection: &Selection, outdent: bool, cx: &App) -> multicursor::EditPlan {
+  pub(crate) fn indent_lines(&mut self, cx: &mut Context<Self>) {
+    self.edit_selections(cx, |editor, selection, cx| {
+      editor.indent_plan(selection, false, true, cx)
+    });
+  }
+
+  fn indent_plan(
+    &self,
+    selection: &Selection,
+    outdent: bool,
+    linewise: bool,
+    cx: &App,
+  ) -> multicursor::EditPlan {
     let document = self.document.read(cx);
     let indentation = document.indentation;
     let first_line = document.char_to_line(selection.range.start);
-    if selection.range.is_empty() && !outdent {
+    if selection.range.is_empty() && !outdent && !linewise {
       let prefix =
         document.slice_to_string(document.line_to_char(first_line)..selection.range.start);
       let text = indentation.tab_at(indentation.columns(&prefix));

@@ -2845,7 +2845,7 @@ impl SessionPage {
     }
   }
 
-  /// What `cmd-shift-l` would send, or why it cannot.
+  /// The selection to attach to the agent, or why it cannot.
   pub(super) fn selection_context(&self, cx: &App) -> Result<(String, String), &'static str> {
     let Some(editor) = self.diff_editor() else {
       return Err("Open a file diff first");

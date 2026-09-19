@@ -1,10 +1,11 @@
 //! Acting on one hunk, or one conflict block, from the diff itself.
 
+use crate::shortcuts::{ShortcutId, shortcut_tooltip};
 use editor::{ConflictResolution, Editor, HunkAction, HunkState};
 use git::RepoStatusKind;
 use gpui::{
-  AnyElement, App, CursorStyle, Entity, InteractiveElement, ParentElement, Pixels, Styled, div,
-  prelude::*, px, relative,
+  AnyElement, App, CursorStyle, Entity, InteractiveElement, ParentElement, Pixels, Styled, Window,
+  div, prelude::*, px, relative,
 };
 use gpui_component::{ActiveTheme as _, Disableable as _, IconName, Sizable as _, Theme};
 use ui::Button;
@@ -70,6 +71,7 @@ pub(crate) fn render_hunk_actions(
   editor: &Entity<Editor>,
   file_status: Option<RepoStatusKind>,
   conflict_labels: ConflictActionLabels,
+  window: &Window,
   cx: &mut App,
 ) -> Option<AnyElement> {
   let theme = cx.theme().clone();
@@ -79,7 +81,7 @@ pub(crate) fn render_hunk_actions(
   }
 
   if matches!(file_status, Some(RepoStatusKind::Conflicted)) {
-    return render_conflict_actions(editor, editor_state, &theme, conflict_labels, cx);
+    return render_conflict_actions(editor, editor_state, &theme, conflict_labels, window, cx);
   }
 
   let hovered = editor_state.hovered_group_id.as_ref().and_then(|id| {
@@ -138,9 +140,9 @@ pub(crate) fn render_hunk_actions(
           .label("Stage")
           .small()
           .tooltip(if file_dirty {
-            "File not saved"
+            "File not saved".to_string()
           } else {
-            "Stage Hunk (shift-enter)"
+            shortcut_tooltip("Stage Hunk", ShortcutId::ToggleHunkStage, window, cx)
           })
           .rounded_t_none()
           .rounded_br_none()
@@ -164,9 +166,9 @@ pub(crate) fn render_hunk_actions(
           .label("Unstage")
           .small()
           .tooltip(if file_dirty {
-            "File not saved"
+            "File not saved".to_string()
           } else {
-            "Unstage Hunk (shift-enter)"
+            shortcut_tooltip("Unstage Hunk", ShortcutId::ToggleHunkStage, window, cx)
           })
           .rounded_t_none()
           .bg(theme.background)
@@ -190,9 +192,9 @@ pub(crate) fn render_hunk_actions(
         .label("Restore")
         .small()
         .tooltip(if file_dirty {
-          "File not saved"
+          "File not saved".to_string()
         } else {
-          "Restore Hunk (shift-backspace)"
+          shortcut_tooltip("Restore Hunk", ShortcutId::RestoreHunk, window, cx)
         })
         .rounded_t_none()
         .rounded_bl_none()
@@ -221,6 +223,7 @@ fn render_conflict_actions(
   editor_state: &Editor,
   theme: &Theme,
   labels: ConflictActionLabels,
+  window: &Window,
   cx: &App,
 ) -> Option<AnyElement> {
   let conflict_start_line = editor_state
@@ -231,10 +234,11 @@ fn render_conflict_actions(
     .unwrap_or(conflict_start_line);
   let top = visible_action_top(editor_state, anchor_display_line, cx)?;
 
-  let side = |id: &'static str, label: &'static str, resolution: ConflictResolution| {
+  let side = |id: &'static str, label: &'static str, resolution: ConflictResolution, shortcut| {
     let editor = editor.clone();
     Button::new(id)
       .label(label)
+      .tooltip(shortcut_tooltip(label, shortcut, window, cx))
       .small()
       .bg(theme.background)
       .on_click(move |_, _, cx| {
@@ -257,6 +261,7 @@ fn render_conflict_actions(
         "accept-current-conflict",
         labels.current,
         ConflictResolution::Current,
+        ShortcutId::ToggleHunkStage,
       )
       .rounded_t_none()
       .rounded_br_none(),
@@ -266,6 +271,7 @@ fn render_conflict_actions(
         "accept-incoming-conflict",
         labels.incoming,
         ConflictResolution::Incoming,
+        ShortcutId::RestoreHunk,
       )
       .rounded_none(),
     )
@@ -274,6 +280,7 @@ fn render_conflict_actions(
         "accept-both-conflict",
         "Accept Both",
         ConflictResolution::Both,
+        ShortcutId::AcceptBothConflict,
       )
       .rounded_t_none()
       .rounded_bl_none(),
@@ -324,7 +331,7 @@ fn floating(top: Pixels, actions: AnyElement, align_left_split: bool) -> AnyElem
   }
 }
 
-/// `shift-enter`: stage or unstage the hunk under the cursor, accept the
+/// Stage or unstage the hunk under the cursor, accept the
 /// current side of the conflict under it.
 pub(crate) fn toggle_hunk_stage(
   editor: &Entity<Editor>,
@@ -353,7 +360,7 @@ pub(crate) fn toggle_hunk_stage(
   });
 }
 
-/// `shift-backspace`: restore the hunk under the cursor, accept the incoming
+/// Restore the hunk under the cursor, accept the incoming
 /// side of the conflict under it.
 pub(crate) fn restore_hunk(
   editor: &Entity<Editor>,

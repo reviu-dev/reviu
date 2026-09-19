@@ -5683,6 +5683,7 @@ impl Render for DockPanel {
           let clear_context_menu_changes_list = self.changes_list.clone();
           div()
             .id("dock-panel-file-list")
+            .key_context("ChangesList")
             .debug_selector(|| "dock-panel-file-list".to_string())
             .flex_1()
             .min_h_0()
