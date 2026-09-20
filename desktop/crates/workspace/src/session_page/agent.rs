@@ -373,7 +373,14 @@ impl SessionPage {
           );
         }
         AgentChatPanelEvent::TurnStarted => {
-          let agent = panel.read(cx).backend_kind().as_str().to_string();
+          let (agent, conversation_id) = {
+            let panel_state = panel.read(cx);
+            (
+              panel_state.backend_kind().as_str().to_string(),
+              panel_state.current_conversation().id.clone(),
+            )
+          };
+          this.clear_finished_unseen_session(&conversation_id, cx);
           crate::analytics::track_with(
             cx,
             "agent_turn_started",
@@ -394,6 +401,16 @@ impl SessionPage {
           );
           // A queued prompt draining into a fresh turn is not a stopping point.
           if !panel.read(cx).is_turn_in_flight() {
+            let (conversation_id, turn_failed) = {
+              let panel_state = panel.read(cx);
+              (
+                panel_state.current_conversation().id.clone(),
+                panel_state.last_turn_failed(),
+              )
+            };
+            if *completed && !turn_failed {
+              this.mark_finished_unseen_if_needed(&conversation_id, window, cx);
+            }
             this.notify_agent_attention("Reviu agent finished", Some(panel), window, cx);
           }
           this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
@@ -1899,6 +1916,7 @@ impl SessionPage {
     };
     let deleted_repo = repo_root.clone();
     self.delete_session_storage_and_resources(repo_root, store.clone(), id, cx);
+    self.unseen_finished_session_ids.remove(id);
     // Dropping the panel stops its agent process.
     self
       .background_chat_panels
@@ -1950,6 +1968,7 @@ impl SessionPage {
     self.diff_chat_open = true;
     self.center = CenterView::Conversation;
     self.sync_agent_chat_close_control(cx);
+    self.clear_visible_finished_unseen_session(cx);
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
   }

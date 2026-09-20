@@ -513,12 +513,7 @@ impl SessionPage {
   }
 
   fn merged_session_status(current: SessionStatus, next: SessionStatus) -> SessionStatus {
-    match (current, next) {
-      (SessionStatus::Waiting, _) | (_, SessionStatus::Waiting) => SessionStatus::Waiting,
-      (SessionStatus::Failed, _) | (_, SessionStatus::Failed) => SessionStatus::Failed,
-      (SessionStatus::Working, _) | (_, SessionStatus::Working) => SessionStatus::Working,
-      _ => SessionStatus::Idle,
-    }
+    SessionStatus::merge(current, next)
   }
 
   fn center_tab_status(
@@ -544,6 +539,7 @@ impl SessionPage {
       SessionStatus::Working => Some("Working"),
       SessionStatus::Waiting => Some("Waiting"),
       SessionStatus::Failed => Some("Failed"),
+      SessionStatus::FinishedUnseen => Some("Finished - not viewed"),
     }
   }
 
@@ -553,6 +549,7 @@ impl SessionPage {
       SessionStatus::Working => theme.status_amber(),
       SessionStatus::Waiting => theme.status_blue(),
       SessionStatus::Failed => theme.status_red(),
+      SessionStatus::FinishedUnseen => theme.status_green(),
     }
   }
 
@@ -911,7 +908,12 @@ impl SessionPage {
         let theme = cx.theme().clone();
         let clear_ids = items
           .iter()
-          .filter(|item| !matches!(item.status, SessionStatus::Working | SessionStatus::Waiting))
+          .filter(|item| {
+            !matches!(
+              item.status,
+              SessionStatus::Working | SessionStatus::Waiting | SessionStatus::FinishedUnseen
+            )
+          })
           .map(|item| item.id.clone())
           .collect::<Vec<_>>();
         let visible_rows = items.len().clamp(1, 8) as f32;
@@ -5883,6 +5885,77 @@ mod tests {
     cx.run_until_parked();
 
     assert!(cx.debug_bounds("session-center-tab-status-dot").is_some());
+  }
+
+  #[gpui::test]
+  async fn finished_unseen_status_clears_when_the_chat_is_viewed(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-finished-unseen-status");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("dirty the checkout");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("finished work", cx);
+      panel.persist_now(cx);
+    });
+    cx.run_until_parked();
+    let id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    let chat_tab = CenterTab::chat_for(id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      page.agent_chat_view = None;
+      page.unseen_finished_session_ids.insert(id.clone());
+      page.refresh_session_list(cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.unseen_finished_session_ids.contains(&id));
+      assert_eq!(
+        page.session_statuses(cx).get(&id).copied(),
+        Some(SessionStatus::FinishedUnseen)
+      );
+      assert_eq!(
+        page.session_list.read(cx).status_of(&id),
+        SessionStatus::FinishedUnseen
+      );
+    });
+    assert!(cx.debug_bounds("session-center-tab-status-dot").is_some());
+
+    page.update(cx, |page, cx| {
+      page.remember_center_tab(chat_tab, cx);
+      page.center = CenterView::Conversation;
+      page.clear_visible_finished_unseen_session(cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(!page.unseen_finished_session_ids.contains(&id));
+      assert_ne!(
+        page.session_statuses(cx).get(&id).copied(),
+        Some(SessionStatus::FinishedUnseen)
+      );
+      assert_ne!(
+        page.session_list.read(cx).status_of(&id),
+        SessionStatus::FinishedUnseen
+      );
+    });
   }
 
   #[gpui::test]

@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.3.0
 
+### Finished Agent Attention
+
+When an agent finishes away from the visible chat, Reviu now keeps a green attention dot on the chat tab, history, and checkout row until you open the conversation.
+
 ### Session Usage In Composer
 
 Chat context and cost usage now appear with the composer controls, so the current session usage stays visible without opening a split chat header.

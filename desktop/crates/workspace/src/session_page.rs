@@ -285,6 +285,7 @@ pub struct SessionPage {
   reviewed_repo: Option<PathBuf>,
   /// Sessions kept alive off screen so their agents keep working; MRU first.
   background_chat_panels: Vec<(String, Entity<AgentChatPanel>)>,
+  unseen_finished_session_ids: HashSet<String>,
   turn_gate: TurnGate,
   agent_notification: Option<gpui::WindowHandle<crate::agent_notification::AgentNotification>>,
   dock_panel: Entity<DockPanel>,
@@ -652,6 +653,7 @@ impl SessionPage {
       swept_repos: HashSet::new(),
       reviewed_repo: fallback_repo.clone(),
       background_chat_panels: Vec::new(),
+      unseen_finished_session_ids: HashSet::new(),
       turn_gate: TurnGate::new(),
       agent_notification: None,
       dock_panel,
@@ -895,6 +897,7 @@ impl SessionPage {
       this.poll_window_active = window.is_window_active();
       if this.poll_window_active {
         this.poll_repository(cx);
+        this.clear_visible_finished_unseen_session(cx);
       }
     })
     .detach();
@@ -985,6 +988,58 @@ impl SessionPage {
     });
   }
 
+  fn active_viewed_conversation_id(&self, cx: &App) -> Option<String> {
+    if self.center != CenterView::Conversation {
+      return None;
+    }
+    let tab = self.center_layout.active_tab();
+    if let Some(id) = tab.conversation_id() {
+      return Some(id.to_string());
+    }
+    if Self::is_placeholder_chat_tab(tab) {
+      return self
+        .agent_chat_view
+        .as_ref()
+        .map(|panel| panel.read(cx).current_conversation().id.clone());
+    }
+    None
+  }
+
+  fn clear_finished_unseen_session(&mut self, id: &str, cx: &mut Context<Self>) {
+    if self.unseen_finished_session_ids.remove(id) {
+      self.refresh_session_list(cx);
+      cx.notify();
+    }
+  }
+
+  fn clear_visible_finished_unseen_session(&mut self, cx: &mut Context<Self>) {
+    let Some(id) = self.active_viewed_conversation_id(cx) else {
+      return;
+    };
+    self.clear_finished_unseen_session(&id, cx);
+  }
+
+  pub(super) fn mark_finished_unseen_if_needed(
+    &mut self,
+    id: &str,
+    window: &Window,
+    cx: &mut Context<Self>,
+  ) {
+    let viewed = window.is_window_active()
+      && self
+        .active_viewed_conversation_id(cx)
+        .is_some_and(|viewed_id| viewed_id == id);
+    let changed = if viewed {
+      self.unseen_finished_session_ids.remove(id)
+    } else {
+      self.unseen_finished_session_ids.insert(id.to_string())
+    };
+    if changed {
+      self.refresh_session_list(cx);
+      cx.notify();
+    }
+  }
+
   /// Live agent state per conversation: derived from the panels alive right
   /// now, background ones included. A session with no panel is Idle.
   fn session_statuses(&self, cx: &App) -> std::collections::HashMap<String, SessionStatus> {
@@ -1001,7 +1056,7 @@ impl SessionPage {
       };
       (panel.current_conversation().id.clone(), status)
     };
-    self
+    let mut statuses: std::collections::HashMap<String, SessionStatus> = self
       .agent_chat_view
       .iter()
       .map(&status_of)
@@ -1012,7 +1067,12 @@ impl SessionPage {
           .map(|(_, panel)| status_of(panel)),
       )
       .filter(|(_, status)| *status != SessionStatus::Idle)
-      .collect()
+      .collect();
+    for id in &self.unseen_finished_session_ids {
+      let status = statuses.entry(id.clone()).or_default();
+      *status = SessionStatus::merge(*status, SessionStatus::FinishedUnseen);
+    }
+    statuses
   }
 
   /// Full refresh from the store's meta index, for lifecycle changes
@@ -1886,6 +1946,7 @@ impl SessionPage {
         self.ensure_project_search_view(repo_root, window, cx);
       }
       self.sync_agent_chat_close_control(cx);
+      self.clear_visible_finished_unseen_session(cx);
       match self.center {
         CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
         CenterView::Diff if intent.takes_focus() => self.focus_editor_on_next_frame(window, cx),

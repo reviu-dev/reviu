@@ -34,15 +34,30 @@ pub enum SessionStatus {
   Waiting,
   /// The agent process died or its binary is missing.
   Failed,
+  /// The agent finished while the chat was not being viewed.
+  FinishedUnseen,
 }
 
 impl SessionStatus {
+  pub(crate) fn merge(current: SessionStatus, next: SessionStatus) -> SessionStatus {
+    match (current, next) {
+      (SessionStatus::Waiting, _) | (_, SessionStatus::Waiting) => SessionStatus::Waiting,
+      (SessionStatus::Failed, _) | (_, SessionStatus::Failed) => SessionStatus::Failed,
+      (SessionStatus::Working, _) | (_, SessionStatus::Working) => SessionStatus::Working,
+      (SessionStatus::FinishedUnseen, _) | (_, SessionStatus::FinishedUnseen) => {
+        SessionStatus::FinishedUnseen
+      }
+      _ => SessionStatus::Idle,
+    }
+  }
+
   fn label(self) -> Option<&'static str> {
     match self {
       SessionStatus::Idle => None,
       SessionStatus::Working => Some("Working"),
       SessionStatus::Waiting => Some("Waiting"),
       SessionStatus::Failed => Some("Failed"),
+      SessionStatus::FinishedUnseen => Some("Finished - not viewed"),
     }
   }
 }
@@ -610,11 +625,7 @@ impl SessionList {
         continue;
       }
       count += 1;
-      status = match (status, row_status) {
-        (SessionStatus::Waiting, _) | (_, SessionStatus::Waiting) => SessionStatus::Waiting,
-        (SessionStatus::Failed, _) | (_, SessionStatus::Failed) => SessionStatus::Failed,
-        _ => SessionStatus::Working,
-      };
+      status = SessionStatus::merge(status, row_status);
     }
     (count > 0).then_some((status, count))
   }
@@ -968,6 +979,7 @@ impl SessionList {
       SessionStatus::Working => theme.status_amber(),
       SessionStatus::Waiting => theme.status_blue(),
       SessionStatus::Failed => theme.status_red(),
+      SessionStatus::FinishedUnseen => theme.status_green(),
     });
     let status_label = status.and_then(|(status, count)| {
       status.label().map(|label| {
