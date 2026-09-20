@@ -3795,9 +3795,10 @@ async fn connecting_panel_shows_loading_controls(cx: &mut gpui::TestAppContext) 
 }
 
 #[gpui::test]
-async fn usage_update_paints_header_status(cx: &mut gpui::TestAppContext) {
+async fn usage_update_paints_composer_controls_status(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
+    panel.set_header_visible(false, cx);
     panel.inject_event_for_test(
       AgentEvent::UsageUpdate(UsageUpdate::new(247_000, 272_000).cost(Cost::new(28.2, "USD"))),
       cx,
@@ -3806,6 +3807,7 @@ async fn usage_update_paints_header_status(cx: &mut gpui::TestAppContext) {
   });
   cx.run_until_parked();
 
+  assert!(cx.debug_bounds("agent-chat-header").is_none());
   assert!(cx.debug_bounds("agent-chat-usage").is_some());
   panel.read_with(cx, |panel, _| {
     let usage = panel.usage.as_ref().expect("usage snapshot");

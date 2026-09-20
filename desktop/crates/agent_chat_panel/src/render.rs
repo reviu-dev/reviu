@@ -2044,8 +2044,6 @@ impl Render for AgentChatPanel {
 
     let _ = SharedString::from("");
 
-    let usage_status = self.render_usage_status(theme);
-
     let center_state = self.render_center_state(theme, cx);
 
     div()
@@ -2105,7 +2103,6 @@ impl Render for AgentChatPanel {
               h_flex()
                 .gap_3()
                 .items_center()
-                .when_some(usage_status, |this, usage| this.child(usage))
                 .when(self.show_close_control, |this| {
                   let panel = cx.entity().clone();
                   this
@@ -2936,8 +2933,9 @@ impl AgentChatPanel {
   }
 
   fn render_composer_controls(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    let theme = cx.theme().clone();
     if matches!(self.status, Status::Connecting) {
-      return self.render_controls_loading(cx);
+      return self.render_controls_loading(&theme);
     }
 
     h_flex()
@@ -2949,10 +2947,11 @@ impl AgentChatPanel {
       .children(self.render_mode_selector(cx))
       .children(self.render_config_selector(cx))
       .children(self.render_auto_approve_toggle(cx))
+      .children(self.render_usage_status(&theme))
       .into_any_element()
   }
 
-  fn render_controls_loading(&self, _cx: &mut Context<Self>) -> gpui::AnyElement {
+  fn render_controls_loading(&self, theme: &gpui_component::Theme) -> gpui::AnyElement {
     h_flex()
       .gap_1()
       .items_center()
@@ -2960,6 +2959,7 @@ impl AgentChatPanel {
       .child(Skeleton::new().h(px(18.)).w(px(120.)).rounded(px(999.)))
       .child(Skeleton::new().h(px(18.)).w(px(72.)).rounded(px(999.)))
       .child(Skeleton::new().h(px(18.)).w(px(56.)).rounded(px(999.)))
+      .children(self.render_usage_status(theme))
       .into_any_element()
   }
 

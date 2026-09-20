@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.3.0
+
+### Session Usage In Composer
+
+Chat context and cost usage now appear with the composer controls, so the current session usage stays visible without opening a split chat header.
+
 ## 1.2.0
 
 ### Reorder Your Workspace Tabs
