@@ -58,8 +58,8 @@ pub(crate) fn format_usage_cost(cost: &UsageCost) -> String {
 
 fn usage_context_color(usage: &UsageSnapshot, theme: &gpui_component::Theme) -> Hsla {
   match usage.ratio() {
-    Some(ratio) if ratio >= 0.95 => theme.danger,
-    Some(ratio) if ratio >= 0.85 => theme.warning,
+    Some(ratio) if ratio >= 0.95 => theme.status_red(),
+    Some(ratio) if ratio >= 0.85 => theme.status_amber(),
     _ => theme.muted_foreground,
   }
 }
