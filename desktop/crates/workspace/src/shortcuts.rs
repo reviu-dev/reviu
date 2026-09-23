@@ -1423,7 +1423,7 @@ fn active_contexts_overlap(a: &ShortcutDefinition, b: &ShortcutDefinition) -> bo
     .any(|context| b.active_contexts.contains(context))
 }
 
-fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> T {
+pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> T {
   match id {
     ShortcutId::ShowCommandPalette => f(&ShowCommandPalette),
     ShortcutId::NextCenterTab => f(&NextCenterTab),

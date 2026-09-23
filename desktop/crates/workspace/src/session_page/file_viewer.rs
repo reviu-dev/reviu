@@ -2962,6 +2962,35 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn the_settings_soft_wrap_shortcut_has_an_editor_handler(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-soft-wrap-shortcut");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_untitled_file_action(&crate::NewFile, window, cx);
+    });
+    cx.run_until_parked();
+    let editor_focus = page.read_with(cx, |page, cx| {
+      page
+        .shown_editor()
+        .expect("editor")
+        .read(cx)
+        .focus_handle(cx)
+    });
+    cx.update(|window, cx| window.focus(&editor_focus, cx));
+    cx.run_until_parked();
+
+    let available = cx.update(|window, cx| {
+      crate::shortcuts::with_shortcut_action(
+        crate::shortcuts::ShortcutId::ToggleSoftWrap,
+        |action| window.is_action_available(action, cx),
+      )
+    });
+    assert!(available);
+  }
+
+  #[gpui::test]
   async fn new_files_start_as_distinct_untitled_editors(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-untitled-files");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");

@@ -1407,7 +1407,7 @@ mod tests {
   use crate::session_page::SessionPage;
   use crate::shortcuts::{self, ShortcutId};
   use crate::workspace_onboarding::WorkspaceOnboarding;
-  use gpui::{AppContext as _, Menu, MenuItem, TestAppContext};
+  use gpui::{AppContext as _, Focusable, Menu, MenuItem, TestAppContext};
   use std::path::PathBuf;
 
   fn action_menu_item_names(menu: &Menu) -> Vec<String> {
@@ -1525,6 +1525,82 @@ mod tests {
     cx.simulate_click(toggle.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(page.sidebar_open()));
+  }
+
+  #[gpui::test]
+  async fn every_settings_shortcut_has_a_rendered_action_handler(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      cx.set_global(crate::config::AppSettings {
+        onboarding_done: true,
+        ..Default::default()
+      });
+      cx.set_global(WorkspaceApi::new());
+      cx.set_global(AuthStateStore::default());
+      AuthStateStore::set(cx, AuthState::Unauthenticated);
+      cx.set_global(AppUpdateStore::default());
+      cx.set_global(GithubNotificationsStore::default());
+      cx.set_global(shortcuts::ShortcutOverrides::default());
+    });
+
+    let mut session_page = None;
+    let (_workspace, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|cx| SessionPage::new(window, cx));
+      let onboarding_page = cx.new(|cx| WorkspaceOnboarding::new(page.clone(), window, cx));
+      session_page = Some(page.clone());
+      WorkspaceView {
+        session_page: page,
+        onboarding_page,
+        window_handle: window.window_handle(),
+        _config_watch_task: None,
+        _update_check_task: None,
+        _periodic_update_check_task: None,
+        _notification_poll_task: None,
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        _status_bar_event_task: None,
+        _subscriptions: Vec::new(),
+      }
+    });
+    let page = session_page.expect("session page");
+    cx.run_until_parked();
+
+    let session_focus = page.read_with(cx, |page, cx| page.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&session_focus, cx));
+    cx.run_until_parked();
+
+    let unavailable = cx.update(|window, cx| {
+      shortcuts::shortcut_definitions()
+        .iter()
+        .filter(|definition| {
+          !matches!(
+            definition.id,
+            ShortcutId::CommitChanges | ShortcutId::ToggleSoftWrap
+          )
+        })
+        .filter_map(|definition| {
+          let available = shortcuts::with_shortcut_action(definition.id, |action| {
+            window.is_action_available(action, cx)
+          });
+          (!available).then(|| format!("{} ({})", definition.title, definition.id.storage_key()))
+        })
+        .collect::<Vec<_>>()
+    });
+    assert!(
+      unavailable.is_empty(),
+      "shortcuts without action handlers: {unavailable:?}"
+    );
+
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::OpenGitChangesSidebar), cx));
+    cx.run_until_parked();
+    let commit_available = cx.update(|window, cx| {
+      shortcuts::with_shortcut_action(ShortcutId::CommitChanges, |action| {
+        window.is_action_available(action, cx)
+      })
+    });
+    assert!(
+      commit_available,
+      "Commit Changes is handled only from the changes panel focus path"
+    );
   }
 
   #[test]
