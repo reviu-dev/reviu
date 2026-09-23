@@ -844,7 +844,7 @@ impl SessionPage {
     }
   }
 
-  fn restore_persisted_center_editor(
+  pub(super) fn restore_persisted_center_editor(
     &mut self,
     tab: CenterTab,
     rel_path: PathBuf,
@@ -957,7 +957,7 @@ impl SessionPage {
         })
         .await;
       let _ = this.update(cx, move |this, cx| {
-        if this.synced_checkout.as_deref() != Some(checkout_root.as_path())
+        if this.checkout_root(cx).as_deref() != Some(checkout_root.as_path())
           || !this.center_layout.contains_tab(&tab)
         {
           return;

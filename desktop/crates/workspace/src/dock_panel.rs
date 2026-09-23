@@ -25,6 +25,7 @@ use gpui_component::{
   v_flex,
 };
 
+use crate::center_file_drag::{CenterFileDrag, CenterFileDragMode};
 use crate::changes_list::{
   ChangesList, ChangesListEvent, status_color, status_tooltip, status_uses_warning_icon,
 };
@@ -4340,6 +4341,7 @@ impl DockPanel {
     });
     let root_menu_panel = panel.clone();
     let clear_context_target_panel = panel.clone();
+    let files_tree_state = self.files_tree_state.clone();
 
     v_flex()
       .debug_selector(|| "dock-panel-files-empty-space".to_string())
@@ -4416,8 +4418,13 @@ impl DockPanel {
           } else {
             file_statuses.get(&relative_path).copied()
           };
-          let context_target = FilesContextTarget::entry(relative_path, is_folder);
+          let context_target = FilesContextTarget::entry(relative_path.clone(), is_folder);
           let context_target_panel = panel.clone();
+          let drag_path = relative_path.clone();
+          let click_path = relative_path.clone();
+          let click_panel = panel.clone();
+          let click_tree_state = files_tree_state.clone();
+          let is_draggable_file = !is_folder && !is_internal_placeholder && rename_input.is_none();
 
           let label: AnyElement = if let Some(input) = rename_input {
             if !input.read(cx).focus_handle(cx).is_focused(window) {
@@ -4479,6 +4486,36 @@ impl DockPanel {
                   panel.files_context_menu_target = Some(target);
                 });
               })
+            })
+            .when(is_draggable_file, |this| {
+              this
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |_, window, cx| {
+                  cx.stop_propagation();
+                  click_tree_state.update(cx, |tree, cx| {
+                    tree.set_selected_index(Some(ix), cx);
+                    tree.focus(window, cx);
+                  });
+                  let path = click_path.clone();
+                  let _ = click_panel.update(cx, |panel, cx| {
+                    panel.cancel_inline_rename(cx);
+                    cx.emit(DockPanelEvent::OpenFile {
+                      path,
+                      intent: OpenIntent::Open,
+                      mode: DockPanelOpenFileMode::File,
+                    });
+                  });
+                })
+                .on_drag(
+                  CenterFileDrag {
+                    path: drag_path,
+                    mode: CenterFileDragMode::File,
+                  },
+                  |drag, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                  },
+                )
             })
             .w_full()
             .px_2()
@@ -6474,6 +6511,28 @@ mod tests {
       })
       .detach();
     });
+
+    let first_file = cx.debug_bounds("dock-panel-file-a.txt").expect("file row");
+    cx.simulate_event(gpui::MouseDownEvent {
+      button: gpui::MouseButton::Left,
+      position: first_file.center(),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    assert!(
+      opened.borrow().is_empty(),
+      "holding a file row for drag does not open it"
+    );
+    cx.simulate_event(gpui::MouseUpEvent {
+      button: gpui::MouseButton::Left,
+      position: gpui::point(first_file.right() + px(20.0), first_file.center().y),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+    });
+    cx.run_until_parked();
+    assert!(opened.borrow().is_empty());
 
     // The first down lands on the second row: the tree starts with nothing
     // selected and counts from there.

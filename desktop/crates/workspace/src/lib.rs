@@ -67,6 +67,7 @@ mod browser_extensions_dialog;
 mod command_usage;
 mod dock_badge;
 
+mod center_file_drag;
 mod changes_list;
 mod config;
 mod config_file;

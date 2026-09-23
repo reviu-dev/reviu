@@ -4,6 +4,7 @@ use super::center_layout::{CenterDropTarget, CenterLayout, CenterNode, CenterPan
 use super::*;
 #[cfg(test)]
 use crate::annotations::AnnotationKind;
+use crate::center_file_drag::{CenterFileDrag, CenterFileDragMode};
 use crate::diff_toolbar::{DIFF_TOOLBAR_HEIGHT, DiffToolbar, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
 use gpui_component::{
@@ -1693,6 +1694,28 @@ impl SessionPage {
           }
         },
       ))
+      .on_drag_move(cx.listener(
+        move |this, event: &gpui::DragMoveEvent<CenterFileDrag>, _, cx| {
+          if !Self::center_drag_event_contains_pointer(event) {
+            return;
+          }
+          this.center_tab_drop_target = None;
+          let previous_direction = this
+            .center_drag_target
+            .filter(|target| target.pane_id == pane_id)
+            .and_then(|target| target.direction);
+          let target = Self::center_drop_direction(event, previous_direction).map(|direction| {
+            CenterDropTarget {
+              pane_id,
+              direction: Some(direction),
+            }
+          });
+          if this.center_drag_target != target {
+            this.center_drag_target = target;
+            cx.notify();
+          }
+        },
+      ))
       .on_drop(
         cx.listener(move |this, drag: &DraggedCenterTab, window, cx| {
           if this
@@ -1704,12 +1727,20 @@ impl SessionPage {
           }
         }),
       )
+      .on_drop(cx.listener(move |this, drag: &CenterFileDrag, window, cx| {
+        if this
+          .center_drag_target
+          .is_some_and(|target| target.pane_id == pane_id)
+        {
+          this.drop_center_file(drag.clone(), window, cx);
+        }
+      }))
       .child(view)
       .child(self.render_center_drop_overlay(pane_id, cx))
       .into_any_element()
   }
 
-  fn center_drag_event_contains_pointer(event: &gpui::DragMoveEvent<DraggedCenterTab>) -> bool {
+  fn center_drag_event_contains_pointer<T>(event: &gpui::DragMoveEvent<T>) -> bool {
     let tolerance = px(CENTER_DROP_POINTER_TOLERANCE_PX);
     event.event.position.x >= event.bounds.left() - tolerance
       && event.event.position.x <= event.bounds.right() + tolerance
@@ -1717,8 +1748,8 @@ impl SessionPage {
       && event.event.position.y <= event.bounds.bottom() + tolerance
   }
 
-  fn center_drop_direction(
-    event: &gpui::DragMoveEvent<DraggedCenterTab>,
+  fn center_drop_direction<T>(
+    event: &gpui::DragMoveEvent<T>,
     previous_direction: Option<CenterSplitDirection>,
   ) -> Option<CenterSplitDirection> {
     let width = f32::from(event.bounds.size.width);
@@ -1825,6 +1856,7 @@ impl SessionPage {
       .bg(background)
       .shadow_lg()
       .group_drag_over::<DraggedCenterTab>(CENTER_DROP_GROUP, |this| this.visible())
+      .group_drag_over::<CenterFileDrag>(CENTER_DROP_GROUP, |this| this.visible())
       .map(|this| match direction {
         CenterSplitDirection::Up => this.top(inset).left(inset).right(inset).h(half),
         CenterSplitDirection::Down => this.left(inset).bottom(inset).right(inset).h(half),
@@ -1842,6 +1874,14 @@ impl SessionPage {
           }
         }),
       )
+      .on_drop(cx.listener(move |this, drag: &CenterFileDrag, window, cx| {
+        if this
+          .center_drag_target
+          .is_some_and(|target| target.pane_id == pane_id)
+        {
+          this.drop_center_file(drag.clone(), window, cx);
+        }
+      }))
       .into_any_element()
   }
 
@@ -1912,6 +1952,80 @@ impl SessionPage {
     }
 
     self.activate_center_tab(tab, OpenIntent::Open, window, cx);
+  }
+
+  fn drop_center_file(
+    &mut self,
+    drag: CenterFileDrag,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(target) = self.center_drag_target.take() else {
+      cx.notify();
+      return;
+    };
+    let Some(direction) = target.direction else {
+      cx.notify();
+      return;
+    };
+    let Some(repo_root) = self.checkout_root(cx) else {
+      cx.notify();
+      return;
+    };
+
+    let tab = match drag.mode {
+      CenterFileDragMode::File => CenterTab::file(drag.path.clone()),
+      CenterFileDragMode::Diff => CenterTab::diff(drag.path.clone()),
+    };
+    let representative = self
+      .active_center_tab
+      .clone()
+      .unwrap_or_else(|| tab.clone());
+    self.show_preview = false;
+    let app_settings = crate::config::AppSettings::get(cx);
+    self.diff_view = if app_settings.split_diff_view {
+      DiffViewMode::Split
+    } else {
+      DiffViewMode::Inline
+    };
+    if self.warm_selected_file().is_none() {
+      self.hide_whitespace = app_settings.hide_whitespace;
+    }
+
+    let changed = self.center_layout.split_pane(
+      target.pane_id,
+      CenterSurface::from_tab(tab.clone()),
+      direction,
+    );
+    if !changed {
+      self.activate_center_tab(tab, OpenIntent::Open, window, cx);
+      return;
+    }
+
+    self.center = CenterView::Diff;
+    self.diff_chat_open = false;
+    self.editor_tab = Some(tab.clone());
+    self.sync_agent_chat_close_control(cx);
+    self.record_recent_file(&repo_root, &drag.path);
+    self.remember_center_layout_tab(representative);
+    self.reveal_center_tab_in_files_panel(&tab, cx);
+    if !self.editor_states.contains_key(&tab) {
+      self.restore_persisted_center_editor(tab.clone(), drag.path.clone(), repo_root, cx);
+    }
+    if drag.mode == CenterFileDragMode::Diff {
+      self
+        .dock_panel
+        .read(cx)
+        .changes_list()
+        .update(cx, |list, cx| {
+          list.select_path(Some(drag.path.as_path()), cx);
+        });
+    }
+    self.sync_editor_unmerged_state(cx);
+    self.sync_git_telemetry(cx);
+    self.focus_editor_on_next_frame(window, cx);
+    self.persist_current_center_workspace(cx);
+    cx.notify();
   }
 
   fn center_drag_layout_for_tab(&self, tab: &CenterTab) -> Option<(CenterTab, CenterLayout)> {
@@ -3109,6 +3223,19 @@ mod tests {
         Some("WorkspaceSession"),
       )]);
     });
+  }
+
+  async fn await_shown_editor(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
+    for _ in 0..10 {
+      cx.run_until_parked();
+      if page.read_with(cx, |page, _| page.shown_editor().is_some()) {
+        return;
+      }
+      cx.background_executor
+        .timer(std::time::Duration::from_millis(10))
+        .await;
+    }
+    cx.run_until_parked();
   }
 
   fn bind_terminal_search_shortcuts(cx: &mut gpui::VisualTestContext) {
@@ -8274,6 +8401,91 @@ mod tests {
       assert_eq!(page.active_center_tab.as_ref(), Some(&analytics));
       assert!(page.center_layout.contains_tab(&analytics));
       assert!(page.center_layout.contains_tab(&first_chat_tab));
+    });
+  }
+
+  #[gpui::test]
+  async fn dropping_a_files_panel_file_to_a_center_edge_opens_code_in_a_split(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-center-file-drop-file");
+    commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      let pane_id = pane.id();
+      page.center_drag_target = Some(CenterDropTarget {
+        pane_id,
+        direction: Some(CenterSplitDirection::Right),
+      });
+      page.drop_center_file(
+        CenterFileDrag {
+          path: PathBuf::from("README.md"),
+          mode: CenterFileDragMode::File,
+        },
+        window,
+        cx,
+      );
+    });
+    await_shown_editor(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.center_layout.surface_count(), 2);
+      assert!(page.center_layout.contains_tab(&CenterTab::chat()));
+      assert!(
+        page
+          .center_layout
+          .contains_tab(&CenterTab::file(PathBuf::from("README.md")))
+      );
+      assert_eq!(page.center_layout.active_tab().kind, CenterTabKind::File);
+      assert!(page.shown_editor().is_some());
+    });
+  }
+
+  #[gpui::test]
+  async fn dropping_a_changes_file_to_a_center_edge_opens_diff_in_a_split(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-file-drop-diff");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      let pane_id = pane.id();
+      page.center_drag_target = Some(CenterDropTarget {
+        pane_id,
+        direction: Some(CenterSplitDirection::Right),
+      });
+      page.drop_center_file(
+        CenterFileDrag {
+          path: PathBuf::from("README.md"),
+          mode: CenterFileDragMode::Diff,
+        },
+        window,
+        cx,
+      );
+    });
+    await_shown_editor(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.center_layout.surface_count(), 2);
+      assert!(page.center_layout.contains_tab(&CenterTab::chat()));
+      assert!(
+        page
+          .center_layout
+          .contains_tab(&CenterTab::diff(PathBuf::from("README.md")))
+      );
+      assert_eq!(page.center_layout.active_tab().kind, CenterTabKind::Diff);
+      assert!(page.shown_editor().is_some());
     });
   }
 

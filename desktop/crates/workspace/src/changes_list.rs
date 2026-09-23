@@ -25,6 +25,7 @@ use ui::{
   file_icon_path_for_path_with_theme, selectable_list_item,
 };
 
+use crate::center_file_drag::{CenterFileDrag, CenterFileDragMode};
 use crate::open_intent::OpenIntent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -626,6 +627,7 @@ impl ListDelegate for ChangesRowsDelegate {
       toggle,
       restorable,
     };
+    let drag_path = path.clone();
     Some(
       base
         .on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
@@ -634,6 +636,16 @@ impl ListDelegate for ChangesRowsDelegate {
             list.context_menu_target = Some(target);
           });
         })
+        .on_drag(
+          CenterFileDrag {
+            path: drag_path,
+            mode: CenterFileDragMode::Diff,
+          },
+          |drag, _, _, cx| {
+            cx.stop_propagation();
+            cx.new(|_| drag.clone())
+          },
+        )
         .px_2()
         .py_1()
         .child(row_content),
