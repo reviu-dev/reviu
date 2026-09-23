@@ -163,6 +163,9 @@ pub enum SessionListEvent {
     project_root: PathBuf,
     checkout_root: PathBuf,
   },
+  DeleteWorktree {
+    worktree_path: PathBuf,
+  },
   RevealProject {
     project_root: PathBuf,
   },
@@ -955,6 +958,8 @@ impl SessionList {
     };
     let checkout_repo = repo_root.to_path_buf();
     let checkout_root = row.path.clone();
+    let deletable_worktree = matches!(row.kind, CheckoutKind::Worktree { .. })
+      .then(|| (row.path.clone(), cx.entity().downgrade()));
     let icon = match row.kind {
       CheckoutKind::Main if !self.git_repositories.contains(repo_root) => {
         Icon::new(gpui_component::IconName::FolderOpen)
@@ -991,7 +996,7 @@ impl SessionList {
       })
     });
 
-    selectable_list_item(
+    let row = selectable_list_item(
       SharedString::from(selector.clone()),
       active,
       SelectableRowStyle::Inset,
@@ -1062,8 +1067,26 @@ impl SessionList {
               }),
           )
         }),
-    )
-    .into_any_element()
+    );
+    let Some((worktree_path, entity)) = deletable_worktree else {
+      return row.into_any_element();
+    };
+    row
+      .context_menu(move |menu, _, _| {
+        let worktree_path = worktree_path.clone();
+        let entity = entity.clone();
+        menu.item(
+          PopupMenuItem::new("Delete worktree")
+            .icon(UiIconName::Trash)
+            .on_click(move |_, _, cx| {
+              let worktree_path = worktree_path.clone();
+              let _ = entity.update(cx, |_, cx| {
+                cx.emit(SessionListEvent::DeleteWorktree { worktree_path });
+              });
+            }),
+        )
+      })
+      .into_any_element()
   }
 
   fn render_project_menu_button(
@@ -2088,6 +2111,58 @@ mod tests {
       starts.borrow().as_slice(),
       &[(PathBuf::from("/repo"), None)]
     );
+  }
+
+  #[gpui::test]
+  async fn worktree_context_menu_asks_to_delete_that_worktree(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let repo = PathBuf::from("/repo");
+    let worktree_path = PathBuf::from("/repo/.worktrees/feature-sidebar");
+
+    list.update(cx, |list, cx| {
+      list.set_project_order(vec![repo.clone()], cx);
+      list.set_git_repositories(HashSet::from([repo.clone()]), cx);
+      let mut worktree = meta("worktree-chat", 1);
+      worktree.project_root = repo.clone();
+      list.set_conversations(vec![worktree], "worktree-chat".into(), cx);
+      list.set_worktree_checkouts(
+        HashMap::from([(
+          "worktree-chat".to_string(),
+          worktree_binding("/repo/.worktrees/feature-sidebar", "feature-sidebar"),
+        )]),
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let deletes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = deletes.clone();
+    let observer = cx.update(|_, cx| {
+      cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
+        if let SessionListEvent::DeleteWorktree { worktree_path } = event {
+          seen.borrow_mut().push(worktree_path.clone());
+        }
+      })
+    });
+
+    open_project_context_menu(cx, "session-checkout-main-/repo");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    assert!(
+      deletes.borrow().is_empty(),
+      "the main checkout is never deletable"
+    );
+
+    open_project_context_menu(cx, "session-checkout-worktree-/repo-feature-sidebar");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(deletes.borrow().as_slice(), &[worktree_path]);
   }
 
   #[gpui::test]

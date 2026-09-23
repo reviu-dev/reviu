@@ -1836,6 +1836,10 @@ impl SessionPage {
   }
 
   pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(binding) = self.conversation_hub.worktree_checkouts(cx).remove(id) {
+      self.confirm_delete_worktree(vec![id.to_string()], binding, window, cx);
+      return;
+    }
     let status = self
       .session_statuses(cx)
       .get(id)
@@ -1877,6 +1881,88 @@ impl SessionPage {
         })
         .build(alert)
     });
+  }
+
+  pub(super) fn delete_worktree(
+    &mut self,
+    worktree_path: &Path,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let bound: Vec<(String, agent_chat_panel::WorktreeBinding)> = self
+      .conversation_hub
+      .worktree_checkouts(cx)
+      .into_iter()
+      .filter(|(_, binding)| binding.path == worktree_path)
+      .collect();
+    let Some(binding) = bound.first().map(|(_, binding)| binding.clone()) else {
+      return;
+    };
+    let ids = bound.into_iter().map(|(id, _)| id).collect();
+    self.confirm_delete_worktree(ids, binding, window, cx);
+  }
+
+  /// Removing a worktree is forced and takes its `reviu-` branch along, so
+  /// the prompt spells out what would be lost before anything happens.
+  fn confirm_delete_worktree(
+    &mut self,
+    ids: Vec<String>,
+    binding: agent_chat_panel::WorktreeBinding,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    use app_log::ResultExt as _;
+
+    let statuses = self.session_statuses(cx);
+    let running_ids: Vec<String> = ids
+      .iter()
+      .filter(|id| {
+        matches!(
+          statuses.get(*id).copied().unwrap_or_default(),
+          SessionStatus::Working | SessionStatus::Waiting
+        )
+      })
+      .cloned()
+      .collect();
+    let losses_path = binding.path.clone();
+    cx.spawn_in(window, async move |this, cx| {
+      let losses = cx
+        .background_spawn(async move { git::worktree_removal_losses(&losses_path) })
+        .await
+        .log_err_context("reading what the worktree removal would lose");
+      let _ = this.update_in(cx, |_, window, cx| {
+        let message =
+          delete_worktree_message(&binding.branch, ids.len(), losses, !running_ids.is_empty());
+        let confirm_text = if running_ids.is_empty() {
+          "Delete"
+        } else {
+          "Stop and Delete"
+        };
+        let view = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+          let view = view.clone();
+          let ids = ids.clone();
+          let running_ids = running_ids.clone();
+          ConfirmDialog::new("Delete chat and worktree?", div().child(message.clone()))
+            .confirm_text(confirm_text)
+            .cancel_text("Cancel")
+            .destructive()
+            .on_confirm(move |_, window, cx| {
+              view.update(cx, |this, cx| {
+                for id in &running_ids {
+                  this.stop_session_process(id, cx);
+                }
+                for id in &ids {
+                  this.delete_session_confirmed(id, window, cx);
+                }
+              });
+              true
+            })
+            .build(alert)
+        });
+      });
+    })
+    .detach();
   }
 
   fn stop_session_process(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2208,6 +2294,52 @@ impl SessionPage {
         .background_chat_panels
         .iter()
         .any(|(_, panel)| panel.read(cx).is_turn_in_flight())
+  }
+}
+
+/// `losses` is `None` when git could not tell, which must still read as a
+/// warning rather than as "nothing to lose".
+fn delete_worktree_message(
+  branch: &str,
+  chat_count: usize,
+  losses: Option<git::WorktreeRemovalLosses>,
+  running: bool,
+) -> String {
+  let chats = if chat_count > 1 {
+    format!("its {chat_count} chats")
+  } else {
+    "its chat".to_string()
+  };
+  let mut message = format!("The worktree {branch} and {chats} will be deleted.");
+  match losses {
+    Some(losses) if losses.is_empty() => {}
+    Some(losses) => {
+      let mut lost = Vec::new();
+      if losses.uncommitted_files > 0 {
+        lost.push(plural(losses.uncommitted_files, "uncommitted file"));
+      }
+      if losses.unshared_commits > 0 {
+        lost.push(format!(
+          "{} on no other branch",
+          plural(losses.unshared_commits, "commit")
+        ));
+      }
+      message.push_str(&format!(" {} will be lost.", lost.join(" and ")));
+    }
+    None => message.push_str(" Any uncommitted changes in it will be lost."),
+  }
+  if running {
+    message.push_str(" The agent is still working and will be stopped.");
+  }
+  message.push_str(" This cannot be undone.");
+  message
+}
+
+fn plural(count: usize, noun: &str) -> String {
+  if count == 1 {
+    format!("{count} {noun}")
+  } else {
+    format!("{count} {noun}s")
   }
 }
 
@@ -4089,6 +4221,15 @@ mod tests {
       page.delete_session(&conversation_id, window, cx)
     });
     cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "a worktree is never deleted without asking"
+    );
+    assert!(cwd.exists());
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
 
     assert!(!cwd.exists(), "the worktree went with the session");
     assert!(
@@ -4104,6 +4245,99 @@ mod tests {
     });
 
     cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn deleting_a_worktree_from_the_sidebar_asks_then_removes_it_with_its_chat(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-sidebar-worktree-delete", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
+    });
+    cx.run_until_parked();
+    let panel = active_panel(&page, cx);
+    panel.update(cx, |panel, cx| panel.seed_user_message_for_test("work", cx));
+    cx.run_until_parked();
+    let (conversation_id, cwd) = panel.read_with(cx, |panel, _| {
+      (
+        panel.current_conversation().id.clone(),
+        panel.cwd().to_path_buf(),
+      )
+    });
+    std::fs::write(cwd.join("wip.txt"), "half done").expect("dirty the worktree");
+
+    page.update_in(cx, |page, window, cx| {
+      page.delete_worktree(&cwd, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cwd.join("wip.txt").exists(), "cancel keeps the work");
+    page.read_with(cx, |page, cx| {
+      assert!(page.conversation_meta(&conversation_id, cx).is_some());
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.delete_worktree(&cwd, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert!(!cwd.exists(), "the worktree is gone");
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page.conversation_meta(&conversation_id, cx).is_none(),
+        "its chat went with it"
+      );
+      assert!(
+        !page
+          .session_list
+          .read(cx)
+          .conversation_ids()
+          .contains(&conversation_id)
+      );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn delete_worktree_message_names_what_would_be_lost() {
+    assert_eq!(
+      delete_worktree_message(
+        "reviu-fix",
+        1,
+        Some(git::WorktreeRemovalLosses::default()),
+        false
+      ),
+      "The worktree reviu-fix and its chat will be deleted. This cannot be undone."
+    );
+    assert_eq!(
+      delete_worktree_message(
+        "reviu-fix",
+        1,
+        Some(git::WorktreeRemovalLosses {
+          uncommitted_files: 3,
+          unshared_commits: 1,
+        }),
+        true
+      ),
+      "The worktree reviu-fix and its chat will be deleted. 3 uncommitted files and 1 commit \
+       on no other branch will be lost. The agent is still working and will be stopped. This \
+       cannot be undone."
+    );
+    assert_eq!(
+      delete_worktree_message("reviu-fix", 2, None, false),
+      "The worktree reviu-fix and its 2 chats will be deleted. Any uncommitted changes in it \
+       will be lost. This cannot be undone."
+    );
   }
 
   #[gpui::test]
@@ -4826,7 +5060,7 @@ mod tests {
       panel.seed_user_message_for_test("Fix the scroll jump", cx)
     });
     page.update_in(cx, |page, window, cx| {
-      page.delete_session(&conversation_id, window, cx)
+      page.delete_session_confirmed(&conversation_id, window, cx)
     });
     cx.run_until_parked();
 

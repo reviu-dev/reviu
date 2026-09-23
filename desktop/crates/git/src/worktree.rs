@@ -176,6 +176,44 @@ pub fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
   Ok(())
 }
 
+/// What [`remove_worktree`] would destroy for good.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorktreeRemovalLosses {
+  pub uncommitted_files: usize,
+  /// Commits reachable from no other branch, tag or remote: they go with the
+  /// `reviu-` branch (or the detached HEAD). Zero on a user-owned branch,
+  /// which removal keeps.
+  pub unshared_commits: usize,
+}
+
+impl WorktreeRemovalLosses {
+  pub fn is_empty(&self) -> bool {
+    self.uncommitted_files == 0 && self.unshared_commits == 0
+  }
+}
+
+pub fn worktree_removal_losses(worktree_path: &Path) -> Result<WorktreeRemovalLosses> {
+  let uncommitted_files = crate::list_repo_status(worktree_path)?.len();
+  let branch = worktree_current_branch(worktree_path);
+  let unshared_commits = match branch.as_deref() {
+    Some(branch) if !branch.starts_with(WORKTREE_BRANCH_PREFIX) => 0,
+    _ => {
+      let exclude = branch.map(|branch| format!("--exclude={branch}"));
+      let mut args = vec!["rev-list", "--count", "HEAD", "--not"];
+      // `--exclude` only filters the `--branches` right after it.
+      args.extend(exclude.as_deref());
+      args.extend(["--branches", "--tags", "--remotes"]);
+      run_git(worktree_path, &args, &[])?
+        .parse()
+        .context("parse the unshared commit count")?
+    }
+  };
+  Ok(WorktreeRemovalLosses {
+    uncommitted_files,
+    unshared_commits,
+  })
+}
+
 /// Whether `path` is a linked worktree whose main checkout is `repo_root`.
 /// Two proofs accepted: the `.git` file points back at the repository, or the
 /// repository's own worktree registry lists the path (covers a worktree whose
@@ -590,6 +628,62 @@ mod tests {
         .find_branch(&created.branch, BranchType::Local)
         .is_err(),
       "the reviu- branch went with the worktree"
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn removal_losses_count_uncommitted_files_and_commits_on_no_other_branch() {
+    let repo = TempRepo::init("worktree-losses");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+
+    assert!(
+      worktree_removal_losses(&created.path)
+        .expect("fresh losses")
+        .is_empty(),
+      "a fresh worktree loses nothing"
+    );
+
+    commit_text_file(&created.path, Path::new("a.txt"), "a\n", "agent work 1");
+    commit_text_file(&created.path, Path::new("b.txt"), "b\n", "agent work 2");
+    std::fs::write(created.path.join("wip.txt"), "half done").expect("untracked file");
+    std::fs::write(created.path.join("README.md"), "v2\n").expect("modified file");
+
+    assert_eq!(
+      worktree_removal_losses(&created.path).expect("losses"),
+      WorktreeRemovalLosses {
+        uncommitted_files: 2,
+        unshared_commits: 2,
+      }
+    );
+
+    // Merged into another branch: the commits survive the branch deletion.
+    git(&repo.path, &["branch", "kept", &created.branch]);
+    assert_eq!(
+      worktree_removal_losses(&created.path)
+        .expect("losses after merge")
+        .unshared_commits,
+      0
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn removal_losses_ignore_commits_on_a_branch_the_user_keeps() {
+    let repo = TempRepo::init("worktree-losses-user-branch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+    git(&created.path, &["switch", "-c", "my-own-work"]);
+    commit_text_file(&created.path, Path::new("a.txt"), "a\n", "user work");
+
+    assert!(
+      worktree_removal_losses(&created.path)
+        .expect("losses")
+        .is_empty(),
+      "removal keeps a user branch, so its commits are not lost"
     );
 
     cleanup_worktrees_root(&repo.path);

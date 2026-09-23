@@ -470,6 +470,9 @@ impl SessionPage {
             window.push_notification(Notification::warning(error), cx);
           }
         }
+        SessionListEvent::DeleteWorktree { worktree_path } => {
+          this.delete_worktree(worktree_path, window, cx)
+        }
         SessionListEvent::RevealProject { project_root } => cx.reveal_path(project_root),
         SessionListEvent::CopyProjectPath { project_root } => {
           cx.write_to_clipboard(ClipboardItem::new_string(

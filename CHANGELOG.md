@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.4.0
 
+### Safer Worktree Deletion
+
+Right-click a worktree in the sidebar to delete it along with its chat. Deleting a worktree, from the sidebar or through its chat, now always asks first, and the prompt shows how many uncommitted files and commits on no other branch would be lost.
+
 ### Fresher Pull Counters
 
 Reviu now refreshes remote tracking information in the background and lets the pull counter check for updates even when it currently shows zero, so incoming commits appear without changing your working tree.
