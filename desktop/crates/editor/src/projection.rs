@@ -43,6 +43,20 @@ pub enum ReviewCommentBackground {
   Removed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewCommentDiffHunkLineKind {
+  Context,
+  Added,
+  Removed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewCommentDiffHunkLine {
+  pub line_number: Option<usize>,
+  pub content: Arc<str>,
+  pub kind: ReviewCommentDiffHunkLineKind,
+}
+
 #[derive(Clone, Debug)]
 pub struct ReviewComment {
   pub id: u64,
@@ -54,6 +68,7 @@ pub struct ReviewComment {
   pub line_label: Option<Arc<str>>,
   pub body: Arc<str>,
   pub suggestion_context: Option<SuggestionContext>,
+  pub outdated_diff_hunk: Option<Arc<[ReviewCommentDiffHunkLine]>>,
   pub created_at: Arc<str>,
   pub thread_id: Option<Arc<str>>,
   pub is_resolved: bool,
@@ -1096,6 +1111,13 @@ fn estimated_expanded_thread_height_px(
     total_px += layout.editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
     total_px += REVIEW_COMMENT_SPACING_PX;
   }
+  if let Some(diff_hunk) = first_message.outdated_diff_hunk.as_ref()
+    && !diff_hunk.is_empty()
+  {
+    total_px += REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
+    total_px += layout.editor_line_height_px * diff_hunk.len() as f32;
+    total_px += REVIEW_COMMENT_SPACING_PX;
+  }
   total_px += body_height_px(first_message);
 
   for reply in thread_comments.iter().skip(1) {
@@ -2049,6 +2071,7 @@ mod tests {
       is_outdated: false,
       viewer_can_resolve: false,
       viewer_can_unresolve: false,
+      outdated_diff_hunk: None,
       is_pending: false,
     }
   }
@@ -2437,6 +2460,46 @@ mod tests {
     let reserved = count_review_comment_lines(&projection, comment.id);
 
     assert_eq!(reserved, REVIEW_COMMENT_COLLAPSED_LINES);
+  }
+
+  #[test]
+  fn review_comment_expanded_reservation_grows_with_outdated_diff_hunk() {
+    let base_projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
+
+    let without_hunk = review_comment(49, "body");
+    let mut with_hunk = review_comment(50, "body");
+    with_hunk.outdated_diff_hunk = Some(Arc::from([
+      ReviewCommentDiffHunkLine {
+        line_number: Some(1),
+        content: Arc::from("line 1"),
+        kind: ReviewCommentDiffHunkLineKind::Context,
+      },
+      ReviewCommentDiffHunkLine {
+        line_number: Some(2),
+        content: Arc::from("old line"),
+        kind: ReviewCommentDiffHunkLineKind::Removed,
+      },
+      ReviewCommentDiffHunkLine {
+        line_number: Some(2),
+        content: Arc::from("new line"),
+        kind: ReviewCommentDiffHunkLineKind::Added,
+      },
+    ]));
+    let body_heights = HashMap::from([(without_hunk.id, 20.0f32), (with_hunk.id, 20.0f32)]);
+
+    let short_projection = base_projection.clone().with_review_comments(
+      std::slice::from_ref(&without_hunk),
+      &layout_input(&HashSet::new(), &body_heights, &HashSet::new()),
+    );
+    let hunk_projection = base_projection.with_review_comments(
+      std::slice::from_ref(&with_hunk),
+      &layout_input(&HashSet::new(), &body_heights, &HashSet::new()),
+    );
+
+    assert!(
+      count_review_comment_lines(&hunk_projection, with_hunk.id)
+        > count_review_comment_lines(&short_projection, without_hunk.id)
+    );
   }
 
   #[test]

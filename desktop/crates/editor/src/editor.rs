@@ -60,7 +60,8 @@ use crate::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
     ProjectionBlockMap, REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_PADDING_X_PX,
     REVIEW_COMMENT_HEADER_HEIGHT_LINES, REVIEW_COMMENT_REPLY_BORDER_TOP_PX,
-    REVIEW_COMMENT_SPACING_PX, ReviewComment, ReviewCommentLayoutInput, ReviewCommentSide,
+    REVIEW_COMMENT_SPACING_PX, ReviewComment, ReviewCommentDiffHunkLine,
+    ReviewCommentDiffHunkLineKind, ReviewCommentLayoutInput, ReviewCommentSide,
     review_comment_shows_header,
   },
   scrollbar_element::EditorScrollbarElement,
@@ -1053,6 +1054,7 @@ struct ReviewCommentMessageLayout {
   line_label: Option<Arc<str>>,
   body: Arc<str>,
   suggestion_context: Option<gfm_markdown_viewer::SuggestionContext>,
+  outdated_diff_hunk: Option<Arc<[ReviewCommentDiffHunkLine]>>,
   created_at: Arc<str>,
   thread_id: Option<Arc<str>>,
   is_resolved: bool,
@@ -5274,6 +5276,7 @@ impl Editor {
           line_label: comment.line_label.clone(),
           body: comment.body.clone(),
           suggestion_context: comment.suggestion_context.clone(),
+          outdated_diff_hunk: comment.outdated_diff_hunk.clone(),
           created_at: comment.created_at.clone(),
           thread_id: comment.thread_id.clone(),
           is_resolved: comment.is_resolved,
@@ -5347,6 +5350,7 @@ impl Editor {
           line_label: comment.line_label.clone(),
           body: comment.body.clone(),
           suggestion_context: comment.suggestion_context.clone(),
+          outdated_diff_hunk: comment.outdated_diff_hunk.clone(),
           created_at: comment.created_at.clone(),
           thread_id: comment.thread_id.clone(),
           is_resolved: comment.is_resolved,
@@ -5378,6 +5382,70 @@ impl Editor {
         comment_id
       ))
       .child(render_github_code_reference_preview_card(&preview, cx))
+      .into_any_element()
+  }
+
+  fn render_review_comment_outdated_diff_hunk(
+    lines: &[ReviewCommentDiffHunkLine],
+    row_height: Pixels,
+    theme: &gpui_component::Theme,
+  ) -> gpui::AnyElement {
+    let line_number_width = lines
+      .iter()
+      .filter_map(|line| line.line_number)
+      .max()
+      .map(|line| ((line.to_string().len() as f32) * 7.0).max(24.0))
+      .unwrap_or(24.0);
+    let gutter_width = line_number_width + 12.0;
+    let mut rows = v_flex().w_full().overflow_hidden();
+
+    for line in lines {
+      let background = match line.kind {
+        ReviewCommentDiffHunkLineKind::Context => theme.sidebar,
+        ReviewCommentDiffHunkLineKind::Added => theme.status_green().opacity(0.12),
+        ReviewCommentDiffHunkLineKind::Removed => theme.status_red().opacity(0.12),
+      };
+
+      rows = rows.child(
+        h_flex()
+          .items_center()
+          .h(row_height)
+          .bg(background)
+          .child(
+            div()
+              .w(px(gutter_width))
+              .px_2()
+              .text_right()
+              .text_xs()
+              .font_family(theme.mono_font_family.clone())
+              .text_color(theme.muted_foreground)
+              .child(
+                line
+                  .line_number
+                  .map(|line| line.to_string())
+                  .unwrap_or_default(),
+              ),
+          )
+          .child(
+            div()
+              .flex_1()
+              .min_w_0()
+              .font_family(theme.mono_font_family.clone())
+              .text_xs()
+              .whitespace_nowrap()
+              .text_color(theme.foreground)
+              .child(line.content.as_ref().to_string()),
+          ),
+      );
+    }
+
+    div()
+      .w_full()
+      .overflow_x_hidden()
+      .rounded_md()
+      .border_1()
+      .border_color(theme.border)
+      .child(rows)
       .into_any_element()
   }
 
@@ -6126,10 +6194,19 @@ impl Editor {
         };
 
         let message_block = if index == 0 {
+          let outdated_diff_hunk = message
+            .outdated_diff_hunk
+            .as_ref()
+            .filter(|lines| !lines.is_empty())
+            .map(|lines| {
+              Self::render_review_comment_outdated_diff_hunk(lines, line_height, &theme)
+            });
           v_flex()
+            .gap(px(REVIEW_COMMENT_SPACING_PX))
             .when(reserve_floating_actions_room, |this| {
               this.pr(px(REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX))
             })
+            .when_some(outdated_diff_hunk, |this, hunk| this.child(hunk))
             .child(body)
         } else {
           let message_line_label: Option<Arc<str>> = None;
@@ -7195,6 +7272,7 @@ impl Editor {
         line_label: None,
         body: Arc::from(""),
         suggestion_context: None,
+        outdated_diff_hunk: None,
         created_at: Arc::from(""),
         thread_id: None,
         is_resolved: false,
@@ -7220,6 +7298,7 @@ impl Editor {
         line_label: None,
         body: Arc::from(""),
         suggestion_context: None,
+        outdated_diff_hunk: None,
         created_at: Arc::from(""),
         thread_id: None,
         is_resolved: false,
@@ -12364,6 +12443,7 @@ pub mod tests {
           line_label: None,
           body: Arc::from("hello"),
           suggestion_context: None,
+          outdated_diff_hunk: None,
           created_at: Arc::from("2026-02-17"),
           thread_id: None,
           is_resolved: false,
@@ -12463,6 +12543,7 @@ pub mod tests {
       line_label: None,
       body: Arc::from("extract this"),
       suggestion_context: None,
+      outdated_diff_hunk: None,
       created_at: Arc::from(""),
       thread_id: None,
       is_resolved: false,
@@ -12566,6 +12647,7 @@ pub mod tests {
             line_label: None,
             body: Arc::from("thread one"),
             suggestion_context: None,
+            outdated_diff_hunk: None,
             created_at: Arc::from("2026-02-18"),
             thread_id: None,
             is_resolved: false,
@@ -12584,6 +12666,7 @@ pub mod tests {
             line_label: None,
             body: Arc::from("thread one reply"),
             suggestion_context: None,
+            outdated_diff_hunk: None,
             created_at: Arc::from("2026-02-18"),
             thread_id: None,
             is_resolved: false,
@@ -12602,6 +12685,7 @@ pub mod tests {
             line_label: None,
             body: Arc::from("thread two"),
             suggestion_context: None,
+            outdated_diff_hunk: None,
             created_at: Arc::from("2026-02-18"),
             thread_id: None,
             is_resolved: false,
@@ -12631,6 +12715,7 @@ pub mod tests {
             line_label: None,
             body: Arc::from("thread one updated"),
             suggestion_context: None,
+            outdated_diff_hunk: None,
             created_at: Arc::from("2026-02-18"),
             thread_id: None,
             is_resolved: false,
@@ -12649,6 +12734,7 @@ pub mod tests {
             line_label: None,
             body: Arc::from("thread one reply"),
             suggestion_context: None,
+            outdated_diff_hunk: None,
             created_at: Arc::from("2026-02-18"),
             thread_id: None,
             is_resolved: false,
@@ -12667,6 +12753,7 @@ pub mod tests {
             line_label: None,
             body: Arc::from("thread two"),
             suggestion_context: None,
+            outdated_diff_hunk: None,
             created_at: Arc::from("2026-02-18"),
             thread_id: None,
             is_resolved: false,
@@ -12696,6 +12783,7 @@ pub mod tests {
       line_label: None,
       body: Arc::from("body"),
       suggestion_context: None,
+      outdated_diff_hunk: None,
       created_at: Arc::from("2026-02-18"),
       thread_id: Some(Arc::from("thread-1")),
       is_resolved: resolved,

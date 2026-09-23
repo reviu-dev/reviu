@@ -6,7 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use editor::{ReviewComment, ReviewCommentCreateRequest, ReviewCommentMode, ReviewCommentSide};
+use editor::{
+  ReviewComment, ReviewCommentCreateRequest, ReviewCommentDiffHunkLine,
+  ReviewCommentDiffHunkLineKind, ReviewCommentMode, ReviewCommentSide,
+};
 use gfm_markdown_viewer::SuggestionContext;
 
 use crate::api::GithubPullRequestReviewComment;
@@ -281,6 +284,72 @@ fn suggestion_context(comment: &GithubPullRequestReviewComment) -> Option<Sugges
   })
 }
 
+const OUTDATED_DIFF_HUNK_CONTEXT_BEFORE_LINES: i64 = 3;
+
+fn outdated_diff_hunk(
+  comment: &GithubPullRequestReviewComment,
+) -> Option<Arc<[ReviewCommentDiffHunkLine]>> {
+  if !comment.is_outdated || comment.in_reply_to_id.is_some() {
+    return None;
+  }
+
+  let target_end = comment
+    .original_line
+    .or(comment.line)
+    .or(comment.original_start_line)
+    .or(comment.start_line)?;
+  if target_end <= 0 {
+    return None;
+  }
+  let target_start = comment
+    .original_start_line
+    .or(comment.start_line)
+    .unwrap_or(target_end)
+    .max(1);
+  let window_start = target_start
+    .saturating_sub(OUTDATED_DIFF_HUNK_CONTEXT_BEFORE_LINES)
+    .max(1);
+  let use_new_side = comment.side.as_deref().or(comment.start_side.as_deref()) != Some("LEFT");
+
+  let mut lines =
+    outdated_diff_hunk_lines_for_side(comment, use_new_side, window_start, target_end);
+  if lines.is_empty() {
+    lines = outdated_diff_hunk_lines_for_side(comment, !use_new_side, window_start, target_end);
+  }
+
+  (!lines.is_empty()).then(|| Arc::from(lines.into_boxed_slice()))
+}
+
+fn outdated_diff_hunk_lines_for_side(
+  comment: &GithubPullRequestReviewComment,
+  use_new_side: bool,
+  window_start: i64,
+  window_end: i64,
+) -> Vec<ReviewCommentDiffHunkLine> {
+  github_shared::parse_diff_hunk_lines(&comment.diff_hunk)
+    .into_iter()
+    .filter_map(|line| {
+      let line_number = if use_new_side {
+        line.new_line
+      } else {
+        line.old_line
+      }?;
+      let line_number_i64 = line_number as i64;
+      (line_number_i64 >= window_start && line_number_i64 <= window_end).then(|| {
+        ReviewCommentDiffHunkLine {
+          line_number: Some(line_number),
+          content: Arc::from(line.content),
+          kind: match line.kind {
+            github_shared::DiffHunkLineKind::Context => ReviewCommentDiffHunkLineKind::Context,
+            github_shared::DiffHunkLineKind::Added => ReviewCommentDiffHunkLineKind::Added,
+            github_shared::DiffHunkLineKind::Removed => ReviewCommentDiffHunkLineKind::Removed,
+          },
+        }
+      })
+    })
+    .collect()
+}
+
 /// GitHub nulls the live line of an outdated thread and keeps only the
 /// original one; a card with no line at all would silently vanish from the
 /// diff while the file badge still counts it.
@@ -373,6 +442,7 @@ pub(crate) fn editor_review_comments(
         line_label: line_label(comment, resolved_line),
         body: Arc::from(comment.body.as_str()),
         suggestion_context: suggestion_context(comment),
+        outdated_diff_hunk: outdated_diff_hunk(comment),
         created_at: Arc::from(format_relative_time(&comment.created_at).to_string()),
         thread_id: (!comment.thread_id.is_empty())
           .then(|| Arc::<str>::from(comment.thread_id.as_str())),
@@ -770,6 +840,35 @@ mod tests {
   }
 
   #[test]
+  fn an_outdated_root_comment_carries_its_original_diff_hunk() {
+    let mut outdated = comment(1, "src/a.rs", None, "moved");
+    outdated.is_outdated = true;
+    outdated.original_line = Some(9);
+    outdated.diff_hunk = [
+      "@@ -0,0 +1,9 @@",
+      "+one",
+      "+two",
+      "+three",
+      "+four",
+      "+five",
+      "+six",
+      "+seven",
+      "+eight",
+      "+nine",
+    ]
+    .join("\n");
+
+    let rows = editor_review_comments(&[outdated], Path::new("src/a.rs"));
+    let hunk = rows[0].outdated_diff_hunk.as_ref().expect("diff hunk");
+
+    assert_eq!(hunk.len(), 4);
+    assert_eq!(hunk[0].line_number, Some(6));
+    assert_eq!(hunk[0].content.as_ref(), "six");
+    assert_eq!(hunk[3].line_number, Some(9));
+    assert_eq!(hunk[3].content.as_ref(), "nine");
+  }
+
+  #[test]
   fn a_reply_to_an_outdated_comment_hangs_with_its_thread() {
     let mut root = comment(1, "src/a.rs", None, "moved");
     root.is_outdated = true;
@@ -777,11 +876,14 @@ mod tests {
     let mut reply = comment(2, "src/a.rs", None, "still here");
     reply.in_reply_to_id = Some(1);
     reply.is_outdated = true;
+    reply.diff_hunk = "@@ -8,2 +8,2 @@\n context\n-old\n+new".to_string();
 
     let rows = editor_review_comments(&[root, reply], Path::new("src/a.rs"));
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].line, rows[1].line);
+    let reply = rows.iter().find(|row| row.id == 2).expect("reply");
+    assert!(reply.outdated_diff_hunk.is_none());
   }
 
   #[test]

@@ -1,6 +1,11 @@
 # Changelog
 
 All notable changes to Reviu are documented here.
+## 1.4.0
+
+### Outdated Pull Request Comment Context
+
+Outdated GitHub review comments now show the original diff hunk inside the card, so the code context stays readable even when the anchor line moved in the current file.
 
 ## 1.3.0
 

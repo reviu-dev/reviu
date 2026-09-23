@@ -374,6 +374,7 @@ fn to_editor_comment(comment: &LocalAgentReviewComment) -> ReviewComment {
       .then(|| Arc::<str>::from(agent_review_line_label(comment))),
     body: comment.body.clone(),
     suggestion_context,
+    outdated_diff_hunk: None,
     created_at: Arc::from(""),
     thread_id: None,
     is_resolved: false,
