@@ -47,7 +47,7 @@ visual-smoke: driver-bins
   cd desktop && target/debug/reviu-visual-smoke --driver-bin target/debug/reviu-driver
 
 # Run the live GitHub smoke check with primary Reviu auth and bot actor.
-github-smoke repo="../reviu-github-smoke": driver-bins
+github-smoke repo="../../reviu-github-smoke": driver-bins
   cd desktop && \
     if [ -z "${REVIU_AUTH_TOKEN:-}" ]; then \
       if command -v security >/dev/null 2>&1; then \
