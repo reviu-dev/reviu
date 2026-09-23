@@ -516,11 +516,15 @@ impl SessionPage {
       return Err("Another git command is still running.".into());
     }
 
+    let updates_remote_tracking_refs = matches!(command, RepoCommand::Fetch | RepoCommand::Pull);
     let changes_action_in_flight = changes_action_for_repo_command(&command);
     self.repo_command_in_flight = Some(RepoCommandInFlight::for_command(
       &command,
       self.repo_snapshot.read(cx).branch_status(),
     ));
+    if updates_remote_tracking_refs {
+      self.last_remote_check_at = Some(Instant::now());
+    }
     self.dock_panel.update(cx, |panel, cx| {
       panel.set_changes_action_in_flight(changes_action_in_flight, cx);
     });

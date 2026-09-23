@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.4.0
 
+### Fresher Pull Counters
+
+Reviu now refreshes remote tracking information in the background and lets the pull counter check for updates even when it currently shows zero, so incoming commits appear without changing your working tree.
+
 ### Drag Files Into Splits
 
 Drag files from the Files panel into a center edge to open code beside your current work, or drag changed files from Changes to open their diff in a split.

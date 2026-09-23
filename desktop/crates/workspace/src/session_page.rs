@@ -352,6 +352,8 @@ pub struct SessionPage {
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
   repo_command_in_flight: Option<RepoCommandInFlight>,
+  last_remote_check_at: Option<Instant>,
+  auto_fetch_in_flight: bool,
   /// Set while pushing an unpublished branch on the way to the pull request form.
   pending_pull_request: Option<GithubBranchContext>,
   dock_open: bool,
@@ -365,6 +367,7 @@ pub struct SessionPage {
   poll_window_active: bool,
   _active_repo_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
+  _auto_fetch_task: Option<Task<()>>,
   _pull_request_link_task: Option<Task<()>>,
   _browse_task: Option<Task<()>>,
   _poll_task: Option<Task<()>>,
@@ -706,6 +709,8 @@ impl SessionPage {
       svg_preview,
       pending_review_export: None,
       repo_command_in_flight: None,
+      last_remote_check_at: Some(Instant::now()),
+      auto_fetch_in_flight: false,
       pending_pull_request: None,
       dock_open: true,
       dock_width: DOCK_PANEL_DEFAULT_WIDTH,
@@ -717,6 +722,7 @@ impl SessionPage {
       poll_window_active: true,
       _active_repo_task: None,
       _repo_command_task: None,
+      _auto_fetch_task: None,
       _pull_request_link_task: None,
       _browse_task: None,
       _poll_task: None,
@@ -897,6 +903,7 @@ impl SessionPage {
       this.poll_window_active = window.is_window_active();
       if this.poll_window_active {
         this.poll_repository(cx);
+        this.maybe_start_auto_fetch(cx);
         this.clear_visible_finished_unseen_session(cx);
       }
     })
@@ -925,6 +932,7 @@ impl SessionPage {
             return;
           }
           this.poll_repository(cx);
+          this.maybe_start_auto_fetch(cx);
         });
         if polled.is_err() {
           return;
@@ -939,6 +947,55 @@ impl SessionPage {
     }
     self.refresh_branch(cx);
     self.dock_panel.update(cx, |panel, cx| panel.poll(cx));
+  }
+
+  fn maybe_start_auto_fetch(&mut self, cx: &mut Context<Self>) {
+    if !self.poll_window_active
+      || self.repo_command_in_flight.is_some()
+      || self.auto_fetch_in_flight
+      || self
+        .last_remote_check_at
+        .is_some_and(|last| last.elapsed() < status_poll::AUTO_FETCH_INTERVAL)
+    {
+      return;
+    }
+    let Some(repo_root) = self.checkout_root(cx) else {
+      return;
+    };
+    let operation_in_progress = self.dock_panel.read_with(cx, |panel, _| {
+      panel.rebase_in_progress() || panel.merge_in_progress()
+    });
+    if operation_in_progress {
+      return;
+    }
+
+    self.last_remote_check_at = Some(Instant::now());
+    self.auto_fetch_in_flight = true;
+    self.repo_command_in_flight = Some(RepoCommandInFlight::Fetch);
+    cx.notify();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(async move { git::fetch(&repo_root) })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        this.auto_fetch_in_flight = false;
+        if this.repo_command_in_flight == Some(RepoCommandInFlight::Fetch) {
+          this.repo_command_in_flight = None;
+        }
+        match result {
+          Ok(()) => {
+            this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+            this.refresh_branch(cx);
+          }
+          Err(error) => {
+            app_log::log!("automatic fetch failed: {error}");
+          }
+        }
+        cx.notify();
+      });
+    });
+    self._auto_fetch_task = Some(task);
   }
 
   /// Connects the agent outside `render`: spawning a process while painting
@@ -3387,6 +3444,63 @@ mod tests {
       let snapshot = page.repo_snapshot.read(cx);
       assert_eq!(snapshot.branch_status().expect("status").ahead, 1);
     });
+  }
+
+  #[gpui::test]
+  async fn stale_remote_checks_fetch_without_pulling(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-auto-fetch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-auto-fetch");
+    let branch = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    crate::test_support::set_remote_head(&remote, &branch);
+    let peer_dir = crate::test_support::TempDir::new("session-page-auto-fetch-peer");
+    git2::Repository::clone(remote.to_str().expect("remote path utf8"), &peer_dir.path)
+      .expect("clone remote");
+    commit_text_file(&peer_dir.path, Path::new("README.md"), "v2\n", "remote");
+    crate::test_support::push_branch_to_remote(&peer_dir.path, &branch, "origin");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .repo_snapshot
+          .read(cx)
+          .branch_status()
+          .expect("branch status")
+          .behind,
+        0
+      );
+    });
+
+    page.update(cx, |page, cx| {
+      page.last_remote_check_at = Some(Instant::now() - status_poll::AUTO_FETCH_INTERVAL);
+      page.maybe_start_auto_fetch(cx);
+    });
+    let fetch_task = page.update(cx, |page, _| {
+      page._auto_fetch_task.take().expect("auto fetch task")
+    });
+    fetch_task.await;
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .repo_snapshot
+          .read(cx)
+          .branch_status()
+          .expect("branch status")
+          .behind,
+        1
+      );
+    });
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read local file"),
+      "v1\n"
+    );
   }
 
   #[gpui::test]

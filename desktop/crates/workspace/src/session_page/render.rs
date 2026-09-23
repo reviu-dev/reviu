@@ -80,7 +80,7 @@ impl SessionPage {
   ) -> AnyElement {
     let enabled = enabled && !in_flight;
     let theme = cx.theme().clone();
-    let color = if enabled {
+    let color = if enabled && count > 0 {
       color
     } else {
       theme.muted_foreground
@@ -288,10 +288,10 @@ impl SessionPage {
                 } else {
                   (theme.status_green(), "Push", RepoCommand::Push)
                 };
-                let pull_tooltip = if status.behind > 0 {
-                  "Pull"
+                let (pull_tooltip, pull_command) = if status.behind > 0 {
+                  ("Pull", RepoCommand::Pull)
                 } else {
-                  "Nothing to pull"
+                  ("Check for updates", RepoCommand::Fetch)
                 };
                 let push_tooltip = if status.ahead > 0 {
                   push_tooltip
@@ -305,9 +305,9 @@ impl SessionPage {
                     status.behind,
                     theme.status_red(),
                     pull_tooltip,
-                    status.behind > 0 && pull_allowed,
+                    pull_allowed,
                     command_in_flight,
-                    RepoCommand::Pull,
+                    pull_command,
                     cx,
                   ))
                   .child(self.render_sync_counter(
@@ -3470,6 +3470,62 @@ mod tests {
     // The row under the counter opens the repository switcher: it must not fire.
     let switcher_open = cx.update(|window, cx| window.has_active_dialog(cx));
     assert!(!switcher_open, "the repository switcher should stay closed");
+  }
+
+  #[gpui::test]
+  async fn clicking_the_clean_behind_counter_fetches_remote_updates(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-counter-fetch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-counter-fetch");
+    let branch = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    crate::test_support::set_remote_head(&remote, &branch);
+    let peer_dir = TempDir::new("session-page-counter-fetch-peer");
+    git2::Repository::clone(remote.to_str().expect("remote path utf8"), &peer_dir.path)
+      .expect("clone remote");
+    commit_text_file(&peer_dir.path, Path::new("README.md"), "v2\n", "remote");
+    crate::test_support::push_branch_to_remote(&peer_dir.path, &branch, "origin");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      let status = page
+        .repo_snapshot
+        .read(cx)
+        .branch_status()
+        .expect("branch status");
+      assert_eq!(status.behind, 0, "remote-tracking refs are still stale");
+    });
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let counter = cx
+      .debug_bounds(REPO_BEHIND_DEBUG_SELECTOR)
+      .expect("behind counter bounds");
+    cx.simulate_click(counter.center(), gpui::Modifiers::default());
+
+    let command_task = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("fetch task")
+    });
+    command_task.await;
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let status = page
+        .repo_snapshot
+        .read(cx)
+        .branch_status()
+        .expect("branch status");
+      assert_eq!(status.behind, 1);
+      assert_eq!(status.ahead, 0);
+    });
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read local file"),
+      "v1\n",
+      "fetch updates the counter without pulling files into the worktree"
+    );
   }
 
   #[gpui::test]
