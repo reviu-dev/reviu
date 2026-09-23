@@ -1744,6 +1744,9 @@ impl SessionPage {
         .read(cx)
         .conversation_ids_beyond_limit(AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT),
     );
+    // Pruning caps chat history; it never deletes a worktree, which may hold
+    // uncommitted or unmerged work. Those go through the confirmed delete.
+    protected_ids.extend(store.read(cx).worktree_bindings().into_keys());
     let mut seen_ids = std::collections::HashSet::new();
     for id in stale_ids {
       if protected_ids.contains(&id) || !seen_ids.insert(id.clone()) {
@@ -5456,18 +5459,24 @@ mod tests {
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     std::fs::create_dir_all(&state_dir).expect("create state dir");
-    let meta = serde_json::json!({
-      "id": "old-conversation",
-      "started_at_secs": 1,
-      "updated_at_secs": 1,
-      "title": "Old chat",
-      "message_count": 1,
-      "session_id": null,
-      "preview": "hello"
-    });
+    let old_meta = |id: &str| {
+      serde_json::json!({
+        "id": id,
+        "started_at_secs": 1,
+        "updated_at_secs": 1,
+        "title": "Old chat",
+        "message_count": 1,
+        "session_id": null,
+        "preview": "hello"
+      })
+    };
     std::fs::write(
       state_dir.join("index.json"),
-      serde_json::json!({ "version": 1, "conversations": [meta.clone()] }).to_string(),
+      serde_json::json!({
+        "version": 1,
+        "conversations": [old_meta("old-conversation"), old_meta("old-worktree-conversation")]
+      })
+      .to_string(),
     )
     .expect("write index");
     std::fs::write(
@@ -5483,7 +5492,7 @@ mod tests {
     std::fs::write(
       state_dir.join("worktrees.json"),
       serde_json::json!({
-        "old-conversation": { "path": worktree.path, "branch": worktree.branch }
+        "old-worktree-conversation": { "path": worktree.path, "branch": worktree.branch }
       })
       .to_string(),
     )
@@ -5506,17 +5515,23 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       let store = page.chat_store.as_ref().expect("store").read(cx);
-      assert!(store.list().is_empty(), "the stale row left the index");
+      let ids: Vec<String> = store.list().into_iter().map(|meta| meta.id).collect();
+      assert_eq!(
+        ids,
+        vec!["old-worktree-conversation".to_string()],
+        "the stale plain row left the index, the worktree one stayed"
+      );
       assert_eq!(store.active_id(), None);
+      assert_eq!(
+        store
+          .worktree("old-worktree-conversation")
+          .map(|binding| binding.path),
+        Some(worktree.path.clone())
+      );
     });
-    let index: serde_json::Value = serde_json::from_str(
-      &std::fs::read_to_string(state_dir.join("index.json")).expect("read index"),
-    )
-    .expect("parse index");
-    assert_eq!(index["conversations"], serde_json::json!([]));
     assert!(!state_dir.join("old-conversation.json").exists());
     assert!(!state_dir.join("active.txt").exists());
-    for name in ["drafts.json", "scroll.json", "worktrees.json"] {
+    for name in ["drafts.json", "scroll.json"] {
       let json: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(state_dir.join(name)).expect("read state file"),
       )
@@ -5526,7 +5541,10 @@ mod tests {
         "{name} was scrubbed"
       );
     }
-    assert!(!worktree.path.exists(), "the bound checkout was removed");
+    assert!(
+      worktree.path.exists(),
+      "pruning never deletes a worktree: it may hold unmerged work"
+    );
 
     let _ = std::fs::remove_dir_all(&state_dir);
     cleanup_worktrees_root(&repo.path);
