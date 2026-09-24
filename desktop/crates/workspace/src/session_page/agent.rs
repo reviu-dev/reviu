@@ -2351,8 +2351,19 @@ impl SessionPage {
     self.park_active_chat_panel(cx);
     let write_active = panel.read(cx).has_persistable_content();
     self.activate_chat_panel(panel, write_active, window, cx);
-    self.reveal_active_session_chat(window, cx);
     true
+  }
+
+  pub(super) fn parked_session_id_for_project(
+    &self,
+    project_root: &Path,
+    cx: &App,
+  ) -> Option<String> {
+    self
+      .background_chat_panels
+      .iter()
+      .find(|(_, panel)| panel.read(cx).project_root() == project_root)
+      .map(|(id, _)| id.clone())
   }
 
   fn activate_chat_panel(
@@ -3680,6 +3691,8 @@ mod tests {
   async fn selecting_another_repo_session_waits_for_dirty_file_choice(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-dirty-switch", cx).await;
     let (other, other_state) = seed_second_repo("session-page-dirty-switch-b", "other-session");
+    active_panel(&page, cx).update(cx, |panel, cx| panel.seed_user_message_for_test("mine", cx));
+    cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
       page
@@ -5081,10 +5094,11 @@ mod tests {
     cx.simulate_click(other_checkout.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
-    active_panel(&page, cx).read_with(cx, |panel, _| {
-      assert_eq!(panel.project_root(), other.path.as_path());
-    });
     page.read_with(cx, |page, cx| {
+      assert!(
+        page.agent_chat_view.is_none(),
+        "no session was active there, and none is created behind your back"
+      );
       assert_eq!(page.project_root(cx).as_deref(), Some(other.path.as_path()));
       assert_eq!(page.fallback_repo.as_deref(), Some(other.path.as_path()));
       assert_eq!(
@@ -5100,6 +5114,89 @@ mod tests {
     });
 
     let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn coming_back_to_a_checkout_restores_where_you_were(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-checkout-comeback", cx).await;
+    commit_text_file(&repo.path, Path::new("notes.md"), "notes\n", "notes");
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
+    let other = TempRepo::init("session-page-checkout-comeback-b");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let session = active_panel(&page, cx);
+    session.update(cx, |panel, cx| panel.seed_user_message_for_test("main", cx));
+    cx.run_until_parked();
+    let session_id = session.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    let open = |page: &Entity<SessionPage>, path: &str, cx: &mut gpui::VisualTestContext| {
+      let path = PathBuf::from(path);
+      page.update_in(cx, |page, window, cx| {
+        page.open_file(path, None, None, OpenIntent::Open, window, cx)
+      });
+    };
+    open(&page, "README.md", cx);
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page
+        .select_checkout(repo.path.clone(), worktree.path.clone(), window, cx)
+        .expect("select worktree checkout");
+    });
+    cx.run_until_parked();
+    open(&page, "notes.md", cx);
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .select_checkout(other.path.clone(), other.path.clone(), window, cx)
+        .expect("select other repo");
+    });
+    cx.run_until_parked();
+
+    // Straight back to the worktree: its file, not the chat, and the
+    // repo's session came back without being shown.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .select_checkout(repo.path.clone(), worktree.path.clone(), window, cx)
+        .expect("select worktree checkout");
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.checkout_root(cx).as_deref(),
+        Some(worktree.path.as_path())
+      );
+      assert_eq!(
+        page.active_center_tab,
+        Some(CenterTab::file(PathBuf::from("notes.md")))
+      );
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(
+        page
+          .agent_chat_view
+          .as_ref()
+          .map(|panel| panel.read(cx).current_conversation().id.clone()),
+        Some(session_id.clone())
+      );
+    });
+
+    // The session's own checkout was not passed through on the way: it kept
+    // its file too.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .select_checkout(repo.path.clone(), repo.path.clone(), window, cx)
+        .expect("select main checkout");
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.active_center_tab,
+        Some(CenterTab::file(PathBuf::from("README.md")))
+      );
+      assert_eq!(page.center, CenterView::Diff);
+    });
+
     cleanup_worktrees_root(&repo.path);
   }
 
@@ -6168,10 +6265,8 @@ mod tests {
     cx.run_until_parked();
 
     // You went to the other repo; the running session keeps working behind.
-    active_panel(&page, cx).read_with(cx, |panel, _| {
-      assert_eq!(panel.project_root(), other.path.as_path());
-    });
     page.read_with(cx, |page, cx| {
+      assert!(page.agent_chat_view.is_none());
       assert!(
         page
           .background_chat_panels

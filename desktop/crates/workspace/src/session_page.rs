@@ -1385,12 +1385,18 @@ impl SessionPage {
   ) -> Result<(), SharedString> {
     if self.project_root(cx).as_deref() != Some(project_root.as_path()) {
       if git::discover_repository_root(&project_root).is_some() {
-        self.set_fallback_repo_without_unsaved_prompt(project_root.clone(), window, cx)?;
+        self.switch_to_repo(
+          project_root.clone(),
+          Some(checkout_root.clone()),
+          window,
+          cx,
+        );
       } else {
         self.set_project_root_without_unsaved_prompt(project_root.clone(), window, cx)?;
       }
     }
     self.pin_checkout_without_unsaved_prompt(checkout_root, window, cx);
+    self.focus_page_on_next_frame(window, cx);
     Ok(())
   }
 

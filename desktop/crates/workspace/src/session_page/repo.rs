@@ -94,39 +94,71 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
+    self.switch_to_repo(repo_root, None, window, cx);
+    Ok(())
+  }
+
+  /// Going back to a repository puts you where you left it, like reopening a
+  /// project in an editor: the session you left active in it comes back in
+  /// the background so the git surfaces and New Session agree on where you
+  /// are, but the centre restores the checkout's own tabs instead of
+  /// jumping to the chat. A repository without a session shows the empty
+  /// centre; nothing is created behind your back.
+  ///
+  /// `checkout` pins the checkout the user picked before the session is
+  /// activated, so the switch lands on it directly instead of passing
+  /// through the session's own checkout and overwriting its saved tabs.
+  pub(super) fn switch_to_repo(
+    &mut self,
+    repo_root: PathBuf,
+    checkout: Option<PathBuf>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     ConfigStore::persist_recent_project_root(&repo_root);
     self.apply_fallback_repo(Some(repo_root.clone()), window, cx);
-    // Switching repository means going to work there: reopen the session you
-    // left active in it, or open a blank one so the screen, the git surfaces
-    // and the New Session button all agree on where you are.
+    let shown_in_repo = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).project_root() == repo_root.as_path());
+    if shown_in_repo {
+      return;
+    }
     let resume = self
       .chat_store
       .as_ref()
       .and_then(|store| store.read(cx).active_meta())
       .map(|meta| meta.id);
-    match resume {
-      Some(id) => {
-        let already_shown = self
-          .agent_chat_view
-          .as_ref()
-          .is_some_and(|panel| panel.read(cx).current_conversation().id == id);
-        if !already_shown {
-          self.select_session(&id, window, cx);
-        }
-      }
-      None => {
-        let already_shown = self
-          .agent_chat_view
-          .as_ref()
-          .is_some_and(|panel| panel.read(cx).project_root() == repo_root.as_path());
-        if already_shown {
-          self.reveal_active_session_chat(window, cx);
-        } else if !self.activate_parked_session_for_project(&repo_root, window, cx) {
-          self.new_session_in_without_unsaved_prompt(repo_root, window, cx);
-        }
-      }
+    if let Some(id) = resume {
+      self.pin_checkout_for_session(checkout, Some(id.clone()), cx);
+      self.activate_session_panel(&id, window, cx);
+    } else if let Some(id) = self.parked_session_id_for_project(&repo_root, cx) {
+      self.pin_checkout_for_session(checkout, Some(id), cx);
+      self.activate_parked_session_for_project(&repo_root, window, cx);
+    } else {
+      self.park_active_chat_panel(cx);
+      self.pin_checkout_for_session(checkout, None, cx);
+      self.sync_active_checkout(window, cx);
+      self.refresh_session_list(cx);
+      cx.notify();
     }
-    Ok(())
+  }
+
+  /// Sets the pin ahead of the session it belongs to; a checkout that is the
+  /// session's own needs none.
+  fn pin_checkout_for_session(
+    &mut self,
+    checkout: Option<PathBuf>,
+    session_id: Option<String>,
+    cx: &App,
+  ) {
+    let session_checkout = match session_id.as_deref() {
+      Some(id) => self.session_checkout_for_id(id, cx),
+      None => self.fallback_repo.clone(),
+    };
+    self.checkout_override = checkout
+      .filter(|checkout| session_checkout.as_ref() != Some(checkout))
+      .map(|path| CheckoutOverride { session_id, path });
   }
 
   #[doc(hidden)]
@@ -286,6 +318,9 @@ impl SessionPage {
           .fallback_repo
           .clone()
           .is_some_and(|repo| self.activate_parked_session_for_project(&repo, window, cx));
+        if restored {
+          self.reveal_active_session_chat(window, cx);
+        }
         if !restored {
           let view = self.build_fallback_chat_panel(None, window, cx);
           view.update(cx, |panel, _| panel.set_active_conversation(true));
@@ -651,11 +686,10 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       assert_eq!(page.fallback_repo.as_deref(), Some(other.path.as_path()));
-      // No session was active there: a blank one opens so the screen, the
-      // git surfaces and New Session all agree on where you are.
-      let panel = page.agent_chat_view.as_ref().expect("a session is shown");
-      assert_eq!(panel.read(cx).project_root(), other.path.as_path());
-      assert!(!panel.read(cx).has_persistable_content());
+      // No session was active there: the empty centre shows, nothing is
+      // created behind your back.
+      assert!(page.agent_chat_view.is_none());
+      assert_eq!(page.project_root(cx).as_deref(), Some(other.path.as_path()));
       // The open diff and its draft comments belong to the previous repo.
       assert_eq!(page.center, CenterView::Conversation);
       assert!(page.warm_editor().is_none());
@@ -703,17 +737,7 @@ mod tests {
         .expect("switch repository");
     });
     cx.run_until_parked();
-    page.read_with(cx, |page, cx| {
-      assert_eq!(
-        page
-          .agent_chat_view
-          .as_ref()
-          .expect("active panel")
-          .read(cx)
-          .project_root(),
-        other.path.as_path()
-      );
-    });
+    page.read_with(cx, |page, _| assert!(page.agent_chat_view.is_none()));
 
     page.update_in(cx, |page, window, cx| {
       page
@@ -775,7 +799,6 @@ mod tests {
     });
 
     page.read_with(cx, |page, cx| {
-      assert!(page.agent_chat_view.is_some());
       assert_eq!(
         page.session_list.read(cx).conversation_ids(),
         vec!["session-in-other-repo".to_string()]
