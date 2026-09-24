@@ -2,7 +2,7 @@
 import Layout from "../layouts/Layout.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 
-const lastUpdated = "August 26, 2026";
+const lastUpdated = "September 24, 2026";
 ---
 
 <Layout
@@ -212,11 +212,16 @@ const lastUpdated = "August 26, 2026";
         Reports include: stack traces, panic location, thread name, operating
         system and architecture, application version and build profile, and a
         small amount of in-app context (authentication state, subscription
-        role, current page or Git surface, and diff view). We do not attach your
-        account's GitHub id, email, login, or name as Sentry user data, and
-        reports do not include GitHub owner/repo/PR identifiers, local
-        repository paths or names, branch names, selected file paths, file
-        contents, diffs, or commit messages.
+        role, which dock tab and center view were open, the diff view, which
+        agent was selected and whether it was running, whether the checkout is
+        a worktree, and how many windows were open). While product analytics is
+        enabled (section 5.5), reports also carry the same random device
+        identifier, so we can tell how many devices an error affects; turning
+        analytics off stops sending it. We do not attach your account's GitHub
+        id, email, login, or name as Sentry user data, the machine's hostname is
+        removed, and reports do not include GitHub owner/repo/PR identifiers,
+        local repository paths or names, branch names, selected file paths,
+        file contents, diffs, or commit messages.
       </p>
       <p class="mt-3 text-sm/7 text-muted-foreground">
         Authorization headers, cookies, OAuth tokens, and password-shaped
@@ -224,7 +229,11 @@ const lastUpdated = "August 26, 2026";
         crashes also write a local pending report to
         <code>~/.config/reviu/crash-reports/pending.json</code>, so you can
         review that app-generated summary before optionally sending it with or
-        without logs.
+        without logs. A report you send this way also includes your operating
+        system version, on Linux the display server and desktop environment,
+        and how long the app had been running. It never includes the device
+        identifier, and if you are signed in, it is associated with your
+        account email so we can follow up on it.
       </p>
 
       <h3 class="mt-6 text-lg font-semibold text-foreground">
@@ -249,7 +258,8 @@ const lastUpdated = "August 26, 2026";
         <code>commit_made</code>), the application version, the operating
         system, and a random device identifier generated on first launch and
         stored locally. This identifier is not linked to your GitHub account
-        or email.
+        or email. While analytics is enabled, the same identifier also
+        accompanies Sentry error reports (section 5.3).
       </p>
       <p class="mt-3 text-sm/7 text-muted-foreground">
         The following are never transmitted: repository contents, file paths,
@@ -257,7 +267,8 @@ const lastUpdated = "August 26, 2026";
         address (stripped at ingestion), or any other personally identifying
         information. Product analytics is enabled by default and can be
         disabled at any time from the in-app settings; disabling it stops
-        further event collection immediately.
+        further event collection immediately and removes the device identifier
+        from future Sentry reports.
       </p>
       <p class="mt-6 text-sm/7 text-muted-foreground">
         The desktop application may also contact Reviu update/download

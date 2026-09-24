@@ -16,6 +16,45 @@ const DEDUP_WINDOW: Duration = Duration::from_secs(300);
 
 static CLOSING: AtomicBool = AtomicBool::new(false);
 
+/// The analytics device id, while the user leaves analytics on. It is the only user
+/// data Sentry gets: never the account's id, email or login.
+fn device_id_state() -> &'static Mutex<Option<String>> {
+  static STATE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+  STATE.get_or_init(|| Mutex::new(None))
+}
+
+fn sentry_user(device_id: Option<String>) -> Option<sentry::User> {
+  device_id.map(|id| sentry::User {
+    id: Some(id),
+    ..Default::default()
+  })
+}
+
+fn apply_device_user(scope: &mut sentry::Scope) {
+  let device_id = device_id_state()
+    .lock()
+    .ok()
+    .and_then(|device_id| device_id.clone());
+  scope.set_user(sentry_user(device_id));
+}
+
+#[cfg(test)]
+pub(crate) fn current_device_id() -> Option<String> {
+  device_id_state()
+    .lock()
+    .ok()
+    .and_then(|device_id| device_id.clone())
+}
+
+/// Lets Sentry count how many devices an error reaches. `None` when analytics is off, so
+/// turning analytics off also stops errors from being tied to this device.
+pub(crate) fn sync_device_id(device_id: Option<&str>) {
+  if let Ok(mut state) = device_id_state().lock() {
+    *state = device_id.map(str::to_string);
+  }
+  sentry::configure_scope(apply_device_user);
+}
+
 fn dedup_state() -> &'static Mutex<HashMap<String, Instant>> {
   static STATE: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
   STATE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -187,7 +226,7 @@ pub(crate) fn sync_auth_state(state: &AuthState) {
 
     match state {
       AuthState::Authenticated(user) => {
-        scope.set_user(None);
+        apply_device_user(scope);
         scope.set_tag(
           "auth.subscription_active",
           if user.subscription.active_subscription.is_some() {
@@ -206,7 +245,7 @@ pub(crate) fn sync_auth_state(state: &AuthState) {
         );
       }
       AuthState::Unknown | AuthState::Unauthenticated => {
-        scope.set_user(None);
+        apply_device_user(scope);
         scope.remove_tag("auth.subscription_active");
         scope.remove_tag("user.role");
       }
@@ -274,6 +313,16 @@ mod tests {
     auth_state::AuthState,
   };
   use std::time::Instant;
+
+  #[test]
+  fn the_device_is_the_only_user_data_sentry_gets() {
+    let user = super::sentry_user(Some("device-1".to_string())).expect("device user");
+    assert_eq!(user.id.as_deref(), Some("device-1"));
+    assert_eq!(user.email, None);
+    assert_eq!(user.username, None);
+    assert_eq!(user.ip_address, None);
+    assert_eq!(super::sentry_user(None), None);
+  }
 
   #[test]
   fn expected_http_reason_flags_unauthorized_only() {

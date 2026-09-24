@@ -45,7 +45,23 @@ impl Analytics {
       }
     };
     cx.set_global(Analytics { client, device_id });
+
+    sync_sentry_device(cx);
+    cx.observe_global::<AppSettings>(sync_sentry_device)
+      .detach();
   }
+}
+
+/// Sentry gets the device id on the same terms as the product analytics, so the one
+/// analytics switch covers both.
+fn sync_sentry_device(cx: &mut App) {
+  let enabled = cx
+    .try_global::<AppSettings>()
+    .is_some_and(|settings| settings.analytics_enabled);
+  let device_id = cx
+    .try_global::<Analytics>()
+    .map(|analytics| analytics.device_id.clone());
+  crate::sentry_context::sync_device_id(device_id.as_deref().filter(|_| enabled));
 }
 
 pub fn track(cx: &mut App, name: &'static str) {
@@ -106,6 +122,27 @@ fn build_payload(device_id: &str, name: &str, data: Option<Value>) -> Value {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[gpui::test]
+  fn turning_analytics_off_unties_errors_from_the_device(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+      cx.set_global(AppSettings::default());
+      cx.set_global(Analytics {
+        client: Client::new(),
+        device_id: "device-1".to_string(),
+      });
+
+      sync_sentry_device(cx);
+      assert_eq!(
+        crate::sentry_context::current_device_id().as_deref(),
+        Some("device-1")
+      );
+
+      cx.global_mut::<AppSettings>().analytics_enabled = false;
+      sync_sentry_device(cx);
+      assert_eq!(crate::sentry_context::current_device_id(), None);
+    });
+  }
 
   #[test]
   fn payload_includes_app_context_for_every_event() {
