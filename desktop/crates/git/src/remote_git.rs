@@ -57,7 +57,16 @@ fn is_authentication_failure(stderr: &str) -> bool {
     .any(|failure| stderr.contains(failure))
 }
 
-pub(crate) fn run_remote_git<I, S>(repo_root: &Path, args: I) -> Result<Output>
+/// Whether git may open a sign-in window, such as Git Credential Manager's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SignIn {
+  /// The user asked for this operation and is there to sign in.
+  Allowed,
+  /// Nobody asked: a window popping up on its own would come out of nowhere.
+  Never,
+}
+
+pub(crate) fn run_remote_git<I, S>(repo_root: &Path, sign_in: SignIn, args: I) -> Result<Output>
 where
   I: IntoIterator<Item = S>,
   S: AsRef<OsStr>,
@@ -66,7 +75,14 @@ where
   command
     .current_dir(repo_root)
     // Disabled to stop malicious actors from running arbitrary commands via fsmonitor hooks.
-    .args(["-c", "core.fsmonitor=false"])
+    .args(["-c", "core.fsmonitor=false"]);
+  if sign_in == SignIn::Never {
+    // Git Credential Manager reads either one; Git itself also honours the setting since 2.46.
+    command
+      .args(["-c", "credential.interactive=false"])
+      .env("GCM_INTERACTIVE", "never");
+  }
+  command
     .arg("--no-optional-locks")
     .arg("--no-pager")
     .args(args)
@@ -175,6 +191,7 @@ mod tests {
 
     let error = run_remote_git(
       &repo.path,
+      SignIn::Allowed,
       [
         "push",
         &format!("http://127.0.0.1:{port}/repo.git"),
@@ -184,6 +201,31 @@ mod tests {
     .expect_err("push without credentials fails");
 
     assert!(is_authentication_error(&error), "error: {error:#}");
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_background_fetch_tells_credential_helpers_not_to_prompt() {
+    let port = start_auth_challenge_server();
+    let repo = crate::test_support::TempRepo::init("remote-git-background");
+    let seen_path = repo.path.join("helper-saw");
+    let helper = format!(
+      "!f() {{ echo \"$GCM_INTERACTIVE $(git config credential.interactive)\" > '{}'; }}; f",
+      seen_path.display()
+    );
+    git2::Repository::open(&repo.path)
+      .and_then(|repo| repo.config())
+      .and_then(|mut config| config.set_str("credential.helper", &helper))
+      .expect("install recording credential helper");
+
+    let _ = run_remote_git(
+      &repo.path,
+      SignIn::Never,
+      ["fetch", &format!("http://127.0.0.1:{port}/repo.git")],
+    );
+
+    let seen = std::fs::read_to_string(&seen_path).expect("credential helper ran");
+    assert_eq!(seen.trim(), "never false");
   }
 
   #[test]

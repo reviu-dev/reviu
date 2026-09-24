@@ -198,7 +198,7 @@ pub fn push(repo_root: &Path, force: bool) -> Result<()> {
   args.push(info.remote.clone());
   args.push(format!("{local_ref}:{remote_ref}"));
 
-  match crate::remote_git::run_remote_git(repo_root, &args) {
+  match crate::remote_git::run_remote_git(repo_root, crate::remote_git::SignIn::Allowed, &args) {
     Ok(_) => Ok(()),
     Err(error) if error.to_string().contains("(stale info)") => {
       bail!("remote branch changed since the last fetch; fetch before force pushing")

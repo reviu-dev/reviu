@@ -992,7 +992,7 @@ impl SessionPage {
 
     let task = cx.spawn(async move |this, cx| {
       let result = cx
-        .background_spawn(async move { git::fetch(&repo_root) })
+        .background_spawn(async move { git::fetch_in_background(&repo_root) })
         .await;
       let _ = this.update(cx, |this, cx| {
         this.auto_fetch_in_flight = false;

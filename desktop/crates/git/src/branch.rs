@@ -7,6 +7,8 @@ use git2::{
   Signature, StatusOptions,
 };
 
+use crate::remote_git::{SignIn, run_remote_git};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BranchKind {
   Local,
@@ -241,12 +243,22 @@ pub fn detached_head_label(repo_root: &Path) -> Result<String> {
 }
 
 pub fn fetch(repo_root: &Path) -> Result<()> {
+  fetch_remotes(repo_root, SignIn::Allowed)
+}
+
+/// A fetch nobody asked for, such as the periodic refresh of the pull counters: it never
+/// opens a sign-in window, and fails quietly instead when no credential is stored.
+pub fn fetch_in_background(repo_root: &Path) -> Result<()> {
+  fetch_remotes(repo_root, SignIn::Never)
+}
+
+fn fetch_remotes(repo_root: &Path, sign_in: SignIn) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let remotes = repo.remotes().context("list remotes")?;
 
   for remote_name in remotes.iter().filter_map(|value| value.ok().flatten()) {
-    crate::remote_git::run_remote_git(repo_root, ["fetch", remote_name])
+    run_remote_git(repo_root, sign_in, ["fetch", remote_name])
       .with_context(|| format!("fetch remote {remote_name:?}"))?;
   }
 
@@ -262,7 +274,7 @@ pub enum PullOutcome {
 pub fn pull(repo_root: &Path) -> Result<PullOutcome> {
   let head_before = current_head_sha(repo_root).ok().flatten();
 
-  crate::remote_git::run_remote_git(repo_root, ["pull"]).map_err(|error| {
+  run_remote_git(repo_root, SignIn::Allowed, ["pull"]).map_err(|error| {
     let message = format!("git pull failed: {error}");
     error.context(message)
   })?;
@@ -805,8 +817,12 @@ pub fn delete_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("invalid remote branch {:?}", branch.name))?;
 
       let refspec = format!(":refs/heads/{remote_branch_name}");
-      crate::remote_git::run_remote_git(repo_root, ["push", remote_name, refspec.as_str()])
-        .with_context(|| format!("delete remote branch {:?}", branch.name))?;
+      run_remote_git(
+        repo_root,
+        SignIn::Allowed,
+        ["push", remote_name, refspec.as_str()],
+      )
+      .with_context(|| format!("delete remote branch {:?}", branch.name))?;
 
       if let Ok(mut reference) = repo.find_reference(&format!("refs/remotes/{}", branch.name)) {
         let _ = reference.delete();
