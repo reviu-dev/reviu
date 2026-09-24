@@ -501,6 +501,9 @@ fn is_truthy_env_value(value: &str) -> bool {
 fn redact_sensitive_event_data(
   mut event: sentry::protocol::Event<'static>,
 ) -> Option<sentry::protocol::Event<'static>> {
+  // The contexts integration fills in the hostname, which often carries the user's name.
+  event.server_name = None;
+
   if let Some(request) = event.request.as_mut() {
     if request.query_string.is_some() {
       request.query_string = Some(SENTRY_REDACTED.to_string());
@@ -795,6 +798,18 @@ mod tests {
       startup_deeplink_url_from_args(["reviu", "reviu-dev://auth/callback?code=abc123"], "reviu"),
       None
     );
+  }
+
+  #[test]
+  fn redact_sensitive_event_data_drops_the_machine_name() {
+    let event = Event {
+      server_name: Some("australis-someone".into()),
+      ..Default::default()
+    };
+
+    let event = redact_sensitive_event_data(event).expect("event kept");
+
+    assert_eq!(event.server_name, None);
   }
 
   #[test]

@@ -3,7 +3,22 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
-use git2::{Config, Cred, CredentialType, RemoteCallbacks, Repository};
+use git2::{Config, Cred, CredentialType, ErrorClass, ErrorCode, RemoteCallbacks, Repository};
+
+/// Whether a remote operation failed because no credentials could be found or the remote
+/// refused them. That is about the user's setup, not a bug, and the fix is on their side.
+pub fn is_authentication_error(error: &anyhow::Error) -> bool {
+  error
+    .chain()
+    .filter_map(|cause| cause.downcast_ref::<git2::Error>())
+    .any(|error| error.code() == ErrorCode::Auth)
+}
+
+// libgit2 hands the code of a failed credentials callback back to the caller of the remote
+// operation, so tagging it here is what lets `is_authentication_error` recognise it.
+fn credentials_error(message: impl AsRef<str>) -> git2::Error {
+  git2::Error::new(ErrorCode::Auth, ErrorClass::Callback, message.as_ref())
+}
 
 pub(crate) fn remote_callbacks(repo: &Repository) -> Result<RemoteCallbacks<'static>> {
   let config = repo.config().context("read git config")?;
@@ -21,12 +36,17 @@ fn remote_credentials(
   allowed_types: CredentialType,
 ) -> std::result::Result<Cred, git2::Error> {
   let userpass_error = if allowed_types.is_user_pass_plaintext() {
-    if let Ok(credential) = Cred::credential_helper(config, url, username_from_url) {
-      return Ok(credential);
-    }
+    let helper_error = match Cred::credential_helper(config, url, username_from_url) {
+      Ok(credential) => return Ok(credential),
+      Err(error) => error,
+    };
     match credential_from_git_credential_fill(url, username_from_url) {
       Ok(credential) => return Ok(credential),
-      Err(error) => Some(error),
+      Err(error) => Some(credentials_error(format!(
+        "{} (credential helper: {})",
+        error.message(),
+        helper_error.message()
+      ))),
     }
   } else {
     None
@@ -49,10 +69,7 @@ fn remote_credentials(
     return Cred::default();
   }
 
-  Err(
-    userpass_error
-      .unwrap_or_else(|| git2::Error::from_str("no supported git credentials available")),
-  )
+  Err(userpass_error.unwrap_or_else(|| credentials_error("no supported git credentials available")))
 }
 
 fn credential_from_git_credential_fill(
@@ -111,9 +128,15 @@ fn credential_from_git_credential_fill_command(
     .wait_with_output()
     .map_err(|error| git2::Error::from_str(&format!("wait for git credential fill: {error}")))?;
   if !output.status.success() {
+    let details = command_output_details(&output);
+    // Git Credential Manager can fail without a word; the exit code is then all there is.
+    let details = if details.is_empty() {
+      format!("{} without output", output.status)
+    } else {
+      details
+    };
     return Err(git2::Error::from_str(&format!(
-      "git credential fill failed: {}",
-      command_output_details(&output)
+      "git credential fill failed: {details}"
     )));
   }
 
@@ -250,6 +273,70 @@ mod tests {
         .message()
         .contains("no supported git credentials available")
     );
+    assert_eq!(error.code(), ErrorCode::Auth);
+  }
+
+  /// Answers every request with a Basic auth challenge, as a private HTTPS remote does.
+  fn start_auth_challenge_server() -> u16 {
+    use std::io::{BufRead, BufReader};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind challenge server");
+    let port = listener.local_addr().expect("server address").port();
+    std::thread::spawn(move || {
+      for stream in listener.incoming() {
+        let Ok(mut stream) = stream else {
+          continue;
+        };
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut line = String::new();
+        while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+          line.clear();
+        }
+        let _ = stream.write_all(
+          b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"test\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+      }
+    });
+    port
+  }
+
+  #[test]
+  fn a_missing_credential_fails_the_push_as_an_authentication_error() {
+    let port = start_auth_challenge_server();
+    let repo_dir = crate::test_support::TempRepo::init("remote-auth-push");
+    crate::test_support::commit_text_file(
+      &repo_dir.path,
+      Path::new("README.md"),
+      "hello",
+      "initial",
+    );
+    let repo = Repository::open(&repo_dir.path).expect("open repo");
+    let mut remote = repo
+      .remote_anonymous(&format!("http://127.0.0.1:{port}/repo.git"))
+      .expect("create remote");
+
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|_, _, _| Err(credentials_error("git credential fill failed")));
+    let mut options = git2::PushOptions::new();
+    options.remote_callbacks(callbacks);
+    let head = repo.head().expect("head");
+    let refspec = format!("{0}:{0}", head.name().expect("head name"));
+
+    let error = remote
+      .push(&[refspec], Some(&mut options))
+      .expect_err("push without credentials fails");
+
+    assert_eq!(error.code(), ErrorCode::Auth, "error: {error}");
+    assert!(is_authentication_error(
+      &anyhow::Error::new(error).context("push")
+    ));
+  }
+
+  #[test]
+  fn other_git_errors_are_not_authentication_errors() {
+    let error = anyhow::Error::new(git2::Error::from_str("remote hung up"));
+    assert!(!is_authentication_error(&error));
   }
 
   #[test]

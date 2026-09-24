@@ -21,6 +21,7 @@ pub use diff::*;
 pub use git2::ApplyLocation;
 pub use history::*;
 pub use interactive_rebase::*;
+pub use remote_auth::is_authentication_error;
 pub use status::*;
 pub use store::*;
 pub use worktree::*;

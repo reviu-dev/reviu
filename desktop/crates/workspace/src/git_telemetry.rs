@@ -84,8 +84,8 @@ pub(crate) fn diff_view_tag(diff_view: DiffViewMode, previewing: bool) -> &'stat
   }
 }
 
-/// What an outcome is worth reporting: a conflict is business as usual, an error
-/// is not, and success needs no report at all.
+/// What an outcome is worth reporting: a conflict or missing credentials are business
+/// as usual, any other error is not, and success needs no report at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OutcomeReport {
   Nothing,
@@ -99,6 +99,7 @@ pub(crate) fn outcome_report(outcome: &anyhow::Result<RepoCommandOutcome>) -> Ou
       OutcomeReport::Nothing
     }
     Ok(RepoCommandOutcome::Conflicted { .. }) => OutcomeReport::Expected { reason: "conflict" },
+    Err(error) if git::is_authentication_error(error) => OutcomeReport::Expected { reason: "auth" },
     Err(error) => OutcomeReport::Unexpected {
       error: error.to_string(),
     },
@@ -399,6 +400,18 @@ mod tests {
       OutcomeReport::Unexpected {
         error: "remote hung up".to_string(),
       }
+    );
+    let missing_credentials = git2::Error::new(
+      git2::ErrorCode::Auth,
+      git2::ErrorClass::Callback,
+      "git credential fill failed",
+    );
+    assert_eq!(
+      outcome_report(&Err(
+        anyhow::Error::new(missing_credentials).context("push")
+      )),
+      OutcomeReport::Expected { reason: "auth" },
+      "missing credentials are the user's setup, not a bug to capture"
     );
   }
 

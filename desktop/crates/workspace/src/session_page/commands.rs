@@ -608,7 +608,7 @@ impl SessionPage {
               if checked_out_for_link {
                 crate::pull_request_surface::PullRequestSurfaceHandle::forget(cx);
               }
-              let message = error.to_string();
+              let message = repo_command_error_message(&error);
               #[cfg(any(test, feature = "test-support"))]
               this.record_notification_for_driver(
                 crate::DriverNotificationKind::Error,
@@ -661,6 +661,16 @@ impl SessionPage {
       cx,
     );
   }
+}
+
+/// libgit2's own wording for a credentials failure names our plumbing, not the user's fix.
+fn repo_command_error_message(error: &anyhow::Error) -> String {
+  if git::is_authentication_error(error) {
+    return "Git couldn't get credentials for this remote. Run the same command once in a \
+      terminal to sign in, then try again."
+      .to_string();
+  }
+  error.to_string()
 }
 
 #[cfg(test)]
@@ -2199,5 +2209,20 @@ mod tests {
       "success is not a crash, got {reports:?}"
     );
     crate::git_telemetry::set_test_sink(None);
+  }
+
+  #[test]
+  fn a_credentials_failure_tells_the_user_how_to_sign_in() {
+    let missing_credentials = anyhow::Error::new(git2::Error::new(
+      git2::ErrorCode::Auth,
+      git2::ErrorClass::Callback,
+      "git credential fill failed: exit code: 1 without output",
+    ));
+    let message = super::repo_command_error_message(&missing_credentials);
+    assert!(message.contains("sign in"), "message: {message}");
+    assert!(!message.contains("credential fill"), "message: {message}");
+
+    let other = anyhow::anyhow!("remote hung up");
+    assert_eq!(super::repo_command_error_message(&other), "remote hung up");
   }
 }
