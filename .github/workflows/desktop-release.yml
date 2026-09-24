@@ -245,12 +245,34 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install Sentry CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/sentry-cli/bin"
+          mkdir -p "${install_dir}"
+          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${install_dir}" bash
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+          "${install_dir}/sentry-cli" --version
+
       - name: Build Linux archive
         timeout-minutes: 40
         shell: bash
         run: |
           set -euo pipefail
           bash ./desktop/scripts/build-linux-archive.sh "${VERSION}" "${MANIFEST_ARCH}"
+
+      # The archive ships this binary as is, line tables included.
+      - name: Upload Sentry debug files
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary_path="desktop/target/${TARGET}/release/reviu"
+          if [[ ! -f "${binary_path}" ]]; then
+            echo "Expected binary not found for Sentry debug upload: ${binary_path}" >&2
+            exit 1
+          fi
+          sentry-cli debug-files upload "${binary_path}"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -314,12 +336,37 @@ jobs:
             "INNO_SETUP_COMPILER=$innoDir\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
           }
 
+      # The install script names the binary without .exe, which Windows will not run.
+      - name: Install Sentry CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/sentry-cli/bin"
+          mkdir -p "${install_dir}"
+          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${install_dir}" INSTALL_PATH="${install_dir}/sentry-cli.exe" bash
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+          "${install_dir}/sentry-cli.exe" --version
+
       - name: Build Windows installer
         timeout-minutes: 45
         shell: bash
         run: |
           set -euo pipefail
           bash ./desktop/scripts/build-windows-installer.sh "${VERSION}" "${MANIFEST_ARCH}"
+
+      # MSVC keeps the debug info in a .pdb next to the executable.
+      - name: Upload Sentry debug files
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="desktop/target/${TARGET}/release"
+          for file in reviu.exe reviu.pdb; do
+            if [[ ! -f "${release_dir}/${file}" ]]; then
+              echo "Expected ${file} not found for Sentry debug upload in ${release_dir}" >&2
+              exit 1
+            fi
+          done
+          sentry-cli debug-files upload "${release_dir}/reviu.exe" "${release_dir}/reviu.pdb"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
