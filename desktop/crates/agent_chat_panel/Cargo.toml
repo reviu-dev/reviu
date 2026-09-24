@@ -8,6 +8,7 @@ publish.workspace = true
 test-support = ["agent_acp/test-support"]
 
 [dependencies]
+gpui_util = { workspace = true }
 app_log = { workspace = true }
 agent_acp = { workspace = true }
 agent_registry = { workspace = true }

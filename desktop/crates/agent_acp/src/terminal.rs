@@ -272,7 +272,7 @@ pub(crate) fn spawn_terminal(
   cwd: std::path::PathBuf,
   output_byte_limit: Option<u64>,
 ) -> Result<()> {
-  let mut cmd = async_process::Command::new(&command);
+  let mut cmd = async_process::Command::from(gpui_util::new_std_command(&command));
   cmd.args(&args);
   apply_color_env(&mut cmd);
   cmd.envs(env);

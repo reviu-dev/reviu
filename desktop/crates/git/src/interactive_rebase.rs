@@ -2,7 +2,6 @@ use std::{
   collections::{HashMap, HashSet},
   fs,
   path::{Path, PathBuf},
-  process::Command,
   sync::atomic::{AtomicU64, Ordering},
   time::{SystemTime, UNIX_EPOCH},
 };
@@ -92,7 +91,7 @@ pub fn start_interactive_rebase(
   )?;
   make_script_executable_if_supported(&editor_script.path)?;
 
-  let mut command = Command::new("git");
+  let mut command = gpui_util::new_std_command("git");
   command.current_dir(repo_root).arg("rebase").arg("-i");
   if let InteractiveRebaseTarget::BranchInPlace(branch) = target {
     let merge_base = resolve_merge_base(repo_root, branch)?;

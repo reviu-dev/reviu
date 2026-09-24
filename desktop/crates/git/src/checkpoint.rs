@@ -3,7 +3,6 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use git2::{ObjectType, Repository, TreeWalkMode, TreeWalkResult};
@@ -27,7 +26,7 @@ fn now_ms() -> u64 {
 }
 
 pub(crate) fn run_git(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
-  let mut command = Command::new("git");
+  let mut command = gpui_util::new_std_command("git");
   command.current_dir(repo_root).args(args);
   for (key, value) in env {
     command.env(key, value);

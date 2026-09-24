@@ -1,4 +1,4 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
@@ -268,7 +268,7 @@ pub enum PullOutcome {
 pub fn pull(repo_root: &Path) -> Result<PullOutcome> {
   let head_before = current_head_sha(repo_root).ok().flatten();
 
-  let output = Command::new("git")
+  let output = gpui_util::new_std_command("git")
     .current_dir(repo_root)
     .args(["pull"])
     .output()
@@ -292,7 +292,7 @@ pub fn clone(url: &str, destination: &Path) -> Result<()> {
     bail!("destination already exists: {}", destination.display());
   }
 
-  let output = Command::new("git")
+  let output = gpui_util::new_std_command("git")
     .arg("clone")
     .arg("--")
     .arg(url)
@@ -1059,7 +1059,7 @@ fn rebase_output_has_conflicts(details: &str) -> bool {
 }
 
 fn run_git_rebase_command(repo_root: &Path, flag: &str, operation_name: &str) -> Result<()> {
-  let output = Command::new("git")
+  let output = gpui_util::new_std_command("git")
     .current_dir(repo_root)
     .args(["rebase", flag])
     .env("GIT_EDITOR", ":")
@@ -1333,7 +1333,7 @@ pub fn create_stash(
     trimmed = msg.to_string();
     args.push(&trimmed);
   }
-  let output = Command::new("git")
+  let output = gpui_util::new_std_command("git")
     .args(&args)
     .current_dir(repo_root)
     .output()
@@ -1367,7 +1367,7 @@ pub fn list_stashes(repo_root: &Path) -> Result<Vec<StashEntry>> {
 }
 
 pub fn apply_stash(repo_root: &Path, index: usize) -> Result<()> {
-  let output = Command::new("git")
+  let output = gpui_util::new_std_command("git")
     .args(["stash", "apply", &format!("stash@{{{index}}}")])
     .current_dir(repo_root)
     .output()
@@ -1395,7 +1395,7 @@ pub fn drop_stash(repo_root: &Path, index: usize) -> Result<()> {
 }
 
 pub fn pop_stash(repo_root: &Path, index: usize) -> Result<()> {
-  let output = Command::new("git")
+  let output = gpui_util::new_std_command("git")
     .args(["stash", "pop", &format!("stash@{{{index}}}")])
     .current_dir(repo_root)
     .output()

@@ -1,10 +1,11 @@
 #[cfg(not(target_os = "windows"))]
 use std::ffi::OsString;
+#[cfg(not(target_os = "windows"))]
+use std::process::Command;
 use std::{
   fs::{self, File},
   io::Read,
   path::{Path, PathBuf},
-  process::Command,
   sync::{Arc, Mutex},
 };
 
@@ -378,12 +379,14 @@ pub fn start_update_download(cx: &mut App) {
 
 #[cfg(target_os = "windows")]
 fn install_update_windows(artifact_path: &Path) -> Result<()> {
-  Command::new(artifact_path).spawn().with_context(|| {
-    format!(
-      "failed to launch Windows installer {}",
-      artifact_path.display()
-    )
-  })?;
+  gpui_util::new_std_command(artifact_path)
+    .spawn()
+    .with_context(|| {
+      format!(
+        "failed to launch Windows installer {}",
+        artifact_path.display()
+      )
+    })?;
 
   Ok(())
 }

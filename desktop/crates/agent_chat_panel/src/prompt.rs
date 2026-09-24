@@ -5,7 +5,7 @@ use super::*;
 /// Blocking on purpose: runs on the background executor, where the test
 /// scheduler can track it (async-process's reactor thread cannot be).
 pub(crate) fn list_project_files(cwd: PathBuf) -> Vec<String> {
-  let output = std::process::Command::new("git")
+  let output = gpui_util::new_std_command("git")
     .args(["ls-files", "--cached", "--others", "--exclude-standard"])
     .current_dir(&cwd)
     .output();
@@ -21,7 +21,7 @@ pub(crate) fn list_project_files(cwd: PathBuf) -> Vec<String> {
 }
 
 pub(crate) async fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
-  let output = async_process::Command::new("git")
+  let output = async_process::Command::from(gpui_util::new_std_command("git"))
     .args(args)
     .current_dir(cwd)
     .output()

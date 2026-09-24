@@ -29,6 +29,7 @@ license-file = "../LICENSE"
 [workspace.dependencies]
 # External crates
 gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_util = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", features = [
   "font-kit",
   "x11",
@@ -181,10 +182,11 @@ tree-sitter-scss = { git = "https://github.com/tree-sitter-grammars/tree-sitter-
 
 # TestWindow raw handles return Err instead of panicking; unbreaks gpui-component's
 # macOS native integrations (accessibility, autofill) in test windows.
-# gpui_platform and reqwest_client ride along so the graph keeps a single http_client.
+# Keep every Zed crate on the same patched fork.
 [patch."https://github.com/zed-industries/zed"]
 gpui = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle", version = "=0.2.2" }
 gpui_platform = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle" }
+gpui_util = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle" }
 reqwest_client = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle" }
 
 # TreeEvent only reported expansion, so a tree could not say whether the user

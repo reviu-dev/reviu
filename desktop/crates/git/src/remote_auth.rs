@@ -1,6 +1,6 @@
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use anyhow::{Context, Result};
 use git2::{Config, Cred, CredentialType, ErrorClass, ErrorCode, RemoteCallbacks, Repository};
@@ -102,7 +102,7 @@ fn credential_from_git_credential_fill_command(
   url: &str,
   username_from_url: Option<&str>,
 ) -> std::result::Result<Cred, git2::Error> {
-  let mut child = Command::new(command)
+  let mut child = gpui_util::new_std_command(command)
     .args(["credential", "fill"])
     .env("GIT_TERMINAL_PROMPT", "0")
     .stdin(Stdio::piped())

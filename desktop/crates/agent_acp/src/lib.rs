@@ -375,7 +375,7 @@ impl TerminalAuthCommand {
     #[cfg(target_os = "windows")]
     {
       let full = format!("start \"\" cmd /k {shell_cmd}");
-      return std::process::Command::new("cmd")
+      return gpui_util::new_std_command("cmd")
         .arg("/c")
         .arg(full)
         .spawn()
@@ -425,7 +425,7 @@ impl AgentSession {
     load_session: Option<String>,
     spawner: impl DriverSpawner,
   ) -> Result<Self> {
-    let mut cmd = Command::new(&backend.command);
+    let mut cmd = Command::from(gpui_util::new_std_command(&backend.command));
     cmd.args(&backend.args);
     terminal::apply_color_env(&mut cmd);
     for (key, value) in &backend.env {

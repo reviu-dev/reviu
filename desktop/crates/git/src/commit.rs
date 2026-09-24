@@ -1,4 +1,4 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use git2::{BranchType, Oid, PushOptions, Repository, RepositoryState, ResetType, Signature};
@@ -86,7 +86,7 @@ pub fn commit_changes(repo_root: &Path, message: &str) -> Result<()> {
       bail!("merge has conflicts");
     }
 
-    let output = Command::new("git")
+    let output = gpui_util::new_std_command("git")
       .current_dir(repo_root)
       .args(["commit", "-m", message])
       .env("GIT_EDITOR", ":")

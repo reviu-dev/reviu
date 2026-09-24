@@ -355,6 +355,7 @@ dependencies = [
  "async-channel",
  "async-process",
  "futures",
+ "gpui_util",
  "log",
  "serde",
  "serde_json",
@@ -384,6 +385,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
+ "gpui_util",
  "log",
  "selectable_text",
  "serde",
@@ -3265,6 +3267,7 @@ dependencies = [
  "criterion",
  "diff_core",
  "git2",
+ "gpui_util",
 ]
 
 [[package]]
@@ -11724,6 +11727,7 @@ dependencies = [
  "gpui",
  "gpui-base",
  "gpui-component",
+ "gpui_util",
  "gtk",
  "image",
  "libloading 0.9.0",
