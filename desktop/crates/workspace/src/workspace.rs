@@ -270,8 +270,7 @@ impl WorkspaceView {
         .update(cx, |workspace, cx| {
           workspace
             .session_page
-            .update(cx, |page, cx| page.request_close_window(window, cx));
-          false
+            .update(cx, |page, cx| page.window_can_close(window, cx))
         })
         .unwrap_or(true)
     });

@@ -147,6 +147,18 @@ fn untitled_window_close_flushes_and_a_failed_flush_keeps_the_window(cx: &mut Te
 }
 
 #[gpui::test]
+fn close_button_leaves_removing_the_window_to_the_platform(cx: &mut TestAppContext) {
+  let (project, page, cx) = setup(cx);
+  new_buffer(&page, "keep me", cx);
+  assert!(page.update_in(cx, |page, window, cx| page.window_can_close(window, cx)));
+  assert_eq!(cx.windows().len(), 1);
+  assert_eq!(
+    stored(&project.path).first().expect("draft").1.content,
+    "keep me"
+  );
+}
+
+#[gpui::test]
 fn untitled_drafts_survive_missing_or_incompatible_layouts(cx: &mut TestAppContext) {
   let (project, page, cx) = setup(cx);
   let tab = new_buffer(&page, "recover independently", cx);

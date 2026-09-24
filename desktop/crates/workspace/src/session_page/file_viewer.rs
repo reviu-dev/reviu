@@ -2530,15 +2530,24 @@ impl SessionPage {
   }
 
   pub(crate) fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.window_can_close(window, cx) {
+      window.remove_window();
+    }
+  }
+
+  /// The platform's close button must answer through this instead of removing the window
+  /// itself: on X11 the answer is asked for while the client state is borrowed, and removing
+  /// the last window there quits the app, which borrows that state again and panics.
+  pub(crate) fn window_can_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
     if let Err(error) = self.flush_untitled_buffers(cx) {
       self.report_untitled_error(error, cx);
-      return;
+      return false;
     }
     if let Some(tab) = self.dirty_editor_tab(cx) {
       self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseWindow { tab }, window, cx);
-    } else {
-      window.remove_window();
+      return false;
     }
+    true
   }
 
   pub(crate) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
