@@ -2,7 +2,7 @@
 
 All notable changes to Reviu are documented here.
 
-## 1.4.0
+## 1.3.0
 
 ### Worktrees As Places To Work
 
@@ -27,8 +27,6 @@ Outdated GitHub review comments now show the original diff hunk inside the card,
 ### Closing The Window On Linux
 
 Closing Reviu with the window's close button on Linux (X11) no longer crashes the app on its way out.
-
-## 1.3.0
 
 ### Finished Agent Attention
 
