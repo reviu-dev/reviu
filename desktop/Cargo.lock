@@ -11740,6 +11740,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "syntax",
+ "sysinfo",
  "terminal",
  "time",
  "tray-icon",

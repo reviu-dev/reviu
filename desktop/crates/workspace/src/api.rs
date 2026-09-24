@@ -2384,8 +2384,13 @@ mod tests {
         thread_name: Some("main".to_string()),
         app_version: "0.0.11".to_string(),
         release: Some("reviu@0.0.11".to_string()),
-        os: "macos".to_string(),
-        arch: "aarch64".to_string(),
+        build_commit: Some("8684ac5b".to_string()),
+        os: "linux".to_string(),
+        os_version: None,
+        arch: "x86_64".to_string(),
+        display_server: Some("x11".to_string()),
+        desktop_environment: None,
+        uptime_seconds: Some(42),
         app_profile: "prod".to_string(),
         happened_at: "2026-04-03T10:00:00Z".to_string(),
         git_context: Some(crate::sentry_context::CrashGitContext {
@@ -2416,6 +2421,12 @@ mod tests {
     );
     assert!(
       request.contains("\"appProfile\":\"prod\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"buildCommit\":\"8684ac5b\"")
+        && request.contains("\"displayServer\":\"x11\"")
+        && request.contains("\"uptimeSeconds\":42"),
       "request: {request}"
     );
     assert!(

@@ -84,6 +84,7 @@ jobs:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
       SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
+      REVIU_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha }}
       TARGET: ${{ matrix.target }}
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
@@ -213,6 +214,8 @@ jobs:
     env:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
+      SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
+      REVIU_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha }}
       TARGET: ${{ matrix.target }}
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
@@ -279,6 +282,8 @@ jobs:
     env:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
+      SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
+      REVIU_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha }}
       TARGET: ${{ matrix.target }}
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev

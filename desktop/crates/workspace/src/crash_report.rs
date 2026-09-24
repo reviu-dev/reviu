@@ -1,3 +1,5 @@
+mod backtrace;
+
 use std::backtrace::Backtrace;
 #[cfg(test)]
 use std::cell::RefCell;
@@ -7,7 +9,7 @@ use std::io::{Read as _, Seek as _, SeekFrom};
 use std::panic::PanicHookInfo;
 use std::path::PathBuf;
 use std::sync::{Mutex, Once, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use dirs::config_dir;
 use gpui::{AnyWindowHandle, App, ClickEvent, Window, div, prelude::*};
@@ -25,10 +27,32 @@ const CRASH_REPORTS_DIR_NAME: &str = "crash-reports";
 const PENDING_CRASH_REPORT_FILE_NAME: &str = "pending.json";
 const CRASH_DETAILS_COPY_BACKTRACE_LIMIT: usize = 20_000;
 const CRASH_REPORT_LOG_TAIL_LIMIT: usize = 64 * 1024;
+// The backend refuses a report whose backtrace is longer than 40 000 characters.
+const CRASH_REPORT_BACKTRACE_LIMIT: usize = 30_000;
 
 static CRASH_REPORTER_INSTALL: Once = Once::new();
 static CRASH_REPORT_PERSISTED: std::sync::atomic::AtomicBool =
   std::sync::atomic::AtomicBool::new(false);
+static CRASH_ENVIRONMENT: OnceLock<CrashEnvironment> = OnceLock::new();
+
+/// Read once at startup, so the panic hook does no file or system work of its own.
+struct CrashEnvironment {
+  started_at: Instant,
+  os_version: Option<String>,
+  display_server: Option<String>,
+  desktop_environment: Option<String>,
+}
+
+impl CrashEnvironment {
+  fn detect() -> Self {
+    Self {
+      started_at: Instant::now(),
+      os_version: sysinfo::System::long_os_version(),
+      display_server: display_server(),
+      desktop_environment: non_empty_env("XDG_CURRENT_DESKTOP"),
+    }
+  }
+}
 
 fn crash_report_submission_state() -> &'static Mutex<HashSet<String>> {
   static STATE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -54,8 +78,18 @@ pub struct StartupCrashReport {
   pub app_version: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub release: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub build_commit: Option<String>,
   pub os: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub os_version: Option<String>,
   pub arch: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub display_server: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub desktop_environment: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub uptime_seconds: Option<u64>,
   pub app_profile: String,
   pub happened_at: String,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,16 +104,28 @@ struct StartupCrashReportNotificationId;
 impl StartupCrashReport {
   fn from_panic_info(info: &PanicHookInfo<'_>) -> Self {
     let snapshot = current_crash_context_snapshot();
+    let environment = CRASH_ENVIRONMENT.get();
+    let app_version = resolved_build_version(env!("CARGO_PKG_VERSION"));
+    let backtrace = backtrace::clean_backtrace(&Backtrace::force_capture().to_string());
     Self {
       crash_id: build_crash_id(),
       message: panic_message(info),
       panic_location: panic_location(info),
-      backtrace: Some(Backtrace::force_capture().to_string()),
+      backtrace: Some(trim_multiline(&backtrace, CRASH_REPORT_BACKTRACE_LIMIT)),
       thread_name: std::thread::current().name().map(str::to_string),
-      app_version: resolved_build_version(env!("CARGO_PKG_VERSION")),
-      release: option_env!("SENTRY_RELEASE").map(str::to_string),
+      release: Some(
+        option_env!("SENTRY_RELEASE")
+          .map_or_else(|| format!("reviu@{app_version}"), str::to_string),
+      ),
+      app_version,
+      build_commit: option_env!("REVIU_BUILD_COMMIT").map(str::to_string),
       os: std::env::consts::OS.to_string(),
+      os_version: environment.and_then(|environment| environment.os_version.clone()),
       arch: std::env::consts::ARCH.to_string(),
+      display_server: environment.and_then(|environment| environment.display_server.clone()),
+      desktop_environment: environment
+        .and_then(|environment| environment.desktop_environment.clone()),
+      uptime_seconds: environment.map(|environment| environment.started_at.elapsed().as_secs()),
       app_profile: app_profile_label(AppProfile::current()).to_string(),
       happened_at: current_timestamp_rfc3339(),
       git_context: snapshot.git,
@@ -101,6 +147,24 @@ impl StartupCrashReport {
       format!("Platform: {}/{}", self.os.trim(), self.arch.trim()),
       format!("Happened at: {}", self.happened_at.trim()),
     ];
+
+    let optional_lines = [
+      ("Build commit", self.build_commit.clone()),
+      ("OS version", self.os_version.clone()),
+      ("Display server", self.display_server.clone()),
+      ("Desktop environment", self.desktop_environment.clone()),
+      (
+        "Uptime",
+        self.uptime_seconds.map(|seconds| format!("{seconds}s")),
+      ),
+    ];
+    for (label, value) in optional_lines {
+      if let Some(value) = value
+        && !value.trim().is_empty()
+      {
+        lines.push(format!("{label}: {}", value.trim()));
+      }
+    }
 
     if let Some(thread_name) = self.thread_name.as_deref()
       && !thread_name.trim().is_empty()
@@ -146,6 +210,7 @@ impl StartupCrashReport {
 
 pub fn install_crash_reporter() {
   CRASH_REPORTER_INSTALL.call_once(|| {
+    CRASH_ENVIRONMENT.get_or_init(CrashEnvironment::detect);
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
       // Only persist the first panic report. When a panic crosses an FFI boundary
@@ -441,13 +506,36 @@ fn panic_message(info: &PanicHookInfo<'_>) -> String {
 
 fn panic_location(info: &PanicHookInfo<'_>) -> Option<String> {
   info.location().map(|location| {
-    format!(
+    backtrace::shorten_path(&format!(
       "{}:{}:{}",
       location.file(),
       location.line(),
       location.column()
-    )
+    ))
   })
+}
+
+#[cfg(target_os = "linux")]
+fn display_server() -> Option<String> {
+  non_empty_env("XDG_SESSION_TYPE").or_else(|| {
+    if non_empty_env("WAYLAND_DISPLAY").is_some() {
+      Some("wayland".to_string())
+    } else {
+      non_empty_env("DISPLAY").map(|_| "x11".to_string())
+    }
+  })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn display_server() -> Option<String> {
+  None
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+  std::env::var(name)
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
 }
 
 fn current_timestamp_rfc3339() -> String {
@@ -500,8 +588,13 @@ mod tests {
       thread_name: Some("main".to_string()),
       app_version: "0.0.11".to_string(),
       release: Some("reviu@0.0.11".to_string()),
-      os: "macos".to_string(),
-      arch: "aarch64".to_string(),
+      build_commit: Some("8684ac5b".to_string()),
+      os: "linux".to_string(),
+      os_version: Some("Linux (Ubuntu 24.04)".to_string()),
+      arch: "x86_64".to_string(),
+      display_server: Some("x11".to_string()),
+      desktop_environment: Some("GNOME".to_string()),
+      uptime_seconds: Some(42),
       app_profile: "prod".to_string(),
       happened_at: "2026-04-03T10:00:00Z".to_string(),
       git_context: Some(CrashGitContext {
@@ -558,6 +651,9 @@ mod tests {
     assert!(details.contains("Crash ID: crash-123"));
     assert!(details.contains("Panic location: desktop/crates/editor/src/editor.rs:42:7"));
     assert!(details.contains("Git Context:"));
+    assert!(details.contains("Build commit: 8684ac5b"));
+    assert!(details.contains("Display server: x11"));
+    assert!(details.contains("Uptime: 42s"));
     assert!(details.contains("Backtrace:"));
     assert!(details.contains("Recent logs:"));
     assert!(details.contains("INFO app: hello"));
