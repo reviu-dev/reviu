@@ -1,5 +1,5 @@
-//! What a crash report and its breadcrumbs need to know about the repository the
-//! user was working in when things went wrong.
+//! What a crash report and its breadcrumbs need to know about the workspace the
+//! user was in when things went wrong.
 
 use std::path::Path;
 
@@ -8,14 +8,14 @@ use sentry::protocol::{Map, Value};
 
 use crate::dock_panel::DockPanelTab;
 use crate::repo_command::RepoCommandOutcome;
-use crate::sentry_context;
+use crate::sentry_context::{self, CrashWorkspaceContext};
 
 /// Where the reports go. Sentry is not observable from a test, this is.
 pub(crate) trait TelemetrySink: Send + Sync {
   fn breadcrumb(&self, message: &str, data: Map<String, Value>);
   fn expected_error(&self, operation: &str, reason: &str, data: Map<String, Value>);
   fn unexpected_error(&self, operation: &'static str, error: &str, data: Map<String, Value>);
-  fn sync_context(&self, tab: &'static str, diff_view: &'static str);
+  fn sync_context(&self, context: &CrashWorkspaceContext);
   fn clear_context(&self);
 }
 
@@ -35,12 +35,12 @@ impl TelemetrySink for SentrySink {
     sentry_context::capture_unexpected_error(operation, &io_error, data);
   }
 
-  fn sync_context(&self, tab: &'static str, diff_view: &'static str) {
-    sentry_context::sync_git_context(tab, diff_view);
+  fn sync_context(&self, context: &CrashWorkspaceContext) {
+    sentry_context::sync_workspace_context(context);
   }
 
   fn clear_context(&self) {
-    sentry_context::clear_git_context();
+    sentry_context::clear_workspace_context();
   }
 }
 
@@ -105,24 +105,43 @@ pub(crate) fn outcome_report(outcome: &anyhow::Result<RepoCommandOutcome>) -> Ou
   }
 }
 
-/// The repository path never leaves the machine.
+/// The repository path never leaves the machine, and neither does the agent's work.
+#[derive(Default)]
 pub(crate) struct GitTelemetry<'a> {
   pub(crate) repo_root: Option<&'a Path>,
   pub(crate) tab: &'static str,
   pub(crate) diff_view: &'static str,
+  pub(crate) center: Option<&'static str>,
+  /// A registry id such as `claude-code`, never a command line.
+  pub(crate) agent: Option<&'a str>,
+  pub(crate) agent_turn_running: bool,
+  pub(crate) in_worktree: bool,
+  pub(crate) window_count: usize,
 }
 
 impl GitTelemetry<'_> {
   pub(crate) fn data(&self) -> Map<String, Value> {
     let mut data = Map::new();
-    data.insert("sidebar_mode".into(), self.tab.to_string().into());
+    data.insert("dock_tab".into(), self.tab.to_string().into());
     data.insert("diff_view".into(), self.diff_view.to_string().into());
     data
   }
 
+  pub(crate) fn crash_context(&self) -> CrashWorkspaceContext {
+    CrashWorkspaceContext {
+      dock_tab: self.tab.to_string(),
+      diff_view: self.diff_view.to_string(),
+      center: self.center.map(str::to_string),
+      agent: self.agent.map(str::to_string),
+      agent_turn_running: self.agent_turn_running,
+      in_worktree: self.in_worktree,
+      window_count: Some(self.window_count),
+    }
+  }
+
   /// The context that stays attached to whatever happens next.
   pub(crate) fn sync(&self) {
-    sink().sync_context(self.tab, self.diff_view);
+    sink().sync_context(&self.crash_context());
   }
 
   /// Without a repository there is nothing to describe, and a stale context would
@@ -244,11 +263,11 @@ pub(crate) mod test_support {
       );
     }
 
-    fn sync_context(&self, tab: &'static str, diff_view: &'static str) {
+    fn sync_context(&self, context: &CrashWorkspaceContext) {
       self.record(
         Report::ContextSynced {
-          tab: tab.to_string(),
-          diff_view: diff_view.to_string(),
+          tab: context.dock_tab.clone(),
+          diff_view: context.diff_view.clone(),
         },
         Map::new(),
       );
@@ -279,6 +298,7 @@ mod tests {
       repo_root: Some(Path::new("/home/someone/secret-project")),
       tab: "changes",
       diff_view: "inline",
+      ..Default::default()
     };
 
     let data = telemetry.data();
@@ -296,13 +316,38 @@ mod tests {
       repo_root: None,
       tab: "history",
       diff_view: "split",
+      ..Default::default()
     };
 
     let data = telemetry.data();
     assert_eq!(value(&data, "selected_file"), None);
     assert_eq!(value(&data, "branch"), None);
-    assert_eq!(value(&data, "sidebar_mode").as_deref(), Some("history"));
+    assert_eq!(value(&data, "dock_tab").as_deref(), Some("history"));
     assert_eq!(value(&data, "diff_view").as_deref(), Some("split"));
+  }
+
+  #[test]
+  fn the_crash_context_names_surfaces_and_never_the_repository() {
+    let telemetry = GitTelemetry {
+      repo_root: Some(Path::new("/home/someone/secret-project")),
+      tab: "changes",
+      diff_view: "split",
+      center: Some("terminal"),
+      agent: Some("claude-code"),
+      agent_turn_running: true,
+      in_worktree: true,
+      window_count: 2,
+    };
+
+    let context = telemetry.crash_context();
+    assert_eq!(context.center.as_deref(), Some("terminal"));
+    assert_eq!(context.agent.as_deref(), Some("claude-code"));
+    assert!(context.agent_turn_running && context.in_worktree);
+    assert_eq!(context.window_count, Some(2));
+    assert!(
+      !format!("{context:?}").contains("secret-project"),
+      "the crash context says where the user was, not which repository"
+    );
   }
 
   #[test]
@@ -311,6 +356,7 @@ mod tests {
       repo_root: None,
       tab: "changes",
       diff_view: "inline",
+      ..Default::default()
     };
 
     let mut extra = Map::new();
@@ -363,6 +409,7 @@ mod tests {
       repo_root: Some(Path::new("/tmp/widget")),
       tab: "changes",
       diff_view: "inline",
+      ..Default::default()
     };
 
     telemetry.report_outcome(
@@ -420,6 +467,7 @@ mod tests {
       repo_root: Some(Path::new("/tmp/widget")),
       tab: "changes",
       diff_view: "inline",
+      ..Default::default()
     }
     .sync_or_clear();
     assert_eq!(
@@ -434,6 +482,7 @@ mod tests {
       repo_root: None,
       tab: "changes",
       diff_view: "inline",
+      ..Default::default()
     }
     .sync_or_clear();
     assert_eq!(

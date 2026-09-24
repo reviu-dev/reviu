@@ -1423,6 +1423,7 @@ impl SessionPage {
 
   /// What a crash or a git error should carry about where the user was.
   fn git_telemetry<'a>(&'a self, cx: &'a App) -> GitTelemetry<'a> {
+    let agent = self.agent_chat_view.as_ref().map(|panel| panel.read(cx));
     GitTelemetry {
       repo_root: self.synced_checkout.as_deref(),
       tab: git_telemetry::dock_tab_tag(self.dock_panel.read(cx).active_tab()),
@@ -1430,6 +1431,12 @@ impl SessionPage {
         self.diff_view,
         self.show_preview && self.shown_previewable(),
       ),
+      center: Some(self.center_layout.active_tab().kind.telemetry_tag()),
+      agent: agent.map(|panel| panel.backend_kind().as_str()),
+      agent_turn_running: agent.is_some_and(|panel| panel.is_turn_in_flight()),
+      in_worktree: self.synced_checkout.is_some()
+        && self.synced_checkout.as_deref() != self.project_root.as_deref(),
+      window_count: cx.windows().len(),
     }
   }
 

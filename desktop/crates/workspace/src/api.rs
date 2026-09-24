@@ -2393,10 +2393,16 @@ mod tests {
         uptime_seconds: Some(42),
         app_profile: "prod".to_string(),
         happened_at: "2026-04-03T10:00:00Z".to_string(),
-        git_context: Some(crate::sentry_context::CrashGitContext {
-          sidebar_mode: "changes".to_string(),
-          diff_view: "unified".to_string(),
+        workspace_context: Some(crate::sentry_context::CrashWorkspaceContext {
+          dock_tab: "changes".to_string(),
+          diff_view: "inline".to_string(),
+          center: Some("diff".to_string()),
+          agent: None,
+          agent_turn_running: false,
+          in_worktree: false,
+          window_count: Some(1),
         }),
+        closing: false,
         recent_logs: Some("recent log line".to_string()),
       })
       .expect("submit crash report");
@@ -2430,7 +2436,9 @@ mod tests {
       "request: {request}"
     );
     assert!(
-      request.contains("\"gitContext\":{\"sidebarMode\":\"changes\""),
+      request.contains("\"workspaceContext\":{\"dockTab\":\"changes\"")
+        && request.contains("\"center\":\"diff\"")
+        && !request.contains("\"gitContext\""),
       "request: {request}"
     );
     assert!(!request.contains("\"repoName\""), "request: {request}");

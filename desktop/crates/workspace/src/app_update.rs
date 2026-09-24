@@ -320,7 +320,10 @@ pub fn start_update_download(cx: &mut App) {
     #[cfg(target_os = "windows")]
     {
       match install_update_artifact(&ready) {
-        Ok(()) => cx.quit(),
+        Ok(()) => {
+          crate::sentry_context::mark_closing();
+          cx.quit();
+        }
         Err(err) => AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string()),
       }
       return;

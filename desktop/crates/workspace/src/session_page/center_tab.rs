@@ -10,6 +10,19 @@ pub(super) enum CenterTabKind {
   Terminal,
 }
 
+impl CenterTabKind {
+  pub(super) fn telemetry_tag(self) -> &'static str {
+    match self {
+      Self::Chat => "chat",
+      Self::File => "file",
+      Self::Diff => "diff",
+      Self::InteractiveRebase => "interactive_rebase",
+      Self::ProjectSearch => "project_search",
+      Self::Terminal => "terminal",
+    }
+  }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, Hash, serde::Serialize)]
 pub(super) enum CenterTabSnapshot {
   AgentTool {

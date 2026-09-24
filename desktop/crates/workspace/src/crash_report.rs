@@ -20,7 +20,7 @@ use ui::{Button, ButtonVariants as _, WindowExt};
 
 use crate::AppProfile;
 use crate::app_update::resolved_build_version;
-use crate::sentry_context::{CrashGitContext, current_crash_context_snapshot};
+use crate::sentry_context::{CrashWorkspaceContext, current_crash_context_snapshot};
 use crate::workspace::WorkspaceApi;
 
 const CRASH_REPORTS_DIR_NAME: &str = "crash-reports";
@@ -92,8 +92,11 @@ pub struct StartupCrashReport {
   pub uptime_seconds: Option<u64>,
   pub app_profile: String,
   pub happened_at: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub(crate) git_context: Option<CrashGitContext>,
+  // Reports written before 1.3 still sit on disk under the old name.
+  #[serde(default, alias = "gitContext", skip_serializing_if = "Option::is_none")]
+  pub(crate) workspace_context: Option<CrashWorkspaceContext>,
+  #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+  pub closing: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub recent_logs: Option<String>,
 }
@@ -128,7 +131,8 @@ impl StartupCrashReport {
       uptime_seconds: environment.map(|environment| environment.started_at.elapsed().as_secs()),
       app_profile: app_profile_label(AppProfile::current()).to_string(),
       happened_at: current_timestamp_rfc3339(),
-      git_context: snapshot.git,
+      workspace_context: snapshot.workspace,
+      closing: snapshot.closing,
       recent_logs: None,
     }
   }
@@ -197,11 +201,30 @@ impl StartupCrashReport {
       lines.push(trim_multiline(recent_logs, CRASH_REPORT_LOG_TAIL_LIMIT));
     }
 
-    if let Some(git) = self.git_context.as_ref() {
+    if self.closing {
+      lines.push("Closing: a window close or quit was under way".to_string());
+    }
+
+    if let Some(workspace) = self.workspace_context.as_ref() {
       lines.push(String::new());
-      lines.push("Git Context:".to_string());
-      lines.push(format!("Sidebar mode: {}", git.sidebar_mode));
-      lines.push(format!("Diff view: {}", git.diff_view));
+      lines.push("Workspace Context:".to_string());
+      lines.push(format!("Dock tab: {}", workspace.dock_tab));
+      lines.push(format!("Diff view: {}", workspace.diff_view));
+      if let Some(center) = workspace.center.as_deref() {
+        lines.push(format!("Center: {center}"));
+      }
+      if let Some(agent) = workspace.agent.as_deref() {
+        let state = if workspace.agent_turn_running {
+          "running"
+        } else {
+          "idle"
+        };
+        lines.push(format!("Agent: {agent} ({state})"));
+      }
+      lines.push(format!("In worktree: {}", workspace.in_worktree));
+      if let Some(window_count) = workspace.window_count {
+        lines.push(format!("Windows: {window_count}"));
+      }
     }
 
     lines.join("\n")
@@ -571,7 +594,7 @@ mod tests {
     StartupCrashReport, clear_pending_startup_crash_report, set_test_crash_reports_dir,
     take_pending_startup_crash_report, trim_multiline,
   };
-  use crate::sentry_context::CrashGitContext;
+  use crate::sentry_context::CrashWorkspaceContext;
   use std::fs;
   use std::path::PathBuf;
 
@@ -597,10 +620,16 @@ mod tests {
       uptime_seconds: Some(42),
       app_profile: "prod".to_string(),
       happened_at: "2026-04-03T10:00:00Z".to_string(),
-      git_context: Some(CrashGitContext {
-        sidebar_mode: "changes".to_string(),
-        diff_view: "unified".to_string(),
+      workspace_context: Some(CrashWorkspaceContext {
+        dock_tab: "changes".to_string(),
+        diff_view: "inline".to_string(),
+        center: Some("chat".to_string()),
+        agent: Some("claude-code".to_string()),
+        agent_turn_running: true,
+        in_worktree: true,
+        window_count: Some(1),
       }),
+      closing: true,
       recent_logs: None,
     }
   }
@@ -620,6 +649,30 @@ mod tests {
 
     let report = take_pending_startup_crash_report().expect("pending report");
     assert_eq!(report, sample_report());
+
+    set_test_crash_reports_dir(None);
+    let _ = fs::remove_dir_all(dir);
+  }
+
+  #[test]
+  fn a_report_written_before_the_workspace_context_still_loads() {
+    let dir = unique_test_dir();
+    fs::create_dir_all(&dir).expect("create test crash report dir");
+    set_test_crash_reports_dir(Some(dir.clone()));
+
+    fs::write(
+      dir.join("pending.json"),
+      r#"{"crashId":"crash-1","message":"boom","appVersion":"1.2.0","os":"linux","arch":"x86_64",
+        "appProfile":"prod","happenedAt":"2026-09-23T18:54:01Z",
+        "gitContext":{"sidebarMode":"changes","diffView":"inline"}}"#,
+    )
+    .expect("write pending crash report");
+
+    let report = take_pending_startup_crash_report().expect("pending report");
+    let workspace = report.workspace_context.expect("workspace context");
+    assert_eq!(workspace.dock_tab, "changes");
+    assert_eq!(workspace.center, None);
+    assert!(!report.closing);
 
     set_test_crash_reports_dir(None);
     let _ = fs::remove_dir_all(dir);
@@ -650,7 +703,9 @@ mod tests {
     assert!(details.contains("Reviu Desktop Crash Report"));
     assert!(details.contains("Crash ID: crash-123"));
     assert!(details.contains("Panic location: desktop/crates/editor/src/editor.rs:42:7"));
-    assert!(details.contains("Git Context:"));
+    assert!(details.contains("Workspace Context:"));
+    assert!(details.contains("Agent: claude-code (running)"));
+    assert!(details.contains("Closing: a window close or quit was under way"));
     assert!(details.contains("Build commit: 8684ac5b"));
     assert!(details.contains("Display server: x11"));
     assert!(details.contains("Uptime: 42s"));

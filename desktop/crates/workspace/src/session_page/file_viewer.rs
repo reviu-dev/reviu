@@ -2547,6 +2547,7 @@ impl SessionPage {
       self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseWindow { tab }, window, cx);
       return false;
     }
+    crate::sentry_context::mark_closing();
     true
   }
 
@@ -2558,6 +2559,7 @@ impl SessionPage {
     if let Some(tab) = self.dirty_editor_tab(cx) {
       self.open_unsaved_editor_dialog(UnsavedEditorAction::Quit { tab }, window, cx);
     } else {
+      crate::sentry_context::mark_closing();
       cx.quit();
     }
   }

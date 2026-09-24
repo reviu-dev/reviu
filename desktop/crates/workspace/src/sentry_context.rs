@@ -1,7 +1,10 @@
 use std::{
   collections::HashMap,
   error::Error,
-  sync::{Mutex, OnceLock},
+  sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+  },
   time::{Duration, Instant},
 };
 
@@ -10,6 +13,8 @@ use sentry::protocol::{Breadcrumb, Context, Level, Map, Value};
 use serde::{Deserialize, Serialize};
 
 const DEDUP_WINDOW: Duration = Duration::from_secs(300);
+
+static CLOSING: AtomicBool = AtomicBool::new(false);
 
 fn dedup_state() -> &'static Mutex<HashMap<String, Instant>> {
   static STATE: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
@@ -43,17 +48,31 @@ fn should_capture_error(key: &str, now: Instant) -> bool {
   }
 }
 
+/// Which surfaces were open, never what they held: no path, repository or text.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CrashGitContext {
-  pub sidebar_mode: String,
+pub(crate) struct CrashWorkspaceContext {
+  // Reports written before 1.3 named the dock tab after the old Git page sidebar.
+  #[serde(alias = "sidebarMode")]
+  pub dock_tab: String,
   pub diff_view: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub center: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub agent: Option<String>,
+  #[serde(default)]
+  pub agent_turn_running: bool,
+  #[serde(default)]
+  pub in_worktree: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub window_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CrashContextSnapshot {
-  pub git: Option<CrashGitContext>,
+  pub workspace: Option<CrashWorkspaceContext>,
+  pub closing: bool,
 }
 
 fn auth_state_tag(state: &AuthState) -> &'static str {
@@ -148,10 +167,18 @@ pub(crate) fn record_http_status(method: &str, route: &str, status: u16) {
 }
 
 pub(crate) fn current_crash_context_snapshot() -> CrashContextSnapshot {
-  crash_snapshot_state()
+  let mut snapshot = crash_snapshot_state()
     .lock()
     .map(|snapshot| snapshot.clone())
-    .unwrap_or_default()
+    .unwrap_or_default();
+  snapshot.closing = CLOSING.load(Ordering::SeqCst);
+  snapshot
+}
+
+/// A window close or a quit went ahead: a crash from here on happened on the way out.
+pub(crate) fn mark_closing() {
+  CLOSING.store(true, Ordering::SeqCst);
+  add_breadcrumb("app.lifecycle", "Closing", Map::new());
 }
 
 pub(crate) fn sync_auth_state(state: &AuthState) {
@@ -191,34 +218,51 @@ pub(crate) fn sync_auth_state(state: &AuthState) {
   add_breadcrumb("auth.state", "Auth state changed", data);
 }
 
-pub(crate) fn sync_git_context(sidebar_mode: &str, diff_view: &str) {
-  sentry::configure_scope(|scope| {
-    scope.set_tag("git.sidebar_mode", sidebar_mode);
-    scope.set_tag("git.diff_view", diff_view);
+pub(crate) fn sync_workspace_context(context: &CrashWorkspaceContext) {
+  // Called on every render of the session page, so only a change reaches Sentry's scope.
+  let unchanged = crash_snapshot_state()
+    .lock()
+    .is_ok_and(|snapshot| snapshot.workspace.as_ref() == Some(context));
+  if unchanged {
+    return;
+  }
 
-    let mut context = Map::new();
-    context.insert("sidebar_mode".into(), sidebar_mode.to_string().into());
-    context.insert("diff_view".into(), diff_view.to_string().into());
-    scope.set_context("git_state", to_unknown_context(context));
+  sentry::configure_scope(|scope| {
+    scope.set_tag("workspace.dock_tab", &context.dock_tab);
+    scope.set_tag("workspace.diff_view", &context.diff_view);
+    match context.center.as_deref() {
+      Some(center) => scope.set_tag("workspace.center", center),
+      None => scope.remove_tag("workspace.center"),
+    }
+    match context.agent.as_deref() {
+      Some(agent) => scope.set_tag("workspace.agent", agent),
+      None => scope.remove_tag("workspace.agent"),
+    }
+
+    if let Ok(Value::Object(map)) = serde_json::to_value(context) {
+      scope.set_context(
+        "workspace_state",
+        to_unknown_context(map.into_iter().collect()),
+      );
+    }
   });
 
   update_crash_snapshot(|snapshot| {
-    snapshot.git = Some(CrashGitContext {
-      sidebar_mode: sidebar_mode.to_string(),
-      diff_view: diff_view.to_string(),
-    });
+    snapshot.workspace = Some(context.clone());
   });
 }
 
-pub(crate) fn clear_git_context() {
+pub(crate) fn clear_workspace_context() {
   sentry::configure_scope(|scope| {
-    scope.remove_tag("git.sidebar_mode");
-    scope.remove_tag("git.diff_view");
-    scope.remove_context("git_state");
+    scope.remove_tag("workspace.dock_tab");
+    scope.remove_tag("workspace.diff_view");
+    scope.remove_tag("workspace.center");
+    scope.remove_tag("workspace.agent");
+    scope.remove_context("workspace_state");
   });
 
   update_crash_snapshot(|snapshot| {
-    snapshot.git = None;
+    snapshot.workspace = None;
   });
 }
 
