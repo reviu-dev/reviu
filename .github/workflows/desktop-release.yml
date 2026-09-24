@@ -161,7 +161,7 @@ jobs:
           echo "APPLE_KEYCHAIN_PATH=${keychain_path}" >> "${GITHUB_ENV}"
           echo "APPLE_KEYCHAIN_PASSWORD=${keychain_password}" >> "${GITHUB_ENV}"
       - name: Sign, notarize and package macOS release
-        timeout-minutes: 25
+        timeout-minutes: 45
         shell: bash
         run: |
           set -euo pipefail
