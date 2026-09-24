@@ -4,9 +4,9 @@ All notable changes to Reviu are documented here.
 
 ## 1.4.0
 
-### Safer Worktree Deletion
+### Worktrees As Places To Work
 
-Right-click a worktree in the sidebar to delete it along with its chat. Deleting a worktree, from the sidebar or through its chat, now always asks first, and the prompt shows how many uncommitted files and commits on no other branch would be lost.
+A worktree is now a place in the sidebar that can hold several chats: a new chat opens in the checkout you are on, and chat history shows only that checkout's conversations. Deleting a chat never deletes its worktree. To remove a worktree, right-click it in the sidebar; Reviu asks first and shows how many uncommitted files and commits on no other branch would be lost.
 
 ### Fresher Pull Counters
 

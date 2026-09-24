@@ -94,6 +94,13 @@ struct CheckoutRow {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct ListedWorktree {
+  path: PathBuf,
+  /// None on a detached HEAD.
+  branch: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct CheckoutGitSummary {
   branch_status: Option<git::BranchStatus>,
   working_tree_stats: Option<git::WorkingTreeDiffStats>,
@@ -164,6 +171,7 @@ pub enum SessionListEvent {
     checkout_root: PathBuf,
   },
   DeleteWorktree {
+    project_root: PathBuf,
     worktree_path: PathBuf,
   },
   RevealProject {
@@ -202,6 +210,10 @@ pub struct SessionList {
   project_order: Vec<PathBuf>,
   /// Projects that have Git. Only these can create worktree checkouts.
   git_repositories: HashSet<PathBuf>,
+  /// Linked worktrees by project, straight from git: a worktree is a place to
+  /// work, it stays listed with no chat bound to it.
+  project_worktrees: HashMap<PathBuf, Vec<ListedWorktree>>,
+  _worktree_listing_task: Option<Task<()>>,
   checkout_git_summaries: HashMap<PathBuf, CheckoutGitSummary>,
   project_avatar_urls: HashMap<PathBuf, String>,
   checkout_summary_roots: HashSet<PathBuf>,
@@ -224,6 +236,8 @@ impl SessionList {
       collapsed_projects: HashSet::new(),
       project_order: Vec::new(),
       git_repositories: HashSet::new(),
+      project_worktrees: HashMap::new(),
+      _worktree_listing_task: None,
       checkout_git_summaries: HashMap::new(),
       project_avatar_urls: HashMap::new(),
       checkout_summary_roots: HashSet::new(),
@@ -431,12 +445,11 @@ impl SessionList {
         paths.insert(repo_root.clone());
       }
     }
-    for row in &self.conversations {
-      if !self.git_repositories.contains(&row.project_root) {
-        continue;
-      }
-      if let Some(binding) = self.worktree_checkouts.get(&row.meta.id) {
-        paths.insert(binding.path.clone());
+    for repo_root in self.rendered_project_order() {
+      for row in self.checkout_rows_for_project(&repo_root) {
+        if matches!(row.kind, CheckoutKind::Worktree { .. }) {
+          paths.insert(row.path);
+        }
       }
     }
     paths
@@ -507,6 +520,63 @@ impl SessionList {
     self._checkout_summary_task = Some(task);
   }
 
+  /// Re-reads every Git project's linked worktrees in the background.
+  pub fn refresh_worktrees(&mut self, cx: &mut Context<Self>) {
+    let projects: Vec<PathBuf> = self
+      .rendered_project_order()
+      .into_iter()
+      .filter(|repo_root| self.git_repositories.contains(repo_root))
+      .collect();
+    let bound_paths: Vec<PathBuf> = self
+      .worktree_checkouts
+      .values()
+      .map(|binding| binding.path.clone())
+      .collect();
+    let task = cx.spawn(async move |this, cx| {
+      let listed = cx
+        .background_spawn(async move {
+          let canonical =
+            |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+          // Git prints resolved paths; a bound worktree keeps the spelling its
+          // chat uses, so the row and the chat's checkout compare equal.
+          let bound_by_canonical: HashMap<PathBuf, PathBuf> = bound_paths
+            .into_iter()
+            .map(|path| (canonical(&path), path))
+            .collect();
+          projects
+            .into_iter()
+            .map(|repo_root| {
+              let worktrees = git::list_worktrees(&repo_root)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|worktree| worktree.path.is_dir())
+                .map(|worktree| {
+                  let path = bound_by_canonical
+                    .get(&canonical(&worktree.path))
+                    .cloned()
+                    .unwrap_or(worktree.path);
+                  ListedWorktree {
+                    path,
+                    branch: worktree.branch,
+                  }
+                })
+                .collect();
+              (repo_root, worktrees)
+            })
+            .collect::<HashMap<_, _>>()
+        })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        if this.project_worktrees != listed {
+          this.project_worktrees = listed;
+          this.refresh_checkout_summaries_if_needed(cx);
+          cx.notify();
+        }
+      });
+    });
+    self._worktree_listing_task = Some(task);
+  }
+
   pub(crate) fn set_checkout_git_summary(
     &mut self,
     checkout_root: Option<&Path>,
@@ -552,10 +622,26 @@ impl SessionList {
         .unwrap_or_else(|| "Main checkout".into()),
       updated_at_secs: main_summary.and_then(|summary| summary.head_updated_at_secs),
     }];
-    let mut checkouts = Vec::new();
     if !self.git_repositories.contains(repo_root) {
       return rows;
     }
+    let mut checkouts: Vec<(PathBuf, String)> = self
+      .project_worktrees
+      .get(repo_root)
+      .into_iter()
+      .flatten()
+      .map(|worktree| {
+        let branch = worktree.branch.clone().unwrap_or_else(|| {
+          worktree
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+        });
+        (worktree.path.clone(), branch)
+      })
+      .collect();
+    // A worktree just created is bound before git's listing catches up.
     for row in self
       .conversations
       .iter()
@@ -564,28 +650,33 @@ impl SessionList {
       let Some(binding) = self.worktree_checkouts.get(&row.meta.id) else {
         continue;
       };
-      if !checkouts
-        .iter()
-        .any(|existing: &WorktreeBinding| existing.path == binding.path)
-      {
-        checkouts.push(binding.clone());
+      if !checkouts.iter().any(|(path, _)| *path == binding.path) {
+        checkouts.push((binding.path.clone(), binding.branch.clone()));
       }
     }
-    rows.extend(checkouts.into_iter().map(|binding| {
-      let updated_at_secs = self
-        .checkout_git_summaries
-        .get(binding.path.as_path())
-        .and_then(|summary| summary.head_updated_at_secs);
+    rows.extend(checkouts.into_iter().map(|(path, branch)| {
+      let summary = self.checkout_git_summaries.get(path.as_path());
       CheckoutRow {
-        kind: CheckoutKind::Worktree {
-          branch: binding.branch.clone(),
-        },
-        path: binding.path,
-        title: binding.branch.into(),
-        updated_at_secs,
+        title: summary
+          .and_then(CheckoutGitSummary::branch_title)
+          .unwrap_or_else(|| branch.clone().into()),
+        kind: CheckoutKind::Worktree { branch },
+        updated_at_secs: summary.and_then(|summary| summary.head_updated_at_secs),
+        path,
       }
     }));
     rows
+  }
+
+  /// The branch of `checkout` when it is one of `repo_root`'s worktrees.
+  pub(crate) fn worktree_branch_at(&self, repo_root: &Path, checkout: &Path) -> Option<String> {
+    self
+      .checkout_rows_for_project(repo_root)
+      .into_iter()
+      .find_map(|row| match row.kind {
+        CheckoutKind::Worktree { branch } if row.path == checkout => Some(branch),
+        _ => None,
+      })
   }
 
   fn visible_checkout_rows_for_project(&self, repo_root: &Path) -> Vec<CheckoutRow> {
@@ -958,8 +1049,13 @@ impl SessionList {
     };
     let checkout_repo = repo_root.to_path_buf();
     let checkout_root = row.path.clone();
-    let deletable_worktree = matches!(row.kind, CheckoutKind::Worktree { .. })
-      .then(|| (row.path.clone(), cx.entity().downgrade()));
+    let deletable_worktree = matches!(row.kind, CheckoutKind::Worktree { .. }).then(|| {
+      (
+        repo_root.to_path_buf(),
+        row.path.clone(),
+        cx.entity().downgrade(),
+      )
+    });
     let icon = match row.kind {
       CheckoutKind::Main if !self.git_repositories.contains(repo_root) => {
         Icon::new(gpui_component::IconName::FolderOpen)
@@ -1068,20 +1164,25 @@ impl SessionList {
           )
         }),
     );
-    let Some((worktree_path, entity)) = deletable_worktree else {
+    let Some((project_root, worktree_path, entity)) = deletable_worktree else {
       return row.into_any_element();
     };
     row
       .context_menu(move |menu, _, _| {
+        let project_root = project_root.clone();
         let worktree_path = worktree_path.clone();
         let entity = entity.clone();
         menu.item(
           PopupMenuItem::new("Delete worktree")
             .icon(UiIconName::Trash)
             .on_click(move |_, _, cx| {
+              let project_root = project_root.clone();
               let worktree_path = worktree_path.clone();
               let _ = entity.update(cx, |_, cx| {
-                cx.emit(SessionListEvent::DeleteWorktree { worktree_path });
+                cx.emit(SessionListEvent::DeleteWorktree {
+                  project_root,
+                  worktree_path,
+                });
               });
             }),
         )
@@ -2143,7 +2244,7 @@ mod tests {
     let seen = deletes.clone();
     let observer = cx.update(|_, cx| {
       cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
-        if let SessionListEvent::DeleteWorktree { worktree_path } = event {
+        if let SessionListEvent::DeleteWorktree { worktree_path, .. } = event {
           seen.borrow_mut().push(worktree_path.clone());
         }
       })

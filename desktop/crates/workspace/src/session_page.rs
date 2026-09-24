@@ -470,9 +470,10 @@ impl SessionPage {
             window.push_notification(Notification::warning(error), cx);
           }
         }
-        SessionListEvent::DeleteWorktree { worktree_path } => {
-          this.delete_worktree(worktree_path, window, cx)
-        }
+        SessionListEvent::DeleteWorktree {
+          project_root,
+          worktree_path,
+        } => this.delete_worktree(project_root.clone(), worktree_path.clone(), window, cx),
         SessionListEvent::RevealProject { project_root } => cx.reveal_path(project_root),
         SessionListEvent::CopyProjectPath { project_root } => {
           cx.write_to_clipboard(ClipboardItem::new_string(
@@ -1177,6 +1178,7 @@ impl SessionPage {
       list.set_statuses(statuses, cx);
       list.set_worktree_checkouts(worktree_checkouts, cx);
       list.set_displayed_checkout(displayed_checkout, cx);
+      list.refresh_worktrees(cx);
     });
   }
 

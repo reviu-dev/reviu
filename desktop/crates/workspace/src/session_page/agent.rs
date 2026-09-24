@@ -80,8 +80,8 @@ impl SessionPage {
     self.sync_active_checkout(window, cx);
   }
 
-  /// Points `chat_store` at the selected project's store. Git projects sweep
-  /// Reviu-managed worktrees; plain projects only persist conversations.
+  /// Points `chat_store` at the selected project's store, dropping worktree
+  /// bindings of conversations that no longer exist.
   pub(super) fn ensure_chat_store(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
     let Some(project) = self.fallback_repo.clone().or_else(|| self.project_root(cx)) else {
       self.chat_store = None;
@@ -91,112 +91,35 @@ impl SessionPage {
     let evicted_project = access.evicted_project.clone();
     self.chat_store = Some(access.store.clone());
     if self.fallback_repo.is_some() && self.swept_repos.insert(project.clone()) {
-      self.sweep_orphan_worktrees(project, access.store, cx);
+      self.drop_dead_worktree_bindings(access.store, cx);
     }
     evicted_project
   }
 
-  /// Boot-time housekeeping for the checkouts we created: a crash between the
-  /// worktree and its binding, a failed removal, or a pruned conversation all
-  /// leave a `reviu-` worktree nothing references any more. Comet and waku
-  /// both leak these forever; we don't.
-  fn sweep_orphan_worktrees(
+  /// Boot-time housekeeping: bindings whose conversation is gone (pruned,
+  /// or lost to a crash) are dropped. The worktrees themselves stay: a
+  /// worktree is a place to work that may hold unmerged work, and only an
+  /// explicit, confirmed delete removes it.
+  fn drop_dead_worktree_bindings(
     &mut self,
-    repo_root: PathBuf,
     store: Entity<ConversationStore>,
     cx: &mut Context<Self>,
   ) {
-    use app_log::ResultExt as _;
-
-    let list_root = repo_root.clone();
-    let listing = cx.background_spawn(async move { git::list_worktrees(&list_root) });
-    cx.spawn(async move |this, cx| {
-      let Some(worktrees) = listing.await.log_err_context("listing worktrees") else {
-        return;
-      };
-      // The doomed set is decided back on the foreground, against the
-      // bindings AS OF NOW: a worktree session created while the listing ran
-      // has its binding in by the time this continuation runs (the foreground
-      // queue is ordered), so it can never be mistaken for an orphan.
-      let doomed = this
-        .update(cx, |this, cx| {
-          this.doomed_worktrees(&repo_root, &store, worktrees, cx)
-        })
-        .unwrap_or_default();
-      if doomed.is_empty() {
-        return;
-      }
-      cx.background_spawn(async move {
-        for path in doomed {
-          git::remove_worktree(&repo_root, &path).log_err_context("removing an orphaned worktree");
-        }
-      })
-      .await;
-    })
-    .detach();
-  }
-
-  /// Which of `worktrees` nothing references: ours (our directory, still on a
-  /// `reviu-` branch; a renamed branch means the user took over) and bound to
-  /// no surviving conversation. Bindings whose conversation is gone (pruned,
-  /// or a delete that lost its removal) are dropped on the way.
-  fn doomed_worktrees(
-    &mut self,
-    repo_root: &Path,
-    store: &Entity<ConversationStore>,
-    worktrees: Vec<git::LinkedWorktree>,
-    cx: &mut Context<Self>,
-  ) -> Vec<PathBuf> {
-    use app_log::ResultExt as _;
-
-    let store = store.clone();
-    let canonical =
-      |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     // A conversation proves it is alive through the index, or through a live
-    // panel: a just-created worktree session is still blank, so it has no
-    // index row yet, only its panel.
+    // panel: a just-created session is still blank, so it has no index row
+    // yet, only its panel.
     let mut known_ids: std::collections::HashSet<String> = store
       .read(cx)
       .list()
       .into_iter()
       .map(|meta| meta.id)
       .collect();
-    known_ids.extend(
-      self
-        .agent_chat_view
-        .iter()
-        .map(|panel| panel.read(cx).current_conversation().id.clone()),
-    );
-    known_ids.extend(self.background_chat_panels.iter().map(|(id, _)| id.clone()));
-    let mut live_paths = std::collections::HashSet::new();
-    for (conversation_id, binding) in store.read(cx).worktree_bindings() {
-      if known_ids.contains(&conversation_id) {
-        live_paths.insert(canonical(&binding.path));
-      } else {
-        store.update(cx, |store, cx| {
-          store.set_worktree(&conversation_id, None, cx)
-        });
+    known_ids.extend(self.live_chat_panel_ids(cx));
+    for conversation_id in store.read(cx).worktree_bindings().into_keys() {
+      if !known_ids.contains(&conversation_id) {
+        Self::unbind_session_worktree(&store, &conversation_id, cx);
       }
     }
-    let Some(sweep_root) =
-      git::worktrees_root_for(repo_root).log_err_context("resolving the worktrees root")
-    else {
-      return Vec::new();
-    };
-    let sweep_root = canonical(&sweep_root);
-    worktrees
-      .into_iter()
-      .filter(|worktree| {
-        let path = canonical(&worktree.path);
-        path.starts_with(&sweep_root)
-          && !live_paths.contains(&path)
-          && worktree
-            .branch
-            .as_deref()
-            .is_some_and(|branch| branch.starts_with(git::WORKTREE_BRANCH_PREFIX))
-      })
-      .map(|worktree| worktree.path)
-      .collect()
   }
 
   pub(super) fn conversation_meta(
@@ -272,22 +195,57 @@ impl SessionPage {
     self.build_chat_panel_at(project_root, cwd, store, resume, window, cx)
   }
 
-  fn build_chat_panel_with_agent(
+  /// A new conversation in `worktree` when given, bound to it so it reopens
+  /// there; in the main checkout otherwise.
+  fn build_fresh_chat_panel(
     &mut self,
     project_root: PathBuf,
     store: Option<Entity<ConversationStore>>,
-    resume: Option<agent_chat_panel::ConversationMeta>,
+    worktree: Option<agent_chat_panel::WorktreeBinding>,
     agent_id: Option<agent_registry::AgentId>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
-    let cwd = self.session_cwd_for(
-      &project_root,
-      store.as_ref(),
-      resume.as_ref().map(|meta| meta.id.as_str()),
+    let cwd = worktree
+      .as_ref()
+      .map(|binding| binding.path.clone())
+      .unwrap_or_else(|| project_root.clone());
+    let view = self.build_chat_panel_at_with_agent(
+      project_root,
+      cwd,
+      store.clone(),
+      None,
+      agent_id,
+      window,
       cx,
     );
-    self.build_chat_panel_at_with_agent(project_root, cwd, store, resume, agent_id, window, cx)
+    if let Some((binding, store)) = worktree.zip(store) {
+      let conversation_id = view.read(cx).current_conversation().id.clone();
+      store.update(cx, |store, cx| {
+        store.set_worktree(&conversation_id, Some(binding), cx)
+      });
+    }
+    view
+  }
+
+  /// The worktree of `project_root` the user stands on, where a new chat of
+  /// that project belongs.
+  fn worktree_for_new_chat(
+    &self,
+    project_root: &Path,
+    cx: &App,
+  ) -> Option<agent_chat_panel::WorktreeBinding> {
+    let checkout = self.checkout_root(cx)?;
+    let branch = self
+      .session_list
+      .read(cx)
+      .worktree_branch_at(project_root, &checkout)?;
+    checkout
+      .is_dir()
+      .then_some(agent_chat_panel::WorktreeBinding {
+        path: checkout,
+        branch,
+      })
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -530,15 +488,20 @@ impl SessionPage {
         if !still_bound {
           return;
         }
+        // Every chat of that worktree names the same branch.
         store.update(cx, |store, cx| {
-          store.set_worktree(
-            &conversation_id,
-            Some(agent_chat_panel::WorktreeBinding {
-              path: binding.path.clone(),
-              branch: branch.clone(),
-            }),
-            cx,
-          )
+          for (id, other) in store.worktree_bindings() {
+            if other.path == binding.path {
+              store.set_worktree(
+                &id,
+                Some(agent_chat_panel::WorktreeBinding {
+                  path: binding.path.clone(),
+                  branch: branch.clone(),
+                }),
+                cx,
+              );
+            }
+          }
         });
         this.refresh_session_list(cx);
         this.refresh_branch(cx);
@@ -552,20 +515,19 @@ impl SessionPage {
     let Some(panel) = self.agent_chat_view.take() else {
       return;
     };
-    // A blank idle conversation has no row to come back through; drop it,
-    // along with the worktree it never used. Keep draft-only panels alive so
-    // switching repositories does not lose the selected agent or composer.
+    // A blank idle conversation has no row to come back through; drop it.
+    // Keep draft-only panels alive so switching repositories does not lose
+    // the selected agent or composer.
     let keep = {
       let panel = panel.read(cx);
       panel.has_persistable_content() || panel.has_unsent_prompt(cx) || !panel.is_parked()
     };
     if !keep {
       let id = panel.read(cx).current_conversation().id.clone();
-      let repo_root = panel.read(cx).project_root().to_path_buf();
       let store = panel.read(cx).store();
       drop(panel);
       if let Some(store) = store {
-        self.cleanup_session_worktree(repo_root, store, &id, cx);
+        Self::unbind_session_worktree(&store, &id, cx);
       }
       self.forget_center_chat_tab(&id, cx);
       return;
@@ -1365,16 +1327,23 @@ impl SessionPage {
     {
       self.chat_store = store.clone();
     }
+    // Decided before parking: a pinned checkout only holds while the chat it
+    // was pinned on stays shown.
+    let worktree = self.worktree_for_new_chat(&project_root, cx);
     if let Some(panel) = self.agent_chat_view.clone() {
       // The shown conversation is still blank: it already is the new session.
       // Not while hydrating (its transcript may be about to land) and not when
       // its connection died (a fresh panel is the revival).
+      let target_cwd = worktree
+        .as_ref()
+        .map_or(project_root.as_path(), |binding| binding.path.as_path());
       let reusable = {
         let panel = panel.read(cx);
         !panel.has_persistable_content()
           && panel.loading_conversation_id().is_none()
           && !panel.needs_reconnect()
           && panel.project_root() == project_root.as_path()
+          && panel.cwd() == target_cwd
       };
       if reusable {
         if let Some(agent_id) = agent_id {
@@ -1385,7 +1354,7 @@ impl SessionPage {
       }
     }
     self.park_active_chat_panel(cx);
-    let view = self.build_chat_panel_with_agent(project_root, store, None, agent_id, window, cx);
+    let view = self.build_fresh_chat_panel(project_root, store, worktree, agent_id, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.remember_active_chat_tab(cx);
@@ -1404,13 +1373,20 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let (project_root, store, agent_id) = old_panel.read_with(cx, |panel, _| {
+    let (project_root, store, agent_id, cwd) = old_panel.read_with(cx, |panel, _| {
       (
         panel.project_root().to_path_buf(),
         panel.store(),
         panel.backend_kind().clone(),
+        panel.cwd().to_path_buf(),
       )
     });
+    let worktree = self
+      .session_list
+      .read(cx)
+      .worktree_branch_at(&project_root, &cwd)
+      .filter(|_| cwd.is_dir())
+      .map(|branch| agent_chat_panel::WorktreeBinding { path: cwd, branch });
     if self.fallback_repo.is_none()
       && self.project_root(cx).as_deref() == Some(project_root.as_path())
     {
@@ -1428,7 +1404,7 @@ impl SessionPage {
     }
 
     let view =
-      self.build_chat_panel_with_agent(project_root, store, None, Some(agent_id), window, cx);
+      self.build_fresh_chat_panel(project_root, store, worktree, Some(agent_id), window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view.clone());
 
@@ -1484,10 +1460,8 @@ impl SessionPage {
       panel.has_persistable_content() || panel.has_unsent_prompt(cx) || !panel.is_parked()
     };
     if !keep {
-      let repo_root = panel.read(cx).project_root().to_path_buf();
-      let store = panel.read(cx).store();
-      if let Some(store) = store {
-        self.cleanup_session_worktree(repo_root, store, &conversation_id, cx);
+      if let Some(store) = panel.read(cx).store() {
+        Self::unbind_session_worktree(&store, &conversation_id, cx);
       }
       return;
     }
@@ -1556,36 +1530,16 @@ impl SessionPage {
     }
   }
 
-  /// A session in its own worktree that never went anywhere: no reason to
-  /// keep the checkout. Unbinds first so a failure leaves no dangling pointer.
-  fn cleanup_session_worktree(
-    &mut self,
-    repo_root: PathBuf,
-    store: Entity<ConversationStore>,
+  /// A chat lives in a worktree, it does not own it: letting go of the chat
+  /// only drops the binding. The worktree goes through `delete_worktree`.
+  fn unbind_session_worktree(
+    store: &Entity<ConversationStore>,
     conversation_id: &str,
     cx: &mut Context<Self>,
   ) {
-    let Some(binding) = store.read(cx).worktree(conversation_id) else {
-      return;
-    };
     store.update(cx, |store, cx| {
       store.set_worktree(conversation_id, None, cx)
     });
-    let window_handle = self.window_handle;
-    cx.spawn(async move |_this, cx| {
-      let removed = cx
-        .background_spawn(async move { git::remove_worktree(&repo_root, &binding.path) })
-        .await;
-      if let Err(error) = removed {
-        let _ = cx.update_window(window_handle, |_, window, cx| {
-          window.push_notification(
-            Notification::error(format!("Removing the worktree failed: {error}")),
-            cx,
-          );
-        });
-      }
-    })
-    .detach();
   }
 
   /// Checkpoint refs pin up to 50 snapshots per conversation in the object
@@ -1744,9 +1698,6 @@ impl SessionPage {
         .read(cx)
         .conversation_ids_beyond_limit(AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT),
     );
-    // Pruning caps chat history; it never deletes a worktree, which may hold
-    // uncommitted or unmerged work. Those go through the confirmed delete.
-    protected_ids.extend(store.read(cx).worktree_bindings().into_keys());
     let mut seen_ids = std::collections::HashSet::new();
     for id in stale_ids {
       if protected_ids.contains(&id) || !seen_ids.insert(id.clone()) {
@@ -1773,7 +1724,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let clear_active = store.read(cx).active_id() == Some(id);
-    self.cleanup_session_worktree(repo_root.clone(), store.clone(), id, cx);
+    Self::unbind_session_worktree(&store, id, cx);
     self.cleanup_session_checkpoints(repo_root, id, cx);
     store.update(cx, |store, cx| {
       store.delete(id, cx);
@@ -1839,10 +1790,6 @@ impl SessionPage {
   }
 
   pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-    if let Some(binding) = self.conversation_hub.worktree_checkouts(cx).remove(id) {
-      self.confirm_delete_worktree(vec![id.to_string()], binding, window, cx);
-      return;
-    }
     let status = self
       .session_statuses(cx)
       .get(id)
@@ -1886,36 +1833,30 @@ impl SessionPage {
     });
   }
 
+  /// Removing a worktree is forced and takes its `reviu-` branch along, so
+  /// the prompt spells out what would be lost before anything happens. The
+  /// chats that live in it go with it.
   pub(super) fn delete_worktree(
     &mut self,
-    worktree_path: &Path,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    let bound: Vec<(String, agent_chat_panel::WorktreeBinding)> = self
-      .conversation_hub
-      .worktree_checkouts(cx)
-      .into_iter()
-      .filter(|(_, binding)| binding.path == worktree_path)
-      .collect();
-    let Some(binding) = bound.first().map(|(_, binding)| binding.clone()) else {
-      return;
-    };
-    let ids = bound.into_iter().map(|(id, _)| id).collect();
-    self.confirm_delete_worktree(ids, binding, window, cx);
-  }
-
-  /// Removing a worktree is forced and takes its `reviu-` branch along, so
-  /// the prompt spells out what would be lost before anything happens.
-  fn confirm_delete_worktree(
-    &mut self,
-    ids: Vec<String>,
-    binding: agent_chat_panel::WorktreeBinding,
+    repo_root: PathBuf,
+    worktree_path: PathBuf,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     use app_log::ResultExt as _;
 
+    let ids: Vec<String> = self
+      .conversation_hub
+      .worktree_checkouts(cx)
+      .into_iter()
+      .filter(|(_, binding)| binding.path == worktree_path)
+      .map(|(id, _)| id)
+      .collect();
+    let branch = self
+      .session_list
+      .read(cx)
+      .worktree_branch_at(&repo_root, &worktree_path)
+      .unwrap_or_else(|| worktree_path.display().to_string());
     let statuses = self.session_statuses(cx);
     let running_ids: Vec<String> = ids
       .iter()
@@ -1927,15 +1868,14 @@ impl SessionPage {
       })
       .cloned()
       .collect();
-    let losses_path = binding.path.clone();
+    let losses_path = worktree_path.clone();
     cx.spawn_in(window, async move |this, cx| {
       let losses = cx
         .background_spawn(async move { git::worktree_removal_losses(&losses_path) })
         .await
         .log_err_context("reading what the worktree removal would lose");
       let _ = this.update_in(cx, |_, window, cx| {
-        let message =
-          delete_worktree_message(&binding.branch, ids.len(), losses, !running_ids.is_empty());
+        let message = delete_worktree_message(&branch, ids.len(), losses, !running_ids.is_empty());
         let confirm_text = if running_ids.is_empty() {
           "Delete"
         } else {
@@ -1946,23 +1886,68 @@ impl SessionPage {
           let view = view.clone();
           let ids = ids.clone();
           let running_ids = running_ids.clone();
-          ConfirmDialog::new("Delete chat and worktree?", div().child(message.clone()))
+          let repo_root = repo_root.clone();
+          let worktree_path = worktree_path.clone();
+          ConfirmDialog::new("Delete worktree?", div().child(message.clone()))
             .confirm_text(confirm_text)
             .cancel_text("Cancel")
             .destructive()
             .on_confirm(move |_, window, cx| {
               view.update(cx, |this, cx| {
-                for id in &running_ids {
-                  this.stop_session_process(id, cx);
-                }
-                for id in &ids {
-                  this.delete_session_confirmed(id, window, cx);
-                }
+                this.delete_worktree_confirmed(
+                  repo_root.clone(),
+                  worktree_path.clone(),
+                  &ids,
+                  &running_ids,
+                  window,
+                  cx,
+                );
               });
               true
             })
             .build(alert)
         });
+      });
+    })
+    .detach();
+  }
+
+  fn delete_worktree_confirmed(
+    &mut self,
+    repo_root: PathBuf,
+    worktree_path: PathBuf,
+    ids: &[String],
+    running_ids: &[String],
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    for id in running_ids {
+      self.stop_session_process(id, cx);
+    }
+    // Unbound first: a deleted active chat's fresh replacement must not land
+    // in the checkout that is about to go.
+    for id in ids {
+      if let Some((_, store)) = self.session_store(id, cx) {
+        Self::unbind_session_worktree(&store, id, cx);
+      }
+    }
+    for id in ids {
+      self.delete_session_confirmed(id, window, cx);
+    }
+    cx.spawn_in(window, async move |this, cx| {
+      let removed = cx
+        .background_spawn(async move { git::remove_worktree(&repo_root, &worktree_path) })
+        .await;
+      let _ = this.update_in(cx, |this, window, cx| {
+        if let Err(error) = removed {
+          window.push_notification(
+            Notification::error(format!("Deleting the worktree failed: {error}")),
+            cx,
+          );
+        }
+        this.refresh_session_list(cx);
+        this.sync_active_checkout(window, cx);
+        cx.notify();
       });
     })
     .detach();
@@ -1980,30 +1965,34 @@ impl SessionPage {
     }
   }
 
+  /// The session's own repo and store, which may not be the fallback's; a
+  /// blank session has no index row yet, only its panel.
+  fn session_store(&self, id: &str, cx: &App) -> Option<(PathBuf, Entity<ConversationStore>)> {
+    if let Some((repo, store, _)) = self.conversation_hub.find_conversation(id, cx) {
+      return Some((repo, store));
+    }
+    self
+      .agent_chat_view
+      .iter()
+      .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+      .find(|panel| panel.read(cx).current_conversation().id == id)
+      .and_then(|panel| {
+        let panel = panel.read(cx);
+        panel
+          .store()
+          .map(|store| (panel.project_root().to_path_buf(), store))
+      })
+  }
+
   fn delete_session_confirmed(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-    // The session's own repo and store, which may not be the fallback's: a row
-    // of another repo can be deleted straight from the aggregated sidebar.
-    let found = self.conversation_hub.find_conversation(id, cx);
-    let from_panel = || {
-      self
-        .agent_chat_view
-        .iter()
-        .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
-        .find(|panel| panel.read(cx).current_conversation().id == id)
-        .and_then(|panel| {
-          let panel = panel.read(cx);
-          panel
-            .store()
-            .map(|store| (panel.project_root().to_path_buf(), store))
-        })
-    };
-    let Some((repo_root, store)) = found
-      .map(|(repo, store, _)| (repo, store))
-      .or_else(from_panel)
-    else {
+    let Some((repo_root, store)) = self.session_store(id, cx) else {
       return;
     };
     let deleted_repo = repo_root.clone();
+    let deleted_worktree = store
+      .read(cx)
+      .worktree(id)
+      .filter(|binding| binding.path.is_dir());
     self.delete_session_storage_and_resources(repo_root, store.clone(), id, cx);
     self.unseen_finished_session_ids.remove(id);
     // Dropping the panel stops its agent process.
@@ -2026,7 +2015,9 @@ impl SessionPage {
       }
       let repo = access.map(|access| (deleted_repo.clone(), Some(access.store)));
       let view = match repo {
-        Some((repo_root, store)) => self.build_chat_panel(repo_root, store, None, window, cx),
+        Some((repo_root, store)) => {
+          self.build_fresh_chat_panel(repo_root, store, deleted_worktree, None, window, cx)
+        }
         None => self.build_fallback_chat_panel(None, window, cx),
       };
       view.update(cx, |panel, _| panel.set_active_conversation(true));
@@ -2308,12 +2299,11 @@ fn delete_worktree_message(
   losses: Option<git::WorktreeRemovalLosses>,
   running: bool,
 ) -> String {
-  let chats = if chat_count > 1 {
-    format!("its {chat_count} chats")
-  } else {
-    "its chat".to_string()
+  let mut message = match chat_count {
+    0 => format!("The worktree {branch} will be deleted."),
+    1 => format!("The worktree {branch} and its chat will be deleted."),
+    count => format!("The worktree {branch} and its {count} chats will be deleted."),
   };
-  let mut message = format!("The worktree {branch} and {chats} will be deleted.");
   match losses {
     Some(losses) if losses.is_empty() => {}
     Some(losses) => {
@@ -4193,7 +4183,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn deleting_a_worktree_session_removes_its_checkout_and_checkpoints(
+  async fn deleting_a_worktree_chat_keeps_the_worktree_and_drops_its_checkpoints(
     cx: &mut TestAppContext,
   ) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-delete", cx).await;
@@ -4224,17 +4214,8 @@ mod tests {
       page.delete_session(&conversation_id, window, cx)
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-      cx.update(|window, cx| window.has_active_dialog(cx)),
-      "a worktree is never deleted without asking"
-    );
-    assert!(cwd.exists());
 
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-
-    assert!(!cwd.exists(), "the worktree went with the session");
+    assert!(cwd.is_dir(), "a chat does not own its worktree");
     assert!(
       git::list_checkpoints(&repo.path, &conversation_id)
         .expect("list refs after delete")
@@ -4246,6 +4227,8 @@ mod tests {
       assert_eq!(store.worktree(&conversation_id), None);
       assert!(store.list().is_empty());
     });
+    let fresh_cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    assert_eq!(fresh_cwd, cwd, "the fresh chat stays where you were");
 
     cleanup_worktrees_root(&repo.path);
   }
@@ -4272,7 +4255,7 @@ mod tests {
     std::fs::write(cwd.join("wip.txt"), "half done").expect("dirty the worktree");
 
     page.update_in(cx, |page, window, cx| {
-      page.delete_worktree(&cwd, window, cx)
+      page.delete_worktree(repo.path.clone(), cwd.clone(), window, cx)
     });
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -4286,7 +4269,7 @@ mod tests {
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.delete_worktree(&cwd, window, cx)
+      page.delete_worktree(repo.path.clone(), cwd.clone(), window, cx)
     });
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -4307,6 +4290,126 @@ mod tests {
           .contains(&conversation_id)
       );
     });
+    let fresh_cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    assert_eq!(
+      fresh_cwd, repo.path,
+      "the replacement chat never lands in the deleted worktree"
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn a_worktree_left_without_chats_stays_listed_and_can_be_deleted(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-empty-worktree", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
+    });
+    cx.run_until_parked();
+    let panel = active_panel(&page, cx);
+    panel.update(cx, |panel, cx| panel.seed_user_message_for_test("work", cx));
+    cx.run_until_parked();
+    let (conversation_id, cwd) = panel.read_with(cx, |panel, _| {
+      (
+        panel.current_conversation().id.clone(),
+        panel.cwd().to_path_buf(),
+      )
+    });
+    page.update_in(cx, |page, window, cx| {
+      page.pin_checkout_without_unsaved_prompt(repo.path.clone(), window, cx);
+      page.new_session(window, cx);
+      page.delete_session(&conversation_id, window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page
+          .session_list
+          .read(cx)
+          .worktree_branch_at(&repo.path, &cwd)
+          .is_some(),
+        "git still lists it, so the sidebar keeps its row"
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.delete_worktree(repo.path.clone(), cwd.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert!(!cwd.exists());
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page
+          .session_list
+          .read(cx)
+          .worktree_branch_at(&repo.path, &cwd)
+          .is_none(),
+        "the row went with the worktree"
+      );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn a_new_chat_lands_in_the_worktree_you_stand_on(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-new-chat-location", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
+    });
+    cx.run_until_parked();
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let worktree = first.read_with(cx, |panel, _| panel.cwd().to_path_buf());
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let second = active_panel(&page, cx);
+    let (second_id, second_cwd) = second.read_with(cx, |panel, _| {
+      (
+        panel.current_conversation().id.clone(),
+        panel.cwd().to_path_buf(),
+      )
+    });
+    assert_eq!(second_cwd, worktree);
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree(&second_id)
+          .map(|binding| binding.path),
+        Some(worktree.clone()),
+        "bound, so it reopens in the worktree"
+      );
+    });
+    second.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("second", cx)
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.pin_checkout_without_unsaved_prompt(repo.path.clone(), window, cx);
+      page.new_session(window, cx)
+    });
+    cx.run_until_parked();
+    let third_cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    assert_eq!(
+      third_cwd, repo.path,
+      "standing on main, the chat lands on main"
+    );
 
     cleanup_worktrees_root(&repo.path);
   }
@@ -4335,6 +4438,15 @@ mod tests {
       "The worktree reviu-fix and its chat will be deleted. 3 uncommitted files and 1 commit \
        on no other branch will be lost. The agent is still working and will be stopped. This \
        cannot be undone."
+    );
+    assert_eq!(
+      delete_worktree_message(
+        "reviu-fix",
+        0,
+        Some(git::WorktreeRemovalLosses::default()),
+        false
+      ),
+      "The worktree reviu-fix will be deleted. This cannot be undone."
     );
     assert_eq!(
       delete_worktree_message("reviu-fix", 2, None, false),
@@ -5191,24 +5303,44 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn an_abandoned_blank_worktree_session_takes_its_checkout_with_it(cx: &mut TestAppContext) {
+  async fn an_abandoned_blank_chat_leaves_its_worktree_in_place(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-blank", cx).await;
 
     page.update_in(cx, |page, window, cx| {
       page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
-    let cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    let (blank_id, cwd) = active_panel(&page, cx).read_with(cx, |panel, _| {
+      (
+        panel.current_conversation().id.clone(),
+        panel.cwd().to_path_buf(),
+      )
+    });
     assert!(cwd.is_dir());
 
-    // Never used: switching away drops the blank panel and its worktree.
-    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    // Never used: going back to the main checkout for a new chat drops the
+    // blank chat, not the place it was opened in.
+    page.update_in(cx, |page, window, cx| {
+      page.pin_checkout_without_unsaved_prompt(repo.path.clone(), window, cx);
+      page.new_session(window, cx)
+    });
     cx.run_until_parked();
 
-    assert!(!cwd.exists(), "the unused worktree was removed");
-    page.read_with(cx, |page, _| {
+    assert!(cwd.is_dir(), "the worktree is a place, it stays");
+    page.read_with(cx, |page, cx| {
       assert!(page.background_chat_panels.is_empty());
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree(&blank_id),
+        None
+      );
     });
+    let active_cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    assert_eq!(active_cwd, repo.path);
 
     cleanup_worktrees_root(&repo.path);
   }
@@ -5243,7 +5375,8 @@ mod tests {
     });
 
     // A second session, idle in the foreground (its connection is dead under
-    // this fixture, which is exactly what Failed reports).
+    // this fixture, which is exactly what Failed reports). Opened while
+    // standing on the worktree, it lives there too.
     page.update_in(cx, |page, window, cx| page.new_session(window, cx));
     cx.run_until_parked();
     let failed = active_panel(&page, cx);
@@ -5284,16 +5417,18 @@ mod tests {
         Some(branch.as_str()),
         "the worktree row names its branch"
       );
-      assert_eq!(list.worktree_branch_of(&failed_id), None);
+      assert_eq!(
+        list.worktree_branch_of(&failed_id),
+        Some(branch.as_str()),
+        "a new chat lands in the worktree you stand on"
+      );
     });
 
     cleanup_worktrees_root(&repo.path);
   }
 
   #[gpui::test]
-  async fn the_boot_sweep_removes_orphans_and_spares_bound_and_user_worktrees(
-    cx: &mut TestAppContext,
-  ) {
+  async fn boot_never_removes_a_worktree(cx: &mut TestAppContext) {
     agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
     let repo = TempRepo::init("session-page-sweep");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -5342,19 +5477,19 @@ mod tests {
     page.update_in(cx, |page, window, cx| page.activate(window, cx));
     cx.run_until_parked();
 
-    assert!(!orphan.path.exists(), "the orphan was swept at boot");
-    assert!(bound.path.exists(), "a bound worktree is not an orphan");
     assert!(
-      claimed.path.exists(),
-      "a worktree whose branch the user renamed is theirs now"
+      orphan.path.exists(),
+      "a worktree with no chat is still a place to work"
     );
+    assert!(bound.path.exists());
+    assert!(claimed.path.exists());
 
     let _ = std::fs::remove_dir_all(&state_dir);
     cleanup_worktrees_root(&repo.path);
   }
 
   #[gpui::test]
-  async fn the_sweep_spares_a_blank_worktree_session_that_is_still_alive(cx: &mut TestAppContext) {
+  async fn binding_cleanup_spares_a_blank_chat_that_is_still_alive(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-sweep-blank-live", cx).await;
 
     // A fresh worktree session: bound, but blank, so absent from the index.
@@ -5370,18 +5505,14 @@ mod tests {
       )
     });
 
-    // The sweep runs again, as it would if it raced the creation at boot.
+    // The cleanup runs again, as it would if it raced the creation at boot.
     page.update(cx, |page, cx| {
-      let repo_root = page.fallback_repo.clone().expect("fallback repo");
       let store = page.chat_store.clone().expect("fallback store");
-      page.sweep_orphan_worktrees(repo_root, store, cx);
+      page.drop_dead_worktree_bindings(store, cx);
     });
     cx.run_until_parked();
 
-    assert!(
-      cwd.exists(),
-      "a live session's checkout is never an orphan, blank or not"
-    );
+    assert!(cwd.exists());
     page.read_with(cx, |page, cx| {
       assert!(
         page
@@ -5391,7 +5522,7 @@ mod tests {
           .read(cx)
           .worktree(&conversation_id)
           .is_some(),
-        "its binding survived too"
+        "a live chat keeps its binding, blank or not"
       );
     });
 
@@ -5399,7 +5530,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_binding_whose_conversation_is_gone_is_dropped_with_its_worktree(
+  async fn a_binding_whose_conversation_is_gone_is_dropped_but_its_worktree_stays(
     cx: &mut TestAppContext,
   ) {
     agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
@@ -5428,8 +5559,8 @@ mod tests {
     cx.run_until_parked();
 
     assert!(
-      !stale.path.exists(),
-      "the unreferenced checkout was removed"
+      stale.path.exists(),
+      "only an explicit delete removes a worktree"
     );
     page.read_with(cx, |page, cx| {
       assert_eq!(
@@ -5515,35 +5646,25 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       let store = page.chat_store.as_ref().expect("store").read(cx);
-      let ids: Vec<String> = store.list().into_iter().map(|meta| meta.id).collect();
-      assert_eq!(
-        ids,
-        vec!["old-worktree-conversation".to_string()],
-        "the stale plain row left the index, the worktree one stayed"
-      );
+      assert!(store.list().is_empty(), "both stale rows left the index");
       assert_eq!(store.active_id(), None);
-      assert_eq!(
-        store
-          .worktree("old-worktree-conversation")
-          .map(|binding| binding.path),
-        Some(worktree.path.clone())
-      );
+      assert_eq!(store.worktree("old-worktree-conversation"), None);
     });
     assert!(!state_dir.join("old-conversation.json").exists());
     assert!(!state_dir.join("active.txt").exists());
-    for name in ["drafts.json", "scroll.json"] {
+    for name in ["drafts.json", "scroll.json", "worktrees.json"] {
       let json: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(state_dir.join(name)).expect("read state file"),
       )
       .expect("parse state file");
       assert!(
-        json.get("old-conversation").is_none(),
+        json.get("old-conversation").is_none() && json.get("old-worktree-conversation").is_none(),
         "{name} was scrubbed"
       );
     }
     assert!(
       worktree.path.exists(),
-      "pruning never deletes a worktree: it may hold unmerged work"
+      "pruning a chat never deletes the worktree it lived in"
     );
 
     let _ = std::fs::remove_dir_all(&state_dir);

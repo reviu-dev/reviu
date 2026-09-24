@@ -841,6 +841,12 @@ impl SessionPage {
     let current_project = self
       .project_root(cx)
       .map(|path| Self::canonical_repo(&path));
+    // History is per checkout, like the dock: the chats of the place shown.
+    let checkout = self.checkout_root(cx);
+    let on_main_checkout = checkout
+      .as_deref()
+      .map(Self::canonical_repo)
+      .is_some_and(|checkout| Some(&checkout) == current_project.as_ref());
     let mut items = self
       .conversation_hub
       .project_sections(cx)
@@ -856,9 +862,15 @@ impl SessionPage {
         let active_id = active_id.clone();
         let statuses = statuses.clone();
         let open_chat_ids = open_chat_ids.clone();
+        let checkout = checkout.clone();
+        let in_checkout_worktrees = worktrees.clone();
         metas
           .into_iter()
           .filter(move |meta| !open_chat_ids.contains(&meta.id))
+          .filter(move |meta| match in_checkout_worktrees.get(&meta.id) {
+            Some(binding) => checkout.as_deref() == Some(binding.path.as_path()),
+            None => on_main_checkout,
+          })
           .map(move |meta| {
             let subtitle = worktrees
               .get(&meta.id)
@@ -5907,6 +5919,65 @@ mod tests {
         .collect::<Vec<_>>()
     });
     assert_eq!(ids, vec!["current-project".to_string()]);
+  }
+
+  #[gpui::test]
+  async fn center_history_only_lists_the_shown_checkout(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-history-checkout");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let now = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or(0);
+    page.update(cx, |page, cx| {
+      let access = page
+        .chat_store_for_project(&repo.path, cx)
+        .expect("chat store");
+      access.store.update(cx, |store, cx| {
+        for id in ["main-chat", "worktree-chat"] {
+          store.insert_meta_for_test(agent_chat_panel::ConversationMeta {
+            id: id.to_string(),
+            started_at_secs: now,
+            updated_at_secs: now,
+            title: id.to_string(),
+            message_count: 1,
+            agent_id: agent_chat_panel::default_agent_id(),
+            session_id: None,
+            preview: id.to_string(),
+          });
+        }
+        store.set_worktree(
+          "worktree-chat",
+          Some(agent_chat_panel::WorktreeBinding {
+            path: worktree.path.clone(),
+            branch: worktree.branch.clone(),
+          }),
+          cx,
+        );
+      });
+    });
+    let history_ids = |page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext| {
+      page.update(cx, |page, cx| {
+        page
+          .center_conversation_history_items(cx)
+          .into_iter()
+          .map(|item| item.id)
+          .collect::<Vec<_>>()
+      })
+    };
+
+    assert_eq!(history_ids(&page, cx), vec!["main-chat".to_string()]);
+
+    page.update_in(cx, |page, window, cx| {
+      page.pin_checkout_without_unsaved_prompt(worktree.path.clone(), window, cx)
+    });
+    assert_eq!(history_ids(&page, cx), vec!["worktree-chat".to_string()]);
+
+    let _ = git::remove_worktree(&repo.path, &worktree.path);
   }
 
   #[gpui::test]
