@@ -174,6 +174,18 @@ pub enum SessionListEvent {
     project_root: PathBuf,
     worktree_path: PathBuf,
   },
+  ArchiveWorktree {
+    project_root: PathBuf,
+    worktree_path: PathBuf,
+  },
+  RestoreArchivedWorktree {
+    project_root: PathBuf,
+    archived: git::ArchivedWorktree,
+  },
+  DeleteArchivedWorktree {
+    project_root: PathBuf,
+    archived: git::ArchivedWorktree,
+  },
   RevealProject {
     project_root: PathBuf,
   },
@@ -213,6 +225,9 @@ pub struct SessionList {
   /// Linked worktrees by project, straight from git: a worktree is a place to
   /// work, it stays listed with no chat bound to it.
   project_worktrees: HashMap<PathBuf, Vec<ListedWorktree>>,
+  /// Archived worktrees by project, newest first; their chats stay bound to
+  /// the old path until a restore brings it back.
+  project_archives: HashMap<PathBuf, Vec<git::ArchivedWorktree>>,
   _worktree_listing_task: Option<Task<()>>,
   checkout_git_summaries: HashMap<PathBuf, CheckoutGitSummary>,
   project_avatar_urls: HashMap<PathBuf, String>,
@@ -237,6 +252,7 @@ impl SessionList {
       project_order: Vec::new(),
       git_repositories: HashSet::new(),
       project_worktrees: HashMap::new(),
+      project_archives: HashMap::new(),
       _worktree_listing_task: None,
       checkout_git_summaries: HashMap::new(),
       project_avatar_urls: HashMap::new(),
@@ -543,7 +559,14 @@ impl SessionList {
             .into_iter()
             .map(|path| (canonical(&path), path))
             .collect();
-          projects
+          let archives = projects
+            .iter()
+            .map(|repo_root| {
+              let archives = git::list_archived_worktrees(repo_root).unwrap_or_default();
+              (repo_root.clone(), archives)
+            })
+            .collect::<HashMap<_, _>>();
+          let worktrees = projects
             .into_iter()
             .map(|repo_root| {
               let worktrees = git::list_worktrees(&repo_root)
@@ -563,12 +586,15 @@ impl SessionList {
                 .collect();
               (repo_root, worktrees)
             })
-            .collect::<HashMap<_, _>>()
+            .collect::<HashMap<_, _>>();
+          (worktrees, archives)
         })
         .await;
+      let (worktrees, archives) = listed;
       let _ = this.update(cx, |this, cx| {
-        if this.project_worktrees != listed {
-          this.project_worktrees = listed;
+        if this.project_worktrees != worktrees || this.project_archives != archives {
+          this.project_worktrees = worktrees;
+          this.project_archives = archives;
           this.refresh_checkout_summaries_if_needed(cx);
           cx.notify();
         }
@@ -650,6 +676,9 @@ impl SessionList {
       let Some(binding) = self.worktree_checkouts.get(&row.meta.id) else {
         continue;
       };
+      if self.is_archived_worktree(&binding.path) {
+        continue;
+      }
       if !checkouts.iter().any(|(path, _)| *path == binding.path) {
         checkouts.push((binding.path.clone(), binding.branch.clone()));
       }
@@ -666,6 +695,14 @@ impl SessionList {
       }
     }));
     rows
+  }
+
+  pub(crate) fn is_archived_worktree(&self, path: &Path) -> bool {
+    self
+      .project_archives
+      .values()
+      .flatten()
+      .any(|archived| archived.path == path)
   }
 
   /// The branch of `checkout` when it is one of `repo_root`'s worktrees.
@@ -1169,23 +1206,141 @@ impl SessionList {
     };
     row
       .context_menu(move |menu, _, _| {
+        let archive_repo = project_root.clone();
+        let archive_path = worktree_path.clone();
+        let archive_entity = entity.clone();
         let project_root = project_root.clone();
         let worktree_path = worktree_path.clone();
         let entity = entity.clone();
-        menu.item(
-          PopupMenuItem::new("Delete worktree")
-            .icon(UiIconName::Trash)
-            .on_click(move |_, _, cx| {
-              let project_root = project_root.clone();
-              let worktree_path = worktree_path.clone();
-              let _ = entity.update(cx, |_, cx| {
-                cx.emit(SessionListEvent::DeleteWorktree {
-                  project_root,
-                  worktree_path,
+        menu
+          .item(
+            PopupMenuItem::new("Archive worktree")
+              .icon(UiIconName::Archive)
+              .on_click(move |_, _, cx| {
+                let project_root = archive_repo.clone();
+                let worktree_path = archive_path.clone();
+                let _ = archive_entity.update(cx, |_, cx| {
+                  cx.emit(SessionListEvent::ArchiveWorktree {
+                    project_root,
+                    worktree_path,
+                  });
                 });
-              });
-            }),
-        )
+              }),
+          )
+          .item(
+            PopupMenuItem::new("Delete worktree")
+              .icon(UiIconName::Trash)
+              .on_click(move |_, _, cx| {
+                let project_root = project_root.clone();
+                let worktree_path = worktree_path.clone();
+                let _ = entity.update(cx, |_, cx| {
+                  cx.emit(SessionListEvent::DeleteWorktree {
+                    project_root,
+                    worktree_path,
+                  });
+                });
+              }),
+          )
+      })
+      .into_any_element()
+  }
+
+  fn render_archived_row(
+    &self,
+    repo_root: &Path,
+    archived: &git::ArchivedWorktree,
+    now_secs: u64,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let title: SharedString = archived
+      .branch
+      .clone()
+      .or_else(|| {
+        archived
+          .path
+          .file_name()
+          .map(|name| name.to_string_lossy().into_owned())
+      })
+      .unwrap_or_default()
+      .into();
+    let selector = format!("session-archived-worktree-{}", archived.ref_name);
+    let restore = (repo_root.to_path_buf(), archived.clone());
+    let menu_restore = restore.clone();
+    let menu_entity = cx.entity().downgrade();
+    div()
+      .id(SharedString::from(selector.clone()))
+      .debug_selector(move || selector.clone())
+      .mx_1()
+      .pl(px(18.0))
+      .pr_2()
+      .py_1()
+      .rounded(px(6.0))
+      .cursor_pointer()
+      .hover(|this| this.bg(theme.secondary_hover))
+      .tooltip(|window, cx| {
+        gpui_component::tooltip::Tooltip::new("Archived - click to restore").build(window, cx)
+      })
+      .on_click(cx.listener(move |_, _, _, cx| {
+        let (project_root, archived) = restore.clone();
+        cx.emit(SessionListEvent::RestoreArchivedWorktree {
+          project_root,
+          archived,
+        });
+      }))
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .text_color(theme.muted_foreground.opacity(0.75))
+          .child(Icon::new(UiIconName::Archive).size(px(12.)))
+          .child(
+            v_flex()
+              .flex_1()
+              .min_w(px(0.0))
+              .gap_0p5()
+              .child(div().text_xs().truncate().child(title))
+              .child(div().text_size(px(10.0)).truncate().child(format!(
+                "Archived {}",
+                format_relative_age(archived.archived_at_secs, now_secs)
+              ))),
+          ),
+      )
+      .context_menu(move |menu, _, _| {
+        let (restore_repo, restore_archive) = menu_restore.clone();
+        let delete_repo = restore_repo.clone();
+        let delete_archive = restore_archive.clone();
+        let restore_entity = menu_entity.clone();
+        let delete_entity = menu_entity.clone();
+        menu
+          .item(
+            PopupMenuItem::new("Restore worktree")
+              .icon(UiIconName::ArchiveRestore)
+              .on_click(move |_, _, cx| {
+                let project_root = restore_repo.clone();
+                let archived = restore_archive.clone();
+                let _ = restore_entity.update(cx, |_, cx| {
+                  cx.emit(SessionListEvent::RestoreArchivedWorktree {
+                    project_root,
+                    archived,
+                  });
+                });
+              }),
+          )
+          .item(
+            PopupMenuItem::new("Delete permanently")
+              .icon(UiIconName::Trash)
+              .on_click(move |_, _, cx| {
+                let project_root = delete_repo.clone();
+                let archived = delete_archive.clone();
+                let _ = delete_entity.update(cx, |_, cx| {
+                  cx.emit(SessionListEvent::DeleteArchivedWorktree {
+                    project_root,
+                    archived,
+                  });
+                });
+              }),
+          )
       })
       .into_any_element()
   }
@@ -1510,6 +1665,16 @@ impl Render for SessionList {
       for checkout in self.visible_checkout_rows_for_project(section_repo) {
         let active = self.displayed_checkout.as_deref() == Some(checkout.path.as_path());
         items.push(self.render_checkout_row(section_repo, &checkout, active, now_secs, &theme, cx));
+      }
+      if !self.collapsed_projects.contains(section_repo) {
+        let archives = self
+          .project_archives
+          .get(section_repo)
+          .cloned()
+          .unwrap_or_default();
+        for archived in &archives {
+          items.push(self.render_archived_row(section_repo, archived, now_secs, &theme, cx));
+        }
       }
     }
     let rows = items;
@@ -2241,12 +2406,18 @@ mod tests {
     cx.run_until_parked();
 
     let deletes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let archives = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = deletes.clone();
+    let seen_archives = archives.clone();
     let observer = cx.update(|_, cx| {
-      cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
-        if let SessionListEvent::DeleteWorktree { worktree_path, .. } = event {
-          seen.borrow_mut().push(worktree_path.clone());
+      cx.subscribe(&list, move |_, event: &SessionListEvent, _| match event {
+        SessionListEvent::DeleteWorktree { worktree_path, .. } => {
+          seen.borrow_mut().push(worktree_path.clone())
         }
+        SessionListEvent::ArchiveWorktree { worktree_path, .. } => {
+          seen_archives.borrow_mut().push(worktree_path.clone())
+        }
+        _ => {}
       })
     });
 
@@ -2261,9 +2432,84 @@ mod tests {
     open_project_context_menu(cx, "session-checkout-worktree-/repo-feature-sidebar");
     cx.simulate_keystrokes("down enter");
     cx.run_until_parked();
+    assert_eq!(
+      archives.borrow().as_slice(),
+      std::slice::from_ref(&worktree_path)
+    );
+
+    open_project_context_menu(cx, "session-checkout-worktree-/repo-feature-sidebar");
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
     drop(observer);
 
     assert_eq!(deletes.borrow().as_slice(), &[worktree_path]);
+  }
+
+  #[gpui::test]
+  async fn an_archived_worktree_shows_as_its_own_row_and_restores_on_click(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let repo = PathBuf::from("/repo");
+    let archived = git::ArchivedWorktree {
+      ref_name: "refs/reviu/archived-worktrees/1".to_string(),
+      path: PathBuf::from("/repo-worktrees/swift-otter"),
+      branch: Some("reviu-fix".to_string()),
+      original_head: "a".to_string(),
+      staged_commit: "b".to_string(),
+      unstaged_commit: "c".to_string(),
+      archived_at_secs: 1,
+    };
+
+    list.update(cx, |list, cx| {
+      list.set_project_order(vec![repo.clone()], cx);
+      list.set_git_repositories(HashSet::from([repo.clone()]), cx);
+      let mut chat = meta("archived-chat", 1);
+      chat.project_root = repo.clone();
+      list.set_conversations(vec![chat], "".into(), cx);
+      list.set_worktree_checkouts(
+        HashMap::from([(
+          "archived-chat".to_string(),
+          worktree_binding("/repo-worktrees/swift-otter", "reviu-fix"),
+        )]),
+        cx,
+      );
+      list
+        .project_archives
+        .insert(repo.clone(), vec![archived.clone()]);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+
+    assert!(
+      cx.debug_bounds("session-checkout-worktree-/repo-reviu-fix")
+        .is_none(),
+      "its chat's binding does not bring back a live row"
+    );
+    let row = cx
+      .debug_bounds("session-archived-worktree-refs/reviu/archived-worktrees/1")
+      .expect("archived row");
+
+    let restores = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = restores.clone();
+    let observer = cx.update(|_, cx| {
+      cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
+        if let SessionListEvent::RestoreArchivedWorktree { archived, .. } = event {
+          seen.borrow_mut().push(archived.clone());
+        }
+      })
+    });
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(restores.borrow().as_slice(), &[archived]);
   }
 
   #[gpui::test]

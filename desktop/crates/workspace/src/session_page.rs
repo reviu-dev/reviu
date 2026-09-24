@@ -474,6 +474,18 @@ impl SessionPage {
           project_root,
           worktree_path,
         } => this.delete_worktree(project_root.clone(), worktree_path.clone(), window, cx),
+        SessionListEvent::ArchiveWorktree {
+          project_root,
+          worktree_path,
+        } => this.archive_worktree(project_root.clone(), worktree_path.clone(), window, cx),
+        SessionListEvent::RestoreArchivedWorktree {
+          project_root,
+          archived,
+        } => this.restore_archived_worktree(project_root.clone(), archived.clone(), window, cx),
+        SessionListEvent::DeleteArchivedWorktree {
+          project_root,
+          archived,
+        } => this.delete_archived_worktree(project_root.clone(), archived.clone(), window, cx),
         SessionListEvent::RevealProject { project_root } => cx.reveal_path(project_root),
         SessionListEvent::CopyProjectPath { project_root } => {
           cx.write_to_clipboard(ClipboardItem::new_string(

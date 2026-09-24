@@ -93,7 +93,16 @@ pub fn create_worktree(repo_root: &Path, base: Option<&str>) -> Result<CreatedWo
 
   let root = worktrees_root_for(repo_root)?;
   std::fs::create_dir_all(&root).with_context(|| format!("create {root:?}"))?;
-  let taken_branches = local_branch_names(repo_root)?;
+  let mut taken_branches = local_branch_names(repo_root)?;
+  // An archived worktree comes back at its old path: never hand that path out.
+  taken_branches.extend(
+    crate::list_archived_worktrees(repo_root)?
+      .into_iter()
+      .filter_map(|archived| {
+        let name = archived.path.file_name()?.to_string_lossy().into_owned();
+        Some(format!("{WORKTREE_BRANCH_PREFIX}{name}"))
+      }),
+  );
   let name = pick_name(&root, &taken_branches)?;
   let branch = format!("{WORKTREE_BRANCH_PREFIX}{name}");
   let path = root.join(&name);
@@ -147,10 +156,22 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<LinkedWorktree>> {
 /// Refuses a directory that is not a linked worktree of this repository:
 /// the fallback deletion must never reach an arbitrary folder.
 pub fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+  let branch = worktree_current_branch(worktree_path);
+  remove_worktree_checkout(repo_root, worktree_path)?;
+  if let Some(branch) = branch
+    && branch.starts_with(WORKTREE_BRANCH_PREFIX)
+  {
+    // Best-effort: the branch may be checked out in another worktree.
+    let _ = run_git(repo_root, &["branch", "-D", &branch], &[]);
+  }
+  Ok(())
+}
+
+/// Takes the checkout off disk and out of git's registry; its branch stays.
+pub(crate) fn remove_worktree_checkout(repo_root: &Path, worktree_path: &Path) -> Result<()> {
   if worktree_path.exists() && !belongs_to_repository(repo_root, worktree_path) {
     bail!("{worktree_path:?} is not a linked worktree of {repo_root:?}");
   }
-  let branch = worktree_current_branch(worktree_path);
   let path_arg = worktree_path.to_string_lossy().into_owned();
   if run_git(
     repo_root,
@@ -166,14 +187,7 @@ pub fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
         .with_context(|| format!("remove the worktree directory {worktree_path:?}"))?;
     }
   }
-  prune_worktrees(repo_root)?;
-  if let Some(branch) = branch
-    && branch.starts_with(WORKTREE_BRANCH_PREFIX)
-  {
-    // Best-effort: the branch may be checked out in another worktree.
-    let _ = run_git(repo_root, &["branch", "-D", &branch], &[]);
-  }
-  Ok(())
+  prune_worktrees(repo_root)
 }
 
 /// What [`remove_worktree`] would destroy for good.
@@ -218,7 +232,7 @@ pub fn worktree_removal_losses(worktree_path: &Path) -> Result<WorktreeRemovalLo
 /// Two proofs accepted: the `.git` file points back at the repository, or the
 /// repository's own worktree registry lists the path (covers a worktree whose
 /// `.git` file was deleted by hand).
-fn belongs_to_repository(repo_root: &Path, path: &Path) -> bool {
+pub(crate) fn belongs_to_repository(repo_root: &Path, path: &Path) -> bool {
   let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
   if let Some(resolved_root) = linked_worktree_root(path)
     && canonical(&resolved_root) == canonical(repo_root)
@@ -379,7 +393,7 @@ fn local_branch_names(repo_root: &Path) -> Result<Vec<String>> {
   Ok(names)
 }
 
-fn worktree_current_branch(worktree_path: &Path) -> Option<String> {
+pub(crate) fn worktree_current_branch(worktree_path: &Path) -> Option<String> {
   let repo = Repository::open(worktree_path).ok()?;
   let head = repo.head().ok()?;
   if !head.is_branch() {

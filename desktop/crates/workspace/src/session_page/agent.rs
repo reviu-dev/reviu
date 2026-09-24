@@ -153,9 +153,18 @@ impl SessionPage {
     if binding.path.is_dir() {
       binding.path
     } else {
-      store.update(cx, |store, cx| {
-        store.set_worktree(conversation_id, None, cx)
+      // An archived worktree comes back at this path: keep the binding. Read
+      // from git, the sidebar's listing may not have landed yet at boot.
+      let archived = git::list_archived_worktrees(repo_root).is_ok_and(|archives| {
+        archives
+          .iter()
+          .any(|archived| archived.path == binding.path)
       });
+      if !archived {
+        store.update(cx, |store, cx| {
+          store.set_worktree(conversation_id, None, cx)
+        });
+      }
       main
     }
   }
@@ -1845,29 +1854,13 @@ impl SessionPage {
   ) {
     use app_log::ResultExt as _;
 
-    let ids: Vec<String> = self
-      .conversation_hub
-      .worktree_checkouts(cx)
-      .into_iter()
-      .filter(|(_, binding)| binding.path == worktree_path)
-      .map(|(id, _)| id)
-      .collect();
+    let ids = self.worktree_chat_ids(&worktree_path, cx);
     let branch = self
       .session_list
       .read(cx)
       .worktree_branch_at(&repo_root, &worktree_path)
       .unwrap_or_else(|| worktree_path.display().to_string());
-    let statuses = self.session_statuses(cx);
-    let running_ids: Vec<String> = ids
-      .iter()
-      .filter(|id| {
-        matches!(
-          statuses.get(*id).copied().unwrap_or_default(),
-          SessionStatus::Working | SessionStatus::Waiting
-        )
-      })
-      .cloned()
-      .collect();
+    let running_ids = self.running_session_ids(&ids, cx);
     let losses_path = worktree_path.clone();
     cx.spawn_in(window, async move |this, cx| {
       let losses = cx
@@ -1910,6 +1903,217 @@ impl SessionPage {
       });
     })
     .detach();
+  }
+
+  fn worktree_chat_ids(&self, worktree_path: &Path, cx: &App) -> Vec<String> {
+    self
+      .conversation_hub
+      .worktree_checkouts(cx)
+      .into_iter()
+      .filter(|(_, binding)| binding.path == worktree_path)
+      .map(|(id, _)| id)
+      .collect()
+  }
+
+  fn running_session_ids(&self, ids: &[String], cx: &App) -> Vec<String> {
+    let statuses = self.session_statuses(cx);
+    ids
+      .iter()
+      .filter(|id| {
+        matches!(
+          statuses.get(*id).copied().unwrap_or_default(),
+          SessionStatus::Working | SessionStatus::Waiting
+        )
+      })
+      .cloned()
+      .collect()
+  }
+
+  /// Archiving loses nothing, so it only asks when an agent would be stopped.
+  pub(super) fn archive_worktree(
+    &mut self,
+    repo_root: PathBuf,
+    worktree_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let ids = self.worktree_chat_ids(&worktree_path, cx);
+    let running_ids = self.running_session_ids(&ids, cx);
+    if running_ids.is_empty() {
+      self.archive_worktree_confirmed(repo_root, worktree_path, &ids, &[], window, cx);
+      return;
+    }
+    let view = cx.entity();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let repo_root = repo_root.clone();
+      let worktree_path = worktree_path.clone();
+      let ids = ids.clone();
+      let running_ids = running_ids.clone();
+      ConfirmDialog::new(
+        "Stop and archive worktree?",
+        div().child(
+          "An agent is still working in this worktree. Stop it and archive the worktree? \
+           Its chats and uncommitted work come back when you restore it.",
+        ),
+      )
+      .confirm_text("Stop and Archive")
+      .cancel_text("Cancel")
+      .on_confirm(move |_, window, cx| {
+        view.update(cx, |this, cx| {
+          this.archive_worktree_confirmed(
+            repo_root.clone(),
+            worktree_path.clone(),
+            &ids,
+            &running_ids,
+            window,
+            cx,
+          );
+        });
+        true
+      })
+      .build(alert)
+    });
+  }
+
+  fn archive_worktree_confirmed(
+    &mut self,
+    repo_root: PathBuf,
+    worktree_path: PathBuf,
+    ids: &[String],
+    running_ids: &[String],
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    for id in running_ids {
+      self.stop_session_process(id, cx);
+    }
+    // The chats keep their binding: a restore brings them back in place.
+    for id in ids {
+      for panel in self
+        .agent_chat_view
+        .iter()
+        .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+      {
+        if panel.read(cx).current_conversation().id == *id {
+          panel.update(cx, |panel, cx| panel.persist_now(cx));
+        }
+      }
+      self.release_session_panel(id, repo_root.clone(), None, window, cx);
+    }
+    cx.spawn_in(window, async move |this, cx| {
+      let archived = cx
+        .background_spawn(async move { git::archive_worktree(&repo_root, &worktree_path) })
+        .await;
+      let _ = this.update_in(cx, |this, window, cx| {
+        if let Err(error) = archived {
+          window.push_notification(
+            Notification::error(format!("Archiving the worktree failed: {error}")),
+            cx,
+          );
+        }
+        this.refresh_session_list(cx);
+        this.sync_active_checkout(window, cx);
+        cx.notify();
+      });
+    })
+    .detach();
+  }
+
+  pub(super) fn restore_archived_worktree(
+    &mut self,
+    repo_root: PathBuf,
+    archived: git::ArchivedWorktree,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    cx.spawn_in(window, async move |this, cx| {
+      let restore_root = repo_root.clone();
+      let restore_archive = archived.clone();
+      let restored = cx
+        .background_spawn(
+          async move { git::restore_archived_worktree(&restore_root, &restore_archive) },
+        )
+        .await;
+      let _ = this.update_in(cx, |this, window, cx| {
+        match restored {
+          Ok(()) => {
+            this.refresh_session_list(cx);
+            if let Err(error) = this.select_checkout(repo_root, archived.path, window, cx) {
+              window.push_notification(Notification::warning(error), cx);
+            }
+          }
+          Err(error) => window.push_notification(
+            Notification::error(format!("Restoring the worktree failed: {error}")),
+            cx,
+          ),
+        }
+        cx.notify();
+      });
+    })
+    .detach();
+  }
+
+  pub(super) fn delete_archived_worktree(
+    &mut self,
+    repo_root: PathBuf,
+    archived: git::ArchivedWorktree,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let ids = self.worktree_chat_ids(&archived.path, cx);
+    let name = archived
+      .branch
+      .clone()
+      .unwrap_or_else(|| archived.path.display().to_string());
+    let chats = match ids.len() {
+      0 => String::new(),
+      1 => " and its chat".to_string(),
+      count => format!(" and its {count} chats"),
+    };
+    let message = format!(
+      "The archived worktree {name}{chats} will be deleted, with the work it held. \
+       This cannot be undone."
+    );
+    let view = cx.entity();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let repo_root = repo_root.clone();
+      let archived = archived.clone();
+      let ids = ids.clone();
+      ConfirmDialog::new("Delete archived worktree?", div().child(message.clone()))
+        .confirm_text("Delete")
+        .cancel_text("Cancel")
+        .destructive()
+        .on_confirm(move |_, window, cx| {
+          view.update(cx, |this, cx| {
+            for id in &ids {
+              this.delete_session_confirmed(id, window, cx);
+            }
+            let repo_root = repo_root.clone();
+            let archived = archived.clone();
+            cx.spawn_in(window, async move |this, cx| {
+              let deleted = cx
+                .background_spawn(
+                  async move { git::delete_archived_worktree(&repo_root, &archived) },
+                )
+                .await;
+              let _ = this.update_in(cx, |this, window, cx| {
+                if let Err(error) = deleted {
+                  window.push_notification(
+                    Notification::error(format!("Deleting the archive failed: {error}")),
+                    cx,
+                  );
+                }
+                this.refresh_session_list(cx);
+              });
+            })
+            .detach();
+          });
+          true
+        })
+        .build(alert)
+    });
   }
 
   fn delete_worktree_confirmed(
@@ -1988,12 +2192,25 @@ impl SessionPage {
     let Some((repo_root, store)) = self.session_store(id, cx) else {
       return;
     };
-    let deleted_repo = repo_root.clone();
     let deleted_worktree = store
       .read(cx)
       .worktree(id)
       .filter(|binding| binding.path.is_dir());
-    self.delete_session_storage_and_resources(repo_root, store.clone(), id, cx);
+    self.delete_session_storage_and_resources(repo_root.clone(), store, id, cx);
+    self.release_session_panel(id, repo_root, deleted_worktree, window, cx);
+  }
+
+  /// Takes a conversation off screen and stops its agent; the conversation
+  /// itself is left to the caller. A shown one is replaced by a fresh chat in
+  /// `fresh_worktree`, or the main checkout.
+  fn release_session_panel(
+    &mut self,
+    id: &str,
+    deleted_repo: PathBuf,
+    deleted_worktree: Option<agent_chat_panel::WorktreeBinding>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     self.unseen_finished_session_ids.remove(id);
     // Dropping the panel stops its agent process.
     self
@@ -4352,6 +4569,171 @@ mod tests {
           .is_none(),
         "the row went with the worktree"
       );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  /// A worktree chat with a message, and a file the agent left uncommitted.
+  async fn worktree_chat_with_wip<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+  ) -> (
+    TempRepo,
+    Entity<SessionPage>,
+    &'a mut gpui::VisualTestContext,
+    String,
+    PathBuf,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel(name, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
+    });
+    cx.run_until_parked();
+    let panel = active_panel(&page, cx);
+    panel.update(cx, |panel, cx| panel.seed_user_message_for_test("work", cx));
+    cx.run_until_parked();
+    let (conversation_id, cwd) = panel.read_with(cx, |panel, _| {
+      (
+        panel.current_conversation().id.clone(),
+        panel.cwd().to_path_buf(),
+      )
+    });
+    std::fs::write(cwd.join("wip.txt"), "half done").expect("dirty the worktree");
+    (repo, page, cx, conversation_id, cwd)
+  }
+
+  #[gpui::test]
+  async fn archiving_a_worktree_keeps_its_chat_and_restoring_brings_both_back(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx, conversation_id, cwd) =
+      worktree_chat_with_wip("session-page-archive-restore", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.archive_worktree(repo.path.clone(), cwd.clone(), window, cx)
+    });
+    cx.run_until_parked();
+
+    assert!(!cwd.exists(), "the checkout left the disk");
+    assert!(
+      !cx.update(|window, cx| window.has_active_dialog(cx)),
+      "nothing to lose, no prompt"
+    );
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page.conversation_meta(&conversation_id, cx).is_some(),
+        "the chat is kept"
+      );
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree(&conversation_id)
+          .map(|binding| binding.path),
+        Some(cwd.clone()),
+        "and still bound to the archived path"
+      );
+      assert!(page.session_list.read(cx).is_archived_worktree(&cwd));
+    });
+    let active_cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    assert_eq!(
+      active_cwd, repo.path,
+      "the shown chat moved off the archived worktree"
+    );
+
+    let archived = git::list_archived_worktrees(&repo.path)
+      .expect("list archives")
+      .into_iter()
+      .next()
+      .expect("one archive");
+    page.update_in(cx, |page, window, cx| {
+      page.restore_archived_worktree(repo.path.clone(), archived, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(cwd.join("wip.txt")).expect("wip is back"),
+      "half done"
+    );
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.checkout_root(cx), Some(cwd.clone()), "you land on it");
+      let list = page.session_list.read(cx);
+      assert!(!list.is_archived_worktree(&cwd));
+      assert!(list.worktree_branch_at(&repo.path, &cwd).is_some());
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree(&conversation_id)
+          .map(|binding| binding.path),
+        Some(cwd.clone()),
+        "its chat lives there again"
+      );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn archiving_a_worktree_with_a_working_agent_asks_first(cx: &mut TestAppContext) {
+    let (repo, page, cx, _conversation_id, cwd) =
+      worktree_chat_with_wip("session-page-archive-running", cx).await;
+    active_panel(&page, cx).update(cx, |panel, cx| panel.pretend_turn_in_flight_for_test(cx));
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.archive_worktree(repo.path.clone(), cwd.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(cwd.exists());
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert!(!cwd.exists());
+    page.read_with(cx, |page, cx| assert!(!page.agent_turn_in_flight(cx)));
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn deleting_an_archive_drops_it_with_its_chats(cx: &mut TestAppContext) {
+    let (repo, page, cx, conversation_id, cwd) =
+      worktree_chat_with_wip("session-page-archive-delete", cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.archive_worktree(repo.path.clone(), cwd.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    let archived = git::list_archived_worktrees(&repo.path)
+      .expect("list archives")
+      .into_iter()
+      .next()
+      .expect("one archive");
+
+    page.update_in(cx, |page, window, cx| {
+      page.delete_archived_worktree(repo.path.clone(), archived, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert!(
+      git::list_archived_worktrees(&repo.path)
+        .expect("list after delete")
+        .is_empty()
+    );
+    page.read_with(cx, |page, cx| {
+      assert!(page.conversation_meta(&conversation_id, cx).is_none());
+      assert!(!page.session_list.read(cx).is_archived_worktree(&cwd));
     });
 
     cleanup_worktrees_root(&repo.path);

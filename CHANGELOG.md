@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 A worktree is now a place in the sidebar that can hold several chats: a new chat opens in the checkout you are on, and chat history shows only that checkout's conversations. Deleting a chat never deletes its worktree. To remove a worktree, right-click it in the sidebar; Reviu asks first and shows how many uncommitted files and commits on no other branch would be lost.
 
+### Archive Worktrees
+
+Right-click a worktree in the sidebar and choose Archive to put it away without losing anything: its uncommitted and staged changes, its branch and its chats are kept, and the folder leaves your disk. Archived worktrees stay listed under their project; click one to restore it exactly as it was, or delete it permanently from its menu.
+
 ### Fresher Pull Counters
 
 Reviu now refreshes remote tracking information in the background and lets the pull counter check for updates even when it currently shows zero, so incoming commits appear without changing your working tree.

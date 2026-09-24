@@ -45,7 +45,7 @@ pub(crate) fn run_git(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> 
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn temp_index_path(repo_root: &Path) -> PathBuf {
+pub(crate) fn temp_index_path(repo_root: &Path) -> PathBuf {
   std::env::temp_dir().join(format!(
     "reviu-checkpoint-index-{}-{}",
     std::process::id(),
