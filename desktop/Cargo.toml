@@ -182,7 +182,8 @@ tree-sitter-scss = { git = "https://github.com/tree-sitter-grammars/tree-sitter-
 
 # TestWindow raw handles return Err instead of panicking; unbreaks gpui-component's
 # macOS native integrations (accessibility, autofill) in test windows.
-# Keep every Zed crate on the same patched fork.
+# gpui_platform and reqwest_client ride along so the graph keeps a single http_client,
+# and gpui_util so our process spawns use the same copy gpui does.
 [patch."https://github.com/zed-industries/zed"]
 gpui = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle", version = "=0.2.2" }
 gpui_platform = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle" }
