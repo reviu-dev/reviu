@@ -1,7 +1,6 @@
 //! Archived worktrees: the checkout leaves the disk, its exact state stays in
-//! git and comes back on restore. Two detached commits carry it (zed's
-//! recipe): the index as "staged", then everything on disk as "unstaged" on
-//! top. One ref per archive pins the chain against gc and carries the
+//! git and comes back on restore. Two detached commits carry it: the index as
+//! "staged", then everything on disk as "unstaged" on top. One ref per archive pins the chain against gc and carries the
 //! metadata in its commit message, so an archive needs nothing outside git.
 
 use std::path::{Path, PathBuf};

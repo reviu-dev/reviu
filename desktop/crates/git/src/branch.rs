@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
-  BranchType, CherrypickOptions, ErrorCode, FetchOptions, Oid, PushOptions, Rebase, Repository,
-  RepositoryState, ResetType, Signature, StatusOptions,
+  BranchType, CherrypickOptions, ErrorCode, Oid, Rebase, Repository, RepositoryState, ResetType,
+  Signature, StatusOptions,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,13 +246,7 @@ pub fn fetch(repo_root: &Path) -> Result<()> {
   let remotes = repo.remotes().context("list remotes")?;
 
   for remote_name in remotes.iter().filter_map(|value| value.ok().flatten()) {
-    let mut remote = repo
-      .find_remote(remote_name)
-      .with_context(|| format!("find remote {remote_name:?}"))?;
-    let mut fetch_options = FetchOptions::new();
-    fetch_options.remote_callbacks(crate::remote_auth::remote_callbacks(&repo)?);
-    remote
-      .fetch(&[] as &[&str], Some(&mut fetch_options), None)
+    crate::remote_git::run_remote_git(repo_root, ["fetch", remote_name])
       .with_context(|| format!("fetch remote {remote_name:?}"))?;
   }
 
@@ -268,16 +262,10 @@ pub enum PullOutcome {
 pub fn pull(repo_root: &Path) -> Result<PullOutcome> {
   let head_before = current_head_sha(repo_root).ok().flatten();
 
-  let output = gpui_util::new_std_command("git")
-    .current_dir(repo_root)
-    .args(["pull"])
-    .output()
-    .context("run git pull")?;
-
-  if !output.status.success() {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    bail!("git pull failed: {}", stderr.trim())
-  }
+  crate::remote_git::run_remote_git(repo_root, ["pull"]).map_err(|error| {
+    let message = format!("git pull failed: {error}");
+    error.context(message)
+  })?;
 
   let head_after = current_head_sha(repo_root).ok().flatten();
   if head_before == head_after {
@@ -816,17 +804,9 @@ pub fn delete_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
         .split_once('/')
         .ok_or_else(|| anyhow::anyhow!("invalid remote branch {:?}", branch.name))?;
 
-      {
-        let mut remote = repo
-          .find_remote(remote_name)
-          .with_context(|| format!("find remote {:?}", remote_name))?;
-        let mut options = PushOptions::new();
-        options.remote_callbacks(crate::remote_auth::remote_callbacks(&repo)?);
-        let refspec = format!(":refs/heads/{remote_branch_name}");
-        remote
-          .push(&[refspec.as_str()], Some(&mut options))
-          .with_context(|| format!("delete remote branch {:?}", branch.name))?;
-      }
+      let refspec = format!(":refs/heads/{remote_branch_name}");
+      crate::remote_git::run_remote_git(repo_root, ["push", remote_name, refspec.as_str()])
+        .with_context(|| format!("delete remote branch {:?}", branch.name))?;
 
       if let Ok(mut reference) = repo.find_reference(&format!("refs/remotes/{}", branch.name)) {
         let _ = reference.delete();

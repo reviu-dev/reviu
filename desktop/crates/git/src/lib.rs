@@ -6,7 +6,7 @@ mod commit;
 mod diff;
 mod history;
 mod interactive_rebase;
-mod remote_auth;
+mod remote_git;
 mod status;
 mod store;
 #[cfg(any(test, feature = "test-support"))]
@@ -21,7 +21,7 @@ pub use diff::*;
 pub use git2::ApplyLocation;
 pub use history::*;
 pub use interactive_rebase::*;
-pub use remote_auth::is_authentication_error;
+pub use remote_git::{AuthenticationError, is_authentication_error};
 pub use status::*;
 pub use store::*;
 pub use worktree::*;

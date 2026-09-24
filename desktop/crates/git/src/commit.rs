@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use git2::{BranchType, Oid, PushOptions, Repository, RepositoryState, ResetType, Signature};
+use git2::{BranchType, Oid, Repository, RepositoryState, ResetType, Signature};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HeadCommitStatus {
@@ -177,55 +177,34 @@ pub fn push(repo_root: &Path, force: bool) -> Result<()> {
   let Some((info, should_set_upstream)) = push_target_info(&repo)? else {
     bail!("no upstream configured and no publish remote available");
   };
-  let expected_remote_oid = if force && !should_set_upstream {
-    Some(expected_remote_oid_for_lease(&repo, &info)?)
-  } else {
-    None
-  };
+  let local_ref = format!("refs/heads/{}", info.local_branch);
+  let remote_ref = format!("refs/heads/{}", info.remote_branch);
 
-  {
-    let mut remote = repo.find_remote(&info.remote)?;
-    let mut options = PushOptions::new();
-    let mut callbacks = crate::remote_auth::remote_callbacks(&repo)?;
-
-    let local_ref = format!("refs/heads/{}", info.local_branch);
-    let remote_ref = format!("refs/heads/{}", info.remote_branch);
-    if let Some(expected_remote_oid) = expected_remote_oid {
-      let remote_ref = remote_ref.clone();
-      callbacks.push_negotiation(move |updates| {
-        let Some(update) = updates
-          .iter()
-          .find(|update| update.dst_refname().ok() == Some(remote_ref.as_str()))
-        else {
-          return Err(git2::Error::from_str(
-            "force-with-lease could not verify the remote branch",
-          ));
-        };
-        if update.src() != expected_remote_oid {
-          return Err(git2::Error::from_str(
-            "remote branch changed since the last fetch; fetch before force pushing",
-          ));
-        }
-        Ok(())
-      });
-    }
-    options.remote_callbacks(callbacks);
-
-    let refspec = if force {
-      format!("+{}:{}", local_ref, remote_ref)
-    } else {
-      format!("{}:{}", local_ref, remote_ref)
-    };
-
-    remote.push(&[refspec], Some(&mut options))?;
-  }
-
+  let mut args = vec!["push".to_string()];
   if should_set_upstream {
-    let mut local_branch = repo.find_branch(&info.local_branch, BranchType::Local)?;
-    let upstream_ref = format!("{}/{}", info.remote, info.remote_branch);
-    local_branch.set_upstream(Some(&upstream_ref))?;
+    args.push("--set-upstream".to_string());
   }
-  Ok(())
+  if force {
+    // The lease names the commit we last fetched, so a push someone made since then is
+    // never overwritten, even if a background fetch moved the tracking branch meanwhile.
+    let lease = if should_set_upstream {
+      format!("--force-with-lease={remote_ref}:")
+    } else {
+      let expected = expected_remote_oid_for_lease(&repo, &info)?;
+      format!("--force-with-lease={remote_ref}:{expected}")
+    };
+    args.push(lease);
+  }
+  args.push(info.remote.clone());
+  args.push(format!("{local_ref}:{remote_ref}"));
+
+  match crate::remote_git::run_remote_git(repo_root, &args) {
+    Ok(_) => Ok(()),
+    Err(error) if error.to_string().contains("(stale info)") => {
+      bail!("remote branch changed since the last fetch; fetch before force pushing")
+    }
+    Err(error) => Err(error),
+  }
 }
 
 fn expected_remote_oid_for_lease(repo: &Repository, info: &UpstreamInfo) -> Result<Oid> {
@@ -380,7 +359,7 @@ mod tests {
     let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(|_, _, _| Cred::default());
-    let mut options = PushOptions::new();
+    let mut options = git2::PushOptions::new();
     options.remote_callbacks(callbacks);
     remote
       .push(&[refspec], Some(&mut options))

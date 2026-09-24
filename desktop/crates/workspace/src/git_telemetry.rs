@@ -401,11 +401,7 @@ mod tests {
         error: "remote hung up".to_string(),
       }
     );
-    let missing_credentials = git2::Error::new(
-      git2::ErrorCode::Auth,
-      git2::ErrorClass::Callback,
-      "git credential fill failed",
-    );
+    let missing_credentials = git::AuthenticationError::new("fatal: Authentication failed");
     assert_eq!(
       outcome_report(&Err(
         anyhow::Error::new(missing_credentials).context("push")

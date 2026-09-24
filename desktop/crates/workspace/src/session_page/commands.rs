@@ -2213,14 +2213,12 @@ mod tests {
 
   #[test]
   fn a_credentials_failure_tells_the_user_how_to_sign_in() {
-    let missing_credentials = anyhow::Error::new(git2::Error::new(
-      git2::ErrorCode::Auth,
-      git2::ErrorClass::Callback,
-      "git credential fill failed: exit code: 1 without output",
+    let missing_credentials = anyhow::Error::new(git::AuthenticationError::new(
+      "fatal: Authentication failed for 'https://github.com/a/b.git/'",
     ));
     let message = super::repo_command_error_message(&missing_credentials);
     assert!(message.contains("sign in"), "message: {message}");
-    assert!(!message.contains("credential fill"), "message: {message}");
+    assert!(!message.contains("fatal"), "message: {message}");
 
     let other = anyhow::anyhow!("remote hung up");
     assert_eq!(super::repo_command_error_message(&other), "remote hung up");
