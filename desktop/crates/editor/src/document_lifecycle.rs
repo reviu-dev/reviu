@@ -317,7 +317,7 @@ impl Editor {
               return;
             }
             cx.emit(EditorEvent::Saved);
-            if editor.git_diff_enabled {
+            if editor.tracks_git_changes() {
               editor.reload_git_bases(cx);
               editor.schedule_diff_recompute(cx);
             }
@@ -591,10 +591,10 @@ impl Editor {
               }
               if index_modified != previous_index {
                 editor.index_mtime = index_modified;
-                if editor.git_diff_enabled {
+                if editor.tracks_git_changes() {
                   editor.reload_git_bases(cx);
                 }
-              } else if file_changed && editor.git_diff_enabled {
+              } else if file_changed && editor.tracks_git_changes() {
                 editor.schedule_diff_recompute(cx);
               }
             }

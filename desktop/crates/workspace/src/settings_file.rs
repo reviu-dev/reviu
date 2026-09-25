@@ -67,6 +67,8 @@ struct SettingsDoc {
   #[serde(deserialize_with = "lenient")]
   soft_wrap: Option<bool>,
   #[serde(deserialize_with = "lenient")]
+  git_gutter: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
   font_size: Option<f32>,
   #[serde(deserialize_with = "lenient")]
   git_unified_file_view: Option<bool>,
@@ -112,6 +114,7 @@ impl SettingsDoc {
       dark_mode: self.dark_mode.unwrap_or(defaults.dark_mode),
       indent_rainbow: self.indent_rainbow.unwrap_or(defaults.indent_rainbow),
       soft_wrap: self.soft_wrap.unwrap_or(defaults.soft_wrap),
+      git_gutter: self.git_gutter.unwrap_or(defaults.git_gutter),
       font_size: self.font_size.unwrap_or(defaults.font_size),
       git_unified_file_view: self
         .git_unified_file_view
@@ -144,6 +147,7 @@ impl From<AppSettings> for SettingsDoc {
       dark_mode: Some(settings.dark_mode),
       indent_rainbow: Some(settings.indent_rainbow),
       soft_wrap: Some(settings.soft_wrap),
+      git_gutter: Some(settings.git_gutter),
       font_size: Some(settings.font_size),
       git_unified_file_view: Some(settings.git_unified_file_view),
       split_diff_view: Some(settings.split_diff_view),
@@ -273,6 +277,7 @@ mod tests {
       dark_mode: true,
       indent_rainbow: true,
       soft_wrap: true,
+      git_gutter: false,
       font_size: 20.0,
       git_unified_file_view: true,
       split_diff_view: true,
@@ -310,6 +315,7 @@ mod tests {
     );
     assert!(loaded.menu_bar_icon);
     assert!(!loaded.soft_wrap);
+    assert!(loaded.git_gutter);
     assert!(take_startup_error().is_none());
 
     teardown();

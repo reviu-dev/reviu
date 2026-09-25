@@ -1121,6 +1121,7 @@ impl Element for EditorElement {
         cx.notify();
       }
       editor.sync_soft_wrap(window, cx);
+      editor.sync_git_gutter(cx);
 
       if editor.scroll_axis_lock == Some(ScrollAxis::Vertical)
         && editor.scroll_handle.offset().x != editor.clamp_horizontal_scroll_x(editor.last_scroll_x)

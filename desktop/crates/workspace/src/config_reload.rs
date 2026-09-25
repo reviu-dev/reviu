@@ -156,6 +156,7 @@ pub(crate) fn apply_settings(settings: AppSettings, window: Option<&mut Window>,
   cx.set_global(settings.find_options());
   cx.set_global(editor::EditorSettings {
     soft_wrap: settings.soft_wrap,
+    git_gutter: settings.git_gutter,
   });
   editor::set_indent_rainbow_enabled(settings.indent_rainbow);
   if cx.has_global::<Theme>() {

@@ -57,7 +57,12 @@ fn doc_line(line: usize) -> DisplayLine {
 #[gpui::test]
 fn soft_wrap_defaults_apply_live_without_overwriting_temporary_overrides(cx: &mut TestAppContext) {
   cx.update(gpui_component::init);
-  cx.update(|cx| cx.set_global(crate::EditorSettings { soft_wrap: true }));
+  cx.update(|cx| {
+    cx.set_global(crate::EditorSettings {
+      soft_wrap: true,
+      ..Default::default()
+    })
+  });
   let editor =
     cx.new(|cx| Editor::new_untitled_with_content(std::env::temp_dir(), "text ".repeat(100), cx));
   assert!(editor.read_with(cx, |editor, _| editor.soft_wrap_enabled()));
@@ -68,7 +73,10 @@ fn soft_wrap_defaults_apply_live_without_overwriting_temporary_overrides(cx: &mu
   let (_, cx) = cx.add_window_view(move |window, cx| Root::new(content, window, cx));
   cx.run_until_parked();
   cx.update(|_, cx| {
-    cx.set_global(crate::EditorSettings { soft_wrap: false });
+    cx.set_global(crate::EditorSettings {
+      soft_wrap: false,
+      ..Default::default()
+    });
     cx.refresh_windows();
   });
   cx.run_until_parked();
@@ -76,7 +84,10 @@ fn soft_wrap_defaults_apply_live_without_overwriting_temporary_overrides(cx: &mu
   cx.update(|window, cx| editor.update(cx, |editor, cx| editor.toggle_soft_wrap(window, cx)));
   for enabled in [true, false] {
     cx.update(|_, cx| {
-      cx.set_global(crate::EditorSettings { soft_wrap: enabled });
+      cx.set_global(crate::EditorSettings {
+        soft_wrap: enabled,
+        ..Default::default()
+      });
       cx.refresh_windows();
     });
     cx.run_until_parked();
@@ -89,7 +100,10 @@ fn soft_wrap_defaults_apply_live_without_overwriting_temporary_overrides(cx: &mu
   });
   editor.update(cx, |editor, cx| editor.set_soft_wrap(false, cx));
   cx.update(|_, cx| {
-    cx.set_global(crate::EditorSettings { soft_wrap: true });
+    cx.set_global(crate::EditorSettings {
+      soft_wrap: true,
+      ..Default::default()
+    });
     cx.refresh_windows();
   });
   cx.run_until_parked();

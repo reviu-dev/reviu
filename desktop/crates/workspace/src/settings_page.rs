@@ -331,6 +331,13 @@ impl SettingsPage {
             ).default_value(false),
           ).description("Wrap long lines to the editor width by default. Toggle temporarily in the active editor with Alt-Z or the command palette."),
           SettingItem::new(
+            "Git Changes in Gutter",
+            SettingField::checkbox(
+              |cx: &App| PersistedSettings::get(cx).git_gutter,
+              |value: bool, cx: &mut App| PersistedSettings::update(cx, |settings| settings.git_gutter = value),
+            ).default_value(true),
+          ).description("Mark added, modified and removed lines next to the line numbers when a file is open as code. Staged changes are outlined."),
+          SettingItem::new(
             "Split Diff View",
             SettingField::checkbox(
               {

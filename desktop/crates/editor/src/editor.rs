@@ -90,6 +90,7 @@ mod line_actions;
 pub(crate) mod navigation;
 #[path = "soft_wrap.rs"]
 pub(crate) mod soft_wrap;
+use crate::git_gutter::GitGutterMarkers;
 use crate::selections::{Selection, Selections};
 use document_lifecycle::SelectionSnapshot;
 #[path = "multicursor.rs"]
@@ -1023,6 +1024,8 @@ pub struct Editor {
   diff_view_mode: DiffViewMode,
   ignore_whitespace: bool,
   git_diff_enabled: bool,
+  git_gutter_enabled: bool,
+  pub(crate) git_gutter_markers: Option<Arc<GitGutterMarkers>>,
   pub is_read_only: bool,
   is_unmerged: bool,
 
@@ -1565,6 +1568,8 @@ impl Editor {
       diff_view_mode: DiffViewMode::Inline,
       ignore_whitespace: false,
       git_diff_enabled: true,
+      git_gutter_enabled: crate::settings::EditorSettings::get(cx).git_gutter,
+      git_gutter_markers: None,
       is_read_only: loaded.is_read_only,
       is_unmerged: false,
     };
@@ -1586,6 +1591,17 @@ impl Editor {
 
   pub fn document(&self) -> &Entity<Document> {
     &self.document
+  }
+
+  /// The document lines the plain file view marks as changed, in order.
+  pub fn git_gutter_lines_for_driver(&self) -> Vec<usize> {
+    let mut lines = self
+      .git_gutter_markers
+      .as_ref()
+      .map(|markers| markers.lines.keys().copied().collect::<Vec<_>>())
+      .unwrap_or_default();
+    lines.sort_unstable();
+    lines
   }
 
   pub fn git_debug_state_for_driver(&self) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
@@ -6878,8 +6894,14 @@ impl Editor {
     self.schedule_diff_recompute(cx);
   }
 
+  /// A diff needs the git bases, and so does the plain file while its gutter
+  /// marks what changed.
+  pub(crate) fn tracks_git_changes(&self) -> bool {
+    self.git_diff_enabled || self.git_gutter_enabled
+  }
+
   fn init(&mut self, cx: &mut Context<Self>) {
-    if self.repo_file.is_some() && self.git_diff_enabled {
+    if self.repo_file.is_some() && self.tracks_git_changes() {
       self.reload_git_bases(cx);
     }
     self.start_polling(cx);
@@ -6890,18 +6912,46 @@ impl Editor {
       return;
     }
     self.git_diff_enabled = enabled;
+    self.git_gutter_markers = None;
     if enabled {
       self.reload_git_bases(cx);
+      return;
+    }
+    self.diff_task = None;
+    self.set_diffs(None, cx);
+    if self.git_gutter_enabled {
+      self.schedule_diff_recompute(cx);
     } else {
-      self.git_state = BufferGitState::default();
-      self.bases_task = None;
-      self.diff_task = None;
-      self.set_diffs(None, cx);
+      self.stop_tracking_git_changes();
     }
   }
 
+  pub(crate) fn sync_git_gutter(&mut self, cx: &mut Context<Self>) {
+    let enabled = crate::settings::EditorSettings::get(cx).git_gutter;
+    if self.git_gutter_enabled == enabled {
+      return;
+    }
+    self.git_gutter_enabled = enabled;
+    if self.git_diff_enabled {
+      return;
+    }
+    if enabled {
+      self.reload_git_bases(cx);
+    } else {
+      self.git_gutter_markers = None;
+      self.stop_tracking_git_changes();
+      cx.notify();
+    }
+  }
+
+  fn stop_tracking_git_changes(&mut self) {
+    self.git_state = BufferGitState::default();
+    self.bases_task = None;
+    self.diff_task = None;
+  }
+
   fn reload_git_bases(&mut self, cx: &mut Context<Self>) {
-    if !self.git_diff_enabled {
+    if !self.tracks_git_changes() {
       return;
     }
     let Some(repo_file) = self.repo_file.clone() else {
@@ -6951,7 +7001,7 @@ impl Editor {
   }
 
   pub fn schedule_diff_recompute(&mut self, cx: &mut Context<Self>) {
-    if !self.git_diff_enabled {
+    if !self.tracks_git_changes() {
       return;
     }
     let Some(repo_file) = self.repo_file.clone() else {
@@ -6978,11 +7028,13 @@ impl Editor {
 
     // For clean buffers, diff directly from git/workdir to avoid copying very large
     // in-memory documents on the UI thread.
-    let use_workdir_diff = !self.is_dirty && !self.git_state.index_dirty && !self.ignore_whitespace;
+    let markers_only = !self.git_diff_enabled;
+    // Hiding whitespace is a way to read a diff; the plain file marks every change.
+    let ignore_whitespace = self.ignore_whitespace && !markers_only;
+    let use_workdir_diff = !self.is_dirty && !self.git_state.index_dirty && !ignore_whitespace;
     let repo_file_for_diff = repo_file.clone();
     let staged_diff = self.git_state.staged_diff.clone();
 
-    let ignore_whitespace = self.ignore_whitespace;
     let generation = self.diff_generation.fetch_add(1, Ordering::Relaxed) + 1;
     let diff_generation = self.diff_generation.clone();
     self.diff_task = Some(cx.spawn(async move |this, cx| {
@@ -7051,6 +7103,22 @@ impl Editor {
       };
 
       if diff_generation.load(Ordering::Relaxed) != generation {
+        return;
+      }
+
+      if markers_only {
+        let markers = cx
+          .background_spawn(async move { GitGutterMarkers::from_diffs(doc_line_count, &diffs) })
+          .await;
+        if diff_generation.load(Ordering::Relaxed) != generation {
+          return;
+        }
+        let _ = this.update(cx, |editor, cx| {
+          if !editor.git_diff_enabled && editor.git_gutter_enabled {
+            editor.git_gutter_markers = Some(Arc::new(markers));
+            cx.notify();
+          }
+        });
         return;
       }
 
@@ -11967,6 +12035,8 @@ pub mod tests {
           diff_view_mode: DiffViewMode::Inline,
           ignore_whitespace: false,
           git_diff_enabled: true,
+          git_gutter_enabled: false,
+          git_gutter_markers: None,
           is_read_only: false,
           is_unmerged: false,
           last_highlights_version: 0,

@@ -4589,6 +4589,90 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_file_opened_as_code_marks_its_changes_in_the_gutter(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-git-gutter");
+    commit_text_file(&repo.path, Path::new("a.txt"), "one\ntwo\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "one\nTWO\nthree\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("a.txt"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    let editor = page
+      .read_with(cx, |page, _| page.warm_editor())
+      .expect("file editor");
+    editor.read_with(cx, |editor, _| {
+      assert!(editor.projection().is_none(), "the file is shown whole");
+      assert_eq!(editor.git_gutter_lines_for_driver(), vec![1, 2]);
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_file_diff(OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    editor.read_with(cx, |editor, _| {
+      assert!(editor.projection().is_some());
+      assert!(
+        editor.git_gutter_lines_for_driver().is_empty(),
+        "the diff shows its own changes"
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_file_diff(OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    editor.read_with(cx, |editor, _| {
+      assert!(editor.projection().is_none());
+      assert_eq!(editor.git_gutter_lines_for_driver(), vec![1, 2]);
+    });
+  }
+
+  #[gpui::test]
+  async fn the_git_gutter_setting_turns_the_marks_off(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-git-gutter-off");
+    commit_text_file(&repo.path, Path::new("a.txt"), "one\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "one\ntwo\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.update(|_, cx| {
+      cx.set_global(editor::EditorSettings {
+        git_gutter: false,
+        ..Default::default()
+      })
+    });
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("a.txt"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let editor = page.warm_editor().expect("file editor");
+      assert!(editor.read(cx).git_gutter_lines_for_driver().is_empty());
+    });
+  }
+
+  #[gpui::test]
   async fn a_commit_snapshot_opens_its_worktree_file_at_the_cursor(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-snapshot-open-file");
     commit_text_file(&repo.path, Path::new("a.txt"), "one\ntwo\n", "initial");

@@ -12,6 +12,7 @@ use git::DiffLineKind;
 use crate::{
   editor::{ConflictLineKind, DisplayCursor, Editor, ScrollAxis},
   editor_element::DiffElementView,
+  git_gutter::{GitGutterLineKind, GitGutterMarkers},
   projection::{
     ChangeKind, DisplayLine, HunkState, Projection, ProjectionBlock, ProjectionBlockMap,
     ReviewCommentBackground, ReviewCommentSide,
@@ -214,6 +215,106 @@ fn hunk_border_colors_for_kinds(
   };
 
   Some((color_for_kind(first_kind?), color_for_kind(last_kind?)))
+}
+
+const GIT_GUTTER_STRIPE_WIDTH: f32 = 4.0;
+const GIT_GUTTER_BORDER: f32 = 1.0;
+const GIT_GUTTER_STAGED_FILL_OPACITY: f32 = 0.3;
+const GIT_GUTTER_DELETION_HEIGHT: f32 = 2.0;
+const GIT_GUTTER_STAGED_DELETION_OPACITY: f32 = 0.5;
+
+fn git_gutter_color(theme: &ui::Theme, kind: GitGutterLineKind) -> gpui::Hsla {
+  match kind {
+    GitGutterLineKind::Added => theme.diff_gutter_added(),
+    GitGutterLineKind::Modified => theme.diff_gutter_modified(),
+  }
+}
+
+/// The plain file view has one display line per document line, so rows and
+/// document lines are the same numbers here. Staged changes read as in the
+/// diff: outlined over a pale fill, where unstaged ones are solid.
+fn push_git_gutter_quads(
+  markers: &GitGutterMarkers,
+  theme: &ui::Theme,
+  viewport: Range<usize>,
+  doc_line_count: usize,
+  bounds: Bounds<Pixels>,
+  line_height: Pixels,
+  scroll_offset: f32,
+  quads: &mut Vec<PaintQuad>,
+) {
+  let left = bounds.left();
+  let width = px(GIT_GUTTER_STRIPE_WIDTH);
+  let border = px(GIT_GUTTER_BORDER);
+  for doc_line in viewport.clone() {
+    if doc_line >= doc_line_count {
+      break;
+    }
+    let Some(marker) = markers.lines.get(&doc_line) else {
+      continue;
+    };
+    let color = git_gutter_color(theme, marker.kind);
+    let y = line_y(bounds.top(), line_height, doc_line, scroll_offset);
+    if marker.state == HunkState::Unstaged {
+      quads.push(fill(
+        Bounds::new(point(left, y), size(width, line_height)),
+        color,
+      ));
+      continue;
+    }
+
+    let continues_run =
+      |line: Option<usize>| line.and_then(|line| markers.lines.get(&line)) == Some(marker);
+    quads.push(fill(
+      Bounds::new(point(left, y), size(width, line_height)),
+      color.opacity(GIT_GUTTER_STAGED_FILL_OPACITY),
+    ));
+    quads.push(fill(
+      Bounds::new(point(left, y), size(border, line_height)),
+      color,
+    ));
+    quads.push(fill(
+      Bounds::new(point(left + width - border, y), size(border, line_height)),
+      color,
+    ));
+    if !continues_run(doc_line.checked_sub(1)) {
+      quads.push(fill(
+        Bounds::new(point(left, y), size(width, border)),
+        color,
+      ));
+    }
+    if !continues_run(Some(doc_line + 1)) {
+      quads.push(fill(
+        Bounds::new(point(left, y + line_height - border), size(width, border)),
+        color,
+      ));
+    }
+  }
+
+  let height = px(GIT_GUTTER_DELETION_HEIGHT);
+  for deletion in &markers.deletions {
+    // Drawn on the edge the removed lines sat on: the top of the line after
+    // them, or the bottom of the last line when they ended the file.
+    let (row, offset) = if deletion.before_doc_line < doc_line_count {
+      (deletion.before_doc_line, px(0.0))
+    } else {
+      (doc_line_count.saturating_sub(1), line_height - height)
+    };
+    if !viewport.contains(&row) {
+      continue;
+    }
+    let color = match deletion.state {
+      HunkState::Unstaged => theme.diff_gutter_removed(),
+      HunkState::Staged => theme
+        .diff_gutter_removed()
+        .opacity(GIT_GUTTER_STAGED_DELETION_OPACITY),
+    };
+    let y = line_y(bounds.top(), line_height, row, scroll_offset) + offset;
+    quads.push(fill(
+      Bounds::new(point(left, y), size(width * 2.0, height)),
+      color,
+    ));
+  }
 }
 
 pub struct GutterPrepaintState {
@@ -720,6 +821,21 @@ impl Element for GutterElement {
             }
           }
         }
+      }
+
+      if projection.is_none()
+        && let Some(markers) = editor.git_gutter_markers.as_deref()
+      {
+        push_git_gutter_quads(
+          markers,
+          &theme,
+          viewport.clone(),
+          doc_line_count,
+          bounds,
+          line_height,
+          scroll_offset,
+          &mut stripe_quads,
+        );
       }
 
       let line_number_color = editor.theme.line_number();

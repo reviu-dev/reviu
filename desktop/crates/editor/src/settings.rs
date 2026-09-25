@@ -2,9 +2,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::{App, Global};
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EditorSettings {
   pub soft_wrap: bool,
+  /// Marks the lines a plain file view changed since the last commit.
+  pub git_gutter: bool,
+}
+
+impl Default for EditorSettings {
+  fn default() -> Self {
+    Self {
+      soft_wrap: false,
+      git_gutter: true,
+    }
+  }
 }
 
 impl Global for EditorSettings {}

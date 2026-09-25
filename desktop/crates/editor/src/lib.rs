@@ -4,6 +4,7 @@ mod cursor_blink;
 mod document;
 mod editor;
 mod editor_element;
+mod git_gutter;
 mod gutter_element;
 mod indentation;
 mod projection;
