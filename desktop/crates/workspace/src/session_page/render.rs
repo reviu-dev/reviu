@@ -2492,6 +2492,20 @@ impl SessionPage {
       });
     }
 
+    if !previewing && self.worktree_file_for_snapshot_tab(tab, cx).is_some() {
+      let view = cx.entity();
+      let tab = tab.clone();
+      toolbar = toolbar.open_file(
+        OPEN_FILE_BUTTON_DEBUG_SELECTOR,
+        Rc::new(move |window, cx| {
+          view.update(cx, |this, cx| {
+            this.activate_center_surface(&tab, window, cx);
+            this.toggle_file_diff(OpenIntent::Open, window, cx);
+          });
+        }),
+      );
+    }
+
     if has_editor && previewable {
       let view = cx.entity();
       let tab = tab.clone();

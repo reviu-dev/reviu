@@ -118,6 +118,7 @@ const FILE_SEARCH_RECENT_LIMIT: usize = 20;
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const FILE_DIFF_TOGGLE_DEBUG_SELECTOR: &str = "session-file-diff-toggle";
+const OPEN_FILE_BUTTON_DEBUG_SELECTOR: &str = "session-open-file";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
 const WHITESPACE_TOGGLE_DEBUG_SELECTOR: &str = "session-whitespace-toggle";
 const SAVE_BUTTON_DEBUG_SELECTOR: &str = "session-save-file";

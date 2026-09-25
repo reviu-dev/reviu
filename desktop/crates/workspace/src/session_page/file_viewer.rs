@@ -804,13 +804,77 @@ impl SessionPage {
       .filter(|_| self.shown_editor().is_some() && self.shown_binary_preview().is_none())
   }
 
-  /// The open worktree file, shown the other way: its code, or its changes.
+  /// The worktree file a snapshot tab is a version of, while it still exists:
+  /// a file deleted since, or one only the pull request's branch has, has no
+  /// code to open here.
+  pub(super) fn worktree_file_for_snapshot_tab(
+    &self,
+    tab: &CenterTab,
+    cx: &App,
+  ) -> Option<PathBuf> {
+    tab.snapshot.as_ref()?;
+    let state = self.editor_states.get(tab)?;
+    if state.editor.is_none() || state.binary_preview.is_some() {
+      return None;
+    }
+    let path = tab.path.clone()?;
+    let checkout_root = self.checkout_root(cx)?;
+    checkout_root.join(&path).is_file().then_some(path)
+  }
+
+  /// Opens the file a snapshot shows at the line under the cursor. The snapshot
+  /// holds the new side, so its lines are the closest match the worktree has;
+  /// they may have moved since, which a jump can live with.
+  fn open_snapshot_in_worktree(
+    &mut self,
+    tab: &CenterTab,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(path) = self.worktree_file_for_snapshot_tab(tab, cx) else {
+      return;
+    };
+    let Some(editor) = self
+      .editor_states
+      .get(tab)
+      .and_then(|state| state.editor.clone())
+    else {
+      return;
+    };
+    let (line, column) = editor.read_with(cx, |editor, cx| {
+      let document = editor.document.read(cx);
+      let offset = editor.cursor_offset().min(document.len());
+      let line = document.char_to_line(offset);
+      (line, offset.saturating_sub(document.line_to_char(line)))
+    });
+    // External file positions are 1-based.
+    self.open_file(
+      path,
+      Some(line as u32 + 1),
+      Some(column as u32 + 1),
+      intent,
+      window,
+      cx,
+    );
+  }
+
+  /// The open worktree file, shown the other way: its code, or its changes. A
+  /// snapshot cannot become the file, so it opens the file beside it instead.
   pub(super) fn toggle_file_diff(
     &mut self,
     intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if let Some(tab) = self
+      .shown_editor_tab()
+      .filter(|tab| tab.snapshot.is_some())
+      .cloned()
+    {
+      self.open_snapshot_in_worktree(&tab, intent, window, cx);
+      return;
+    }
     let Some(tab) = self.shown_worktree_file_tab().cloned() else {
       return;
     };
@@ -4521,6 +4585,68 @@ mod tests {
         .to_string();
       assert_eq!(first_line.trim_end(), "v3 working");
       assert!(!editor.is_read_only);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_commit_snapshot_opens_its_worktree_file_at_the_cursor(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-snapshot-open-file");
+    commit_text_file(&repo.path, Path::new("a.txt"), "one\ntwo\n", "initial");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "one\ntwo\nthree\n",
+      "second",
+    );
+    let second = git::current_head_sha(&repo.path)
+      .expect("head sha")
+      .expect("head sha");
+    std::fs::write(repo.path.join("a.txt"), "one\ntwo\nthree working\n").expect("update");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    let history = page.read_with(cx, |page, cx| page.dock_panel.read(cx).history_list.clone());
+    history.update(cx, |list, cx| {
+      list.open_commit_file(second.clone(), PathBuf::from("a.txt"), OpenIntent::Open, cx)
+    });
+    await_open_file(&page, cx).await;
+
+    let snapshot_tab = CenterTab::commit_snapshot(PathBuf::from("a.txt"), second.clone());
+    page.update(cx, |page, cx| {
+      assert_eq!(
+        page.worktree_file_for_snapshot_tab(&snapshot_tab, cx),
+        Some(PathBuf::from("a.txt"))
+      );
+      page
+        .warm_editor()
+        .expect("snapshot editor")
+        .update(cx, |editor, cx| editor.reveal_source_position(2, 1, cx));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_file_diff(OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update(cx, |page, cx| {
+      assert_eq!(
+        page.active_center_tab,
+        Some(CenterTab::file(PathBuf::from("a.txt")))
+      );
+      assert!(
+        page.center_tabs.contains(&snapshot_tab),
+        "the snapshot keeps its own tab"
+      );
+      let editor = page.warm_editor().expect("file editor");
+      assert!(!editor.read(cx).is_read_only);
+      // Line 3, column 2 of the worktree file: "one\ntwo\n" is 8 characters.
+      assert_eq!(editor.read(cx).cursor_offset(), 9);
+
+      std::fs::remove_file(repo.path.join("a.txt")).expect("delete file");
+      assert_eq!(page.worktree_file_for_snapshot_tab(&snapshot_tab, cx), None);
     });
   }
 

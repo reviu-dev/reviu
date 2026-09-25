@@ -202,7 +202,12 @@ impl SessionPage {
         commands.push(CommandPaletteCommand::toggle_diff_view());
         commands.push(CommandPaletteCommand::toggle_hide_whitespace());
       }
-      if self.shown_worktree_file_tab().is_some() {
+      if self.shown_worktree_file_tab().is_some()
+        || self
+          .shown_editor_tab()
+          .and_then(|tab| self.worktree_file_for_snapshot_tab(tab, cx))
+          .is_some()
+      {
         commands.push(CommandPaletteCommand::toggle_file_diff());
       }
       if self.selection_context(cx).is_ok() {

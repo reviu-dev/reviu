@@ -20,7 +20,7 @@ pub(crate) const DIFF_TOOLBAR_HEIGHT: f32 = 36.0;
 
 /// The two consumers are different entities, so each hands over its own closure
 /// rather than the toolbar reaching for a view it cannot know.
-type ToolbarAction = Rc<dyn Fn(&mut Window, &mut App)>;
+pub(crate) type ToolbarAction = Rc<dyn Fn(&mut Window, &mut App)>;
 
 pub(crate) struct ToggleControl {
   pub active: bool,
@@ -44,6 +44,7 @@ pub(crate) struct DiffToolbar {
   id_prefix: &'static str,
   title: Option<AnyElement>,
   file_diff: Option<ToggleControl>,
+  open_file: Option<(&'static str, ToolbarAction)>,
   preview: Option<ToggleControl>,
   whitespace: Option<ToggleControl>,
   split: Option<SplitControl>,
@@ -58,6 +59,7 @@ impl DiffToolbar {
       id_prefix,
       title: None,
       file_diff: None,
+      open_file: None,
       preview: None,
       whitespace: None,
       split: None,
@@ -88,6 +90,12 @@ impl DiffToolbar {
     self
   }
 
+  /// Leaves a snapshot for the file it is a version of.
+  pub(crate) fn open_file(mut self, debug_selector: &'static str, on_click: ToolbarAction) -> Self {
+    self.open_file = Some((debug_selector, on_click));
+    self
+  }
+
   pub(crate) fn preview(mut self, preview: ToggleControl) -> Self {
     self.preview = Some(preview);
     self
@@ -110,6 +118,9 @@ impl DiffToolbar {
 
     if let Some(file_diff) = self.file_diff {
       controls = controls.child(render_file_diff(self.id_prefix, file_diff));
+    }
+    if let Some((debug_selector, on_click)) = self.open_file {
+      controls = controls.child(render_open_file(self.id_prefix, debug_selector, on_click));
     }
     if let Some(preview) = self.preview {
       controls = controls.child(render_preview(self.id_prefix, preview));
@@ -243,6 +254,21 @@ fn render_file_diff(id_prefix: &'static str, file_diff: ToggleControl) -> AnyEle
     .ghost()
     .disabled(file_diff.disabled)
     .on_click(move |_, window, cx| on_toggle(window, cx))
+    .into_any_element()
+}
+
+fn render_open_file(
+  id_prefix: &'static str,
+  selector: &'static str,
+  on_click: ToolbarAction,
+) -> AnyElement {
+  Button::new(format!("{id_prefix}-open-file"))
+    .debug_selector(move || selector.to_string())
+    .label("Open file")
+    .icon(UiIconName::FileCode)
+    .xsmall()
+    .ghost()
+    .on_click(move |_, window, cx| on_click(window, cx))
     .into_any_element()
 }
 

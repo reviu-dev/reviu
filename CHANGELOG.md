@@ -6,7 +6,7 @@ All notable changes to Reviu are documented here.
 
 ### Switch Between A File And Its Diff
 
-An open file now has a single tab that shows either its code or its changes. Press `cmd-shift-d`, or use the File / Diff button above the editor, to flip between the two without losing unsaved edits, undo history or your place in the file. Opening the file from Files shows its code, and opening it from Changes shows its diff, in the same tab.
+An open file now has a single tab that shows either its code or its changes. Press `cmd-shift-d`, or use the File / Diff button above the editor, to flip between the two without losing unsaved edits, undo history or your place in the file. Opening the file from Files shows its code, and opening it from Changes shows its diff, in the same tab. From the diff of a commit, a pull request or an agent edit, the same shortcut or the Open file button takes you to the file in your working tree at the line you were reading.
 
 ## 1.3.0
 
