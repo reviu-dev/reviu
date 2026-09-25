@@ -217,7 +217,7 @@ impl SyntaxHighlighter {
 
     let events = self
       .highlighter
-      .highlight(highlight_config, text.as_bytes(), None, |language| {
+      .highlight(highlight_config, text.as_bytes(), None, None, |language| {
         languages::language_config_for_name(language)
           .and_then(|config| config.highlight_config.as_ref())
       })
