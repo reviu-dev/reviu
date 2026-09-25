@@ -4641,6 +4641,52 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn change_navigation_walks_the_gutter_of_a_file_open_as_code(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-git-gutter-navigation");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "a\nb\nc\nd\ne\nf\n",
+      "initial",
+    );
+    std::fs::write(repo.path.join("a.txt"), "a\nB\nc\nd\ne\nF\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("a.txt"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    let cursor_line = |page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext| {
+      page.read_with(cx, |page, cx| {
+        let editor = page.warm_editor().expect("file editor");
+        let editor = editor.read(cx);
+        let document = editor.document.read(cx);
+        document.char_to_line(editor.cursor_offset())
+      })
+    };
+
+    for expected in [1, 5, 1] {
+      page.update(cx, |page, cx| {
+        page.navigate_change(crate::annotations::AnnotationDirection::Next, cx)
+      });
+      assert_eq!(cursor_line(&page, cx), expected);
+    }
+    page.update(cx, |page, cx| {
+      page.navigate_change(crate::annotations::AnnotationDirection::Previous, cx)
+    });
+    assert_eq!(cursor_line(&page, cx), 5);
+  }
+
+  #[gpui::test]
   async fn the_git_gutter_setting_turns_the_marks_off(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-git-gutter-off");
     commit_text_file(&repo.path, Path::new("a.txt"), "one\n", "initial");

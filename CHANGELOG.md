@@ -10,7 +10,7 @@ An open file now has a single tab that shows either its code or its changes. Pre
 
 ### Git Changes In The File Gutter
 
-A file open as code now marks what changed since the last commit next to its line numbers, using the same colors as the diff: added, modified, and a small mark where lines were removed. Staged changes are outlined instead of filled, so you can tell them apart while you edit. Turn it off in Settings > Editor with Git Changes in Gutter.
+A file open as code now marks what changed since the last commit next to its line numbers, using the same colors as the diff: added, modified, and a small mark where lines were removed. Staged changes are outlined instead of filled, so you can tell them apart while you edit. The scrollbar shows the same marks across the whole file, and Next Change and Previous Change (Alt-F5 and Alt-Shift-F5) jump between them without leaving the code. Turn it off in Settings > Editor with Git Changes in Gutter.
 
 ## 1.3.0
 

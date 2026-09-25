@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+  collections::{HashMap, HashSet},
+  sync::Arc,
+};
 
 use git::{DiffLineKind, DiffSet};
 
@@ -30,6 +33,9 @@ pub(crate) struct GitGutterDeletion {
 pub(crate) struct GitGutterMarkers {
   pub lines: HashMap<usize, GitGutterLine>,
   pub deletions: Vec<GitGutterDeletion>,
+  /// Each hunk with the first document line it touches, in document order: the
+  /// stops of change navigation.
+  pub hunk_starts: Vec<(Arc<str>, usize)>,
 }
 
 impl GitGutterMarkers {
@@ -44,7 +50,7 @@ impl GitGutterMarkers {
       &HashMap::new(),
       false,
     );
-    let group_adds_and_removes = |group_id: Option<&std::sync::Arc<str>>| {
+    let group_adds_and_removes = |group_id: Option<&Arc<str>>| {
       let group = group_id.and_then(|group_id| projection.groups.get(group_id))?;
       let adds = group
         .hunk
@@ -60,7 +66,33 @@ impl GitGutterMarkers {
     };
 
     let mut markers = Self::default();
+    let mut seen_hunks = HashSet::new();
     for line in &projection.lines {
+      let hunk_start = match line {
+        DisplayLine::Doc {
+          doc_line,
+          change: Some(ChangeKind::Added),
+          group_id: Some(group_id),
+          ..
+        }
+        | DisplayLine::Modified {
+          doc_line,
+          group_id: Some(group_id),
+          ..
+        } => Some((group_id, *doc_line)),
+        DisplayLine::Removed {
+          anchor_line,
+          group_id: Some(group_id),
+          ..
+        } => Some((group_id, *anchor_line)),
+        _ => None,
+      };
+      if let Some((group_id, doc_line)) = hunk_start
+        && seen_hunks.insert(group_id.clone())
+      {
+        markers.hunk_starts.push((group_id.clone(), doc_line));
+      }
+
       match line {
         DisplayLine::Doc {
           doc_line,
@@ -156,6 +188,12 @@ mod tests {
       ])
     );
     assert!(markers.deletions.is_empty());
+    let starts = markers
+      .hunk_starts
+      .iter()
+      .map(|(_, doc_line)| *doc_line)
+      .collect::<Vec<_>>();
+    assert_eq!(starts, vec![1, 3]);
   }
 
   #[test]
@@ -172,6 +210,8 @@ mod tests {
         state: HunkState::Unstaged,
       }]
     );
+    assert_eq!(markers.hunk_starts.len(), 1);
+    assert_eq!(markers.hunk_starts[0].1, 1);
   }
 
   #[test]

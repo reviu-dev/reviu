@@ -90,7 +90,7 @@ mod line_actions;
 pub(crate) mod navigation;
 #[path = "soft_wrap.rs"]
 pub(crate) mod soft_wrap;
-use crate::git_gutter::GitGutterMarkers;
+use crate::git_gutter::{GitGutterLineKind, GitGutterMarkers};
 use crate::selections::{Selection, Selections};
 use document_lifecycle::SelectionSnapshot;
 #[path = "multicursor.rs"]
@@ -1111,6 +1111,34 @@ fn push_scrollbar_marker(
   markers.push(ScrollbarMarker { range, kind });
 }
 
+/// The plain file shows every document line, so its rows are document lines.
+fn push_git_gutter_scrollbar_markers(
+  markers: &mut Vec<ScrollbarMarker>,
+  git_gutter_markers: &GitGutterMarkers,
+) {
+  let mut lines = git_gutter_markers
+    .lines
+    .iter()
+    .map(|(doc_line, line)| {
+      let kind = match line.kind {
+        GitGutterLineKind::Added => ScrollbarMarkerKind::DiffAdded,
+        GitGutterLineKind::Modified => ScrollbarMarkerKind::DiffModified,
+      };
+      (*doc_line, kind)
+    })
+    .chain(
+      git_gutter_markers
+        .deletions
+        .iter()
+        .map(|deletion| (deletion.before_doc_line, ScrollbarMarkerKind::DiffRemoved)),
+    )
+    .collect::<Vec<_>>();
+  lines.sort_by_key(|(doc_line, _)| *doc_line);
+  for (doc_line, kind) in lines {
+    push_scrollbar_marker(markers, kind, doc_line..doc_line + 1);
+  }
+}
+
 fn staged_diff_from_bases(bases: &GitFileBases, rel_path: &Path) -> Option<FileDiff> {
   if bases.head.as_deref() == bases.index.as_deref() {
     return Some(FileDiff::empty(git::DiffKind::Staged));
@@ -1811,6 +1839,12 @@ impl Editor {
           block.display_range.clone(),
         );
       }
+    }
+
+    if self.projection.is_none()
+      && let Some(git_gutter_markers) = self.git_gutter_markers.as_ref()
+    {
+      push_git_gutter_scrollbar_markers(&mut markers, git_gutter_markers);
     }
 
     for find_match in self.find.matches() {
@@ -8253,7 +8287,13 @@ impl Editor {
 
   fn ordered_hunk_display_lines(&self) -> Vec<(Arc<str>, usize)> {
     let Some(projection) = &self.projection else {
-      return Vec::new();
+      // The plain file shows every document line, so the gutter's hunk starts
+      // are already display lines.
+      return self
+        .git_gutter_markers
+        .as_ref()
+        .map(|markers| markers.hunk_starts.clone())
+        .unwrap_or_default();
     };
     let mut seen: HashSet<Arc<str>> = HashSet::new();
     let mut result = Vec::new();
@@ -8282,16 +8322,20 @@ impl Editor {
     result
   }
 
+  fn cursor_display_line(&self, cx: &App) -> usize {
+    let cursor_doc_line = {
+      let document = self.document.read(cx);
+      document.char_to_line(self.cursor_offset().min(document.len()))
+    };
+    self.cursor_display_line_for_anchoring(cursor_doc_line)
+  }
+
   fn active_hunk_index(&self, ordered: &[(Arc<str>, usize)], cx: &App) -> Option<usize> {
     if ordered.is_empty() {
       return None;
     }
 
-    let cursor_doc_line = {
-      let document = self.document.read(cx);
-      document.char_to_line(self.cursor_offset().min(document.len()))
-    };
-    let cursor_display_line = self.cursor_display_line_for_anchoring(cursor_doc_line);
+    let cursor_display_line = self.cursor_display_line(cx);
 
     let mut active = 0;
     for (idx, (_, display_line)) in ordered.iter().enumerate() {
@@ -8365,6 +8409,13 @@ impl Editor {
       return;
     };
 
+    // A diff opens on its first hunk. The plain file shows the code above it,
+    // where the cursor has not reached that hunk yet: it is the next stop.
+    let before_first_hunk = self.projection.is_none()
+      && self.selected_hunk_index(&ordered).is_none()
+      && ordered
+        .first()
+        .is_some_and(|(_, display_line)| self.cursor_display_line(cx) < *display_line);
     let target_index = match direction {
       HunkNavigationDirection::Previous => {
         if active_index == 0 {
@@ -8373,6 +8424,7 @@ impl Editor {
           active_index - 1
         }
       }
+      HunkNavigationDirection::Next if before_first_hunk => 0,
       HunkNavigationDirection::Next => (active_index + 1) % ordered.len(),
     };
     let (target_group_id, target_display_line) = ordered[target_index].clone();
@@ -13828,6 +13880,65 @@ pub mod tests {
         range: 4..5,
         kind: ScrollbarMarkerKind::FindMatch,
       }));
+    });
+  }
+
+  #[gpui::test]
+  fn test_scrollbar_markers_follow_the_git_gutter_of_a_plain_file(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_projection(None);
+      editor.git_gutter_markers = Some(Arc::new(GitGutterMarkers {
+        lines: HashMap::from([
+          (
+            1,
+            crate::git_gutter::GitGutterLine {
+              kind: GitGutterLineKind::Added,
+              state: HunkState::Unstaged,
+            },
+          ),
+          (
+            2,
+            crate::git_gutter::GitGutterLine {
+              kind: GitGutterLineKind::Added,
+              state: HunkState::Staged,
+            },
+          ),
+          (
+            5,
+            crate::git_gutter::GitGutterLine {
+              kind: GitGutterLineKind::Modified,
+              state: HunkState::Unstaged,
+            },
+          ),
+        ]),
+        deletions: vec![crate::git_gutter::GitGutterDeletion {
+          before_doc_line: 8,
+          state: HunkState::Unstaged,
+        }],
+        hunk_starts: Vec::new(),
+      }));
+
+      let markers = editor.scrollbar_markers(cx);
+
+      assert_eq!(
+        markers,
+        vec![
+          ScrollbarMarker {
+            range: 1..3,
+            kind: ScrollbarMarkerKind::DiffAdded,
+          },
+          ScrollbarMarker {
+            range: 5..6,
+            kind: ScrollbarMarkerKind::DiffModified,
+          },
+          ScrollbarMarker {
+            range: 8..9,
+            kind: ScrollbarMarkerKind::DiffRemoved,
+          },
+        ]
+      );
     });
   }
 

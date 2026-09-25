@@ -341,8 +341,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
   ShortcutDefinition {
     id: ShortcutId::PreviousAnnotation,
     title: "Previous Change",
-    description: "Jump to the previous conflict or change in the diff.",
-    scope_label: "Diff editor",
+    description: "Jump to the previous conflict or change in the file or its diff.",
+    scope_label: "Editor",
     category: ShortcutCategory::Review,
     keystroke: "alt-shift-f5",
     context: REVIEW_ANNOTATION_CONTEXT,
@@ -352,8 +352,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
   ShortcutDefinition {
     id: ShortcutId::NextAnnotation,
     title: "Next Change",
-    description: "Jump to the next conflict or change in the diff.",
-    scope_label: "Diff editor",
+    description: "Jump to the next conflict or change in the file or its diff.",
+    scope_label: "Editor",
     category: ShortcutCategory::Review,
     keystroke: "alt-f5",
     context: REVIEW_ANNOTATION_CONTEXT,
@@ -856,11 +856,14 @@ impl ShortcutDefinition {
     match self.id {
       ShortcutId::CommentHunk => Some(COMMENT_HUNK_DESCENDANT_FOCUS),
       ShortcutId::AddSelectionToAgent => Some("Editor"),
+      ShortcutId::ToggleDiffView | ShortcutId::ToggleHideWhitespace => {
+        Some("Editor && !CodeEditor")
+      }
+      // A file open as code walks the changes its gutter marks.
       ShortcutId::PreviousAnnotation
       | ShortcutId::NextAnnotation
-      | ShortcutId::ToggleDiffView
-      | ShortcutId::ToggleHideWhitespace => Some("Editor && !CodeEditor"),
-      ShortcutId::ToggleSoftWrap | ShortcutId::ToggleFileDiff => Some("Editor"),
+      | ShortcutId::ToggleSoftWrap
+      | ShortcutId::ToggleFileDiff => Some("Editor"),
       ShortcutId::ToggleHunkStage | ShortcutId::RestoreHunk | ShortcutId::AcceptBothConflict => {
         Some(HUNK_OR_CONFLICT_ACTION_FOCUS)
       }
@@ -2121,8 +2124,30 @@ mod tests {
   }
 
   #[test]
+  fn change_navigation_works_in_diff_and_code_editors() {
+    for keystroke in ["alt-f5", "alt-shift-f5"] {
+      for contexts in [&["Editor"][..], &["Editor CodeEditor"][..]] {
+        assert!(has_binding_with_bindings_in_contexts(
+          "workspace",
+          contexts,
+          keystroke,
+          workspace_key_bindings()
+        ));
+      }
+      for contexts in [&["Editor", "Input"][..], &["Input"][..], &["Terminal"][..]] {
+        assert!(!has_binding_with_bindings_in_contexts(
+          "workspace",
+          contexts,
+          keystroke,
+          workspace_key_bindings()
+        ));
+      }
+    }
+  }
+
+  #[test]
   fn review_shortcuts_are_scoped_to_diff_editors() {
-    for keystroke in ["ctrl-alt-v", "ctrl-alt-w", "alt-f5", "alt-shift-f5"] {
+    for keystroke in ["ctrl-alt-v", "ctrl-alt-w"] {
       assert!(has_binding_with_bindings_in_contexts(
         "workspace",
         &["Editor"],
