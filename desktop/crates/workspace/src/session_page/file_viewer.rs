@@ -741,7 +741,7 @@ impl SessionPage {
   /// A worktree file has one tab: asking for it in the other mode flips that
   /// tab, so the edits, the undo history and the cursor all carry over instead
   /// of a second buffer drifting from the first.
-  fn switch_worktree_tab_mode(&mut self, target: &CenterTab, cx: &mut Context<Self>) {
+  pub(super) fn switch_worktree_tab_mode(&mut self, target: &CenterTab, cx: &mut Context<Self>) {
     let other_kind = match target.kind {
       CenterTabKind::File => CenterTabKind::Diff,
       CenterTabKind::Diff => CenterTabKind::File,

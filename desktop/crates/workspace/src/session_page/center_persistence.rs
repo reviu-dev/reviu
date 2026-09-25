@@ -48,6 +48,43 @@ fn collect_workspace_tabs(state: &PersistedCenterWorkspace) -> Vec<PersistedCent
   tabs
 }
 
+/// Before a worktree file had one tab, it could be saved open both as code and
+/// as a diff, which restores as two buffers of the same file. The standalone
+/// tab of such a pair goes: the active one stays, then a split, then the diff.
+fn drop_worktree_mode_twins(
+  tabs: &mut Vec<CenterTab>,
+  layouts: &HashMap<CenterTab, CenterLayout>,
+  active_tab: Option<&CenterTab>,
+) {
+  let standalone = tabs.clone();
+  tabs.retain(|tab| {
+    let twin_kind = match tab.kind {
+      CenterTabKind::File => CenterTabKind::Diff,
+      CenterTabKind::Diff => CenterTabKind::File,
+      _ => return true,
+    };
+    if tab.snapshot.is_some()
+      || tab.path.is_none()
+      || active_tab == Some(tab)
+      || layouts.contains_key(tab)
+    {
+      return true;
+    }
+    let twin = CenterTab {
+      kind: twin_kind,
+      ..tab.clone()
+    };
+    let twin_is_standalone = standalone.contains(&twin);
+    let twin_in_split = layouts.values().any(|layout| layout.contains_tab(&twin));
+    if !twin_is_standalone && !twin_in_split {
+      return true;
+    }
+    let twin_wins =
+      active_tab == Some(&twin) || !twin_is_standalone || tab.kind == CenterTabKind::File;
+    !twin_wins
+  });
+}
+
 impl SessionPage {
   fn restored_center_tab(
     &self,
@@ -197,11 +234,13 @@ impl SessionPage {
       return;
     }
 
-    let tabs = CenterTab::with_chat_tab(tabs);
-    let active_tab = state
+    let persisted_active_tab = state
       .active_tab
       .as_ref()
-      .and_then(|tab| runtime_tabs.get(tab).cloned())
+      .and_then(|tab| runtime_tabs.get(tab).cloned());
+    drop_worktree_mode_twins(&mut tabs, &restored_layouts, persisted_active_tab.as_ref());
+    let tabs = CenterTab::with_chat_tab(tabs);
+    let active_tab = persisted_active_tab
       .filter(|tab| tabs.contains(tab))
       .unwrap_or_else(|| tabs.last().cloned().unwrap_or_else(CenterTab::chat));
     self.center_checkouts.insert(
@@ -366,11 +405,61 @@ impl SessionPage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::session_page::center_layout::{CenterNode, CenterPaneId};
+  use crate::session_page::center_layout::{CenterNode, CenterPaneId, CenterSplitDirection};
   use crate::session_page::test_support::{
     add_session_page_window_from_config, isolate_config_store_for_test,
   };
   use gpui::TestAppContext;
+
+  fn split_of(first: CenterTab, second: CenterTab) -> CenterLayout {
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(first));
+    let pane_id = match layout.root() {
+      CenterNode::Pane(pane) => pane.id(),
+      CenterNode::Split(_) => unreachable!("a single layout is one pane"),
+    };
+    assert!(layout.split_pane(
+      pane_id,
+      CenterSurface::from_tab(second),
+      CenterSplitDirection::Right
+    ));
+    layout
+  }
+
+  #[test]
+  fn a_restored_file_and_diff_pair_keeps_one_tab() {
+    let file = CenterTab::file(PathBuf::from("a.rs"));
+    let diff = CenterTab::diff(PathBuf::from("a.rs"));
+    let other = CenterTab::file(PathBuf::from("b.rs"));
+
+    let mut tabs = vec![CenterTab::chat(), file.clone(), diff.clone(), other.clone()];
+    drop_worktree_mode_twins(&mut tabs, &HashMap::new(), None);
+    assert_eq!(tabs, vec![CenterTab::chat(), diff.clone(), other.clone()]);
+
+    let mut tabs = vec![file.clone(), diff.clone()];
+    drop_worktree_mode_twins(&mut tabs, &HashMap::new(), Some(&file));
+    assert_eq!(tabs, vec![file.clone()]);
+
+    // A snapshot is not the worktree file: it is not a twin.
+    let snapshot = CenterTab::commit_snapshot(PathBuf::from("a.rs"), "abc".to_string());
+    let mut tabs = vec![file.clone(), snapshot.clone()];
+    drop_worktree_mode_twins(&mut tabs, &HashMap::new(), None);
+    assert_eq!(tabs, vec![file.clone(), snapshot]);
+  }
+
+  #[test]
+  fn a_split_keeps_its_side_of_a_restored_pair() {
+    let file = CenterTab::file(PathBuf::from("a.rs"));
+    let diff = CenterTab::diff(PathBuf::from("a.rs"));
+    let representative = CenterTab::chat();
+    let layouts = HashMap::from([(
+      representative.clone(),
+      split_of(representative.clone(), diff.clone()),
+    )]);
+
+    let mut tabs = vec![representative.clone(), file.clone()];
+    drop_worktree_mode_twins(&mut tabs, &layouts, None);
+    assert_eq!(tabs, vec![representative]);
+  }
 
   fn pane_for_tab(node: &CenterNode, tab: &CenterTab) -> Option<CenterPaneId> {
     match node {

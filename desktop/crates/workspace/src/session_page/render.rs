@@ -2003,6 +2003,9 @@ impl SessionPage {
     if self.warm_selected_file().is_none() {
       self.hide_whitespace = app_settings.hide_whitespace;
     }
+    // Open in the other mode, the file's one tab flips first and then moves
+    // into the split, editor and all.
+    self.switch_worktree_tab_mode(&tab, cx);
 
     let changed = self.center_layout.split_pane(
       target.pane_id,
@@ -8650,6 +8653,70 @@ mod tests {
       );
       assert_eq!(page.center_layout.active_tab().kind, CenterTabKind::Diff);
       assert!(page.shown_editor().is_some());
+    });
+  }
+
+  #[gpui::test]
+  async fn dropping_the_diff_of_an_open_file_moves_its_tab_instead_of_loading_it_twice(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-center-file-drop-open-file");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    let file_editor = page
+      .read_with(cx, |page, _| page.warm_editor())
+      .expect("file editor");
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(CenterTab::chat(), OpenIntent::Open, window, cx);
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should be a single pane");
+      };
+      let pane_id = pane.id();
+      page.center_drag_target = Some(CenterDropTarget {
+        pane_id,
+        direction: Some(CenterSplitDirection::Right),
+      });
+      page.drop_center_file(
+        CenterFileDrag {
+          path: PathBuf::from("README.md"),
+          mode: CenterFileDragMode::Diff,
+        },
+        window,
+        cx,
+      );
+    });
+    await_shown_editor(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      let file = CenterTab::file(PathBuf::from("README.md"));
+      let diff = CenterTab::diff(PathBuf::from("README.md"));
+      assert!(!page.center_tabs.contains(&file));
+      assert!(!page.center_layout.contains_tab(&file));
+      assert!(!page.editor_states.contains_key(&file));
+      assert!(page.center_layout.contains_tab(&diff));
+      assert_eq!(
+        page
+          .editor_states
+          .get(&diff)
+          .and_then(|state| state.editor.as_ref())
+          .map(|editor| editor.entity_id()),
+        Some(file_editor.entity_id())
+      );
     });
   }
 
