@@ -374,7 +374,8 @@ impl WorkingDirectoryTracker {
     if let Some(process_id) = *tracked_process_id {
       system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[process_id]),
-        ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+        true,
+        ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
       );
       if let Some(path) = process_working_directory(&system, process_id) {
         return Some(path);
@@ -384,7 +385,8 @@ impl WorkingDirectoryTracker {
 
     system.refresh_processes_specifics(
       ProcessesToUpdate::All,
-      ProcessRefreshKind::new().with_cwd(UpdateKind::Always),
+      true,
+      ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
     );
     if let Some(root_process) = system.process(self.process_id)
       && root_process.name() != "login"
