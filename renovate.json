@@ -40,6 +40,30 @@
         "gpui-component-assets"
       ],
       "automerge": false
+    },
+    {
+      "description": "tree-sitter-highlight pins the tree-sitter minor it was built against, so the two only resolve when bumped together. Grammars depend on tree-sitter-language and move on their own.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tree-sitter", "tree-sitter-highlight"],
+      "groupName": "tree-sitter core"
+    },
+    {
+      "description": "libappindicator 0.9 (unmaintained since 2023) requires gtk-sys 0.18.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["gtk"],
+      "allowedVersions": "<0.19"
+    },
+    {
+      "description": "tree-sitter-sequel requires cc ~1.2.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["cc"],
+      "allowedVersions": "<1.3"
+    },
+    {
+      "description": "astro check relies on the TypeScript programmatic API, which the native 7.x compiler does not ship yet.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
     }
   ]
 }
