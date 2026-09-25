@@ -20,6 +20,7 @@ actions!(
     PushChanges,
     ForcePushChanges,
     ToggleDiffView,
+    ToggleFileDiff,
     ToggleHideWhitespace,
     PreviousAnnotation,
     NextAnnotation,

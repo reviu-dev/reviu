@@ -43,6 +43,7 @@ pub(crate) struct DiffToolbar {
   /// Element ids are namespaced per host: both toolbars can be mounted at once.
   id_prefix: &'static str,
   title: Option<AnyElement>,
+  file_diff: Option<ToggleControl>,
   preview: Option<ToggleControl>,
   whitespace: Option<ToggleControl>,
   split: Option<SplitControl>,
@@ -56,6 +57,7 @@ impl DiffToolbar {
     Self {
       id_prefix,
       title: None,
+      file_diff: None,
       preview: None,
       whitespace: None,
       split: None,
@@ -80,6 +82,12 @@ impl DiffToolbar {
     self
   }
 
+  /// Active while the diff is shown.
+  pub(crate) fn file_diff(mut self, file_diff: ToggleControl) -> Self {
+    self.file_diff = Some(file_diff);
+    self
+  }
+
   pub(crate) fn preview(mut self, preview: ToggleControl) -> Self {
     self.preview = Some(preview);
     self
@@ -100,6 +108,9 @@ impl DiffToolbar {
     let theme = cx.theme().clone();
     let mut controls = h_flex().flex_shrink_0().items_center().gap_2().text_xs();
 
+    if let Some(file_diff) = self.file_diff {
+      controls = controls.child(render_file_diff(self.id_prefix, file_diff));
+    }
     if let Some(preview) = self.preview {
       controls = controls.child(render_preview(self.id_prefix, preview));
     }
@@ -212,6 +223,27 @@ fn split_button_debug_selector(
   selector: &'static str,
 ) -> Option<&'static str> {
   (current_mode != button_mode).then_some(selector)
+}
+
+fn render_file_diff(id_prefix: &'static str, file_diff: ToggleControl) -> AnyElement {
+  let on_toggle = file_diff.on_toggle.clone();
+  let selector = file_diff.debug_selector;
+  // The button names where it takes you, not where you are.
+  let (label, icon) = if file_diff.active {
+    ("File", UiIconName::FileCode)
+  } else {
+    ("Diff", UiIconName::FileDiff)
+  };
+
+  Button::new(format!("{id_prefix}-file-diff"))
+    .debug_selector(move || selector.to_string())
+    .label(label)
+    .icon(icon)
+    .xsmall()
+    .ghost()
+    .disabled(file_diff.disabled)
+    .on_click(move |_, window, cx| on_toggle(window, cx))
+    .into_any_element()
 }
 
 fn render_preview(id_prefix: &'static str, preview: ToggleControl) -> AnyElement {

@@ -415,6 +415,7 @@ pub enum CommandPaletteAction {
   ShowFileSearch,
   ShowGlobalSearch,
   ToggleDiffView,
+  ToggleFileDiff,
   ToggleHideWhitespace,
   ToggleSoftWrap,
   SendSelectionToAgent,
@@ -1045,6 +1046,7 @@ pub enum CommandPaletteCommandId {
   ShowFileSearch,
   ShowGlobalSearch,
   ToggleDiffView,
+  ToggleFileDiff,
   ToggleHideWhitespace,
   ToggleSoftWrap,
   SendSelectionToAgent,
@@ -1124,6 +1126,7 @@ impl CommandPaletteCommandId {
       Self::ShowFileSearch => "show_file_search",
       Self::ShowGlobalSearch => "show_global_search",
       Self::ToggleDiffView => "toggle_diff_view",
+      Self::ToggleFileDiff => "toggle_file_diff",
       Self::ToggleHideWhitespace => "toggle_hide_whitespace",
       Self::ToggleSoftWrap => "toggle_soft_wrap",
       Self::SendSelectionToAgent => "send_selection_to_agent",
@@ -1199,6 +1202,7 @@ impl CommandPaletteCommandId {
       "show_file_search" => Some(Self::ShowFileSearch),
       "show_global_search" => Some(Self::ShowGlobalSearch),
       "toggle_diff_view" => Some(Self::ToggleDiffView),
+      "toggle_file_diff" => Some(Self::ToggleFileDiff),
       "toggle_hide_whitespace" => Some(Self::ToggleHideWhitespace),
       "toggle_soft_wrap" => Some(Self::ToggleSoftWrap),
       "send_selection_to_agent" => Some(Self::SendSelectionToAgent),
@@ -1825,6 +1829,14 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn toggle_file_diff() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ToggleFileDiff,
+      "Toggle file and diff",
+      "Switch the open file between its code and its changes",
+    )
+  }
+
   pub fn toggle_hide_whitespace() -> Self {
     Self::new(
       CommandPaletteCommandId::ToggleHideWhitespace,
@@ -2056,6 +2068,7 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::JumpToLatestMessage => CommandPaletteGroup::Navigation,
 
       CommandPaletteCommandId::ToggleDiffView
+      | CommandPaletteCommandId::ToggleFileDiff
       | CommandPaletteCommandId::ToggleHideWhitespace
       | CommandPaletteCommandId::ToggleSoftWrap => CommandPaletteGroup::View,
 
@@ -2115,6 +2128,7 @@ impl CommandPaletteCommand {
       Id::ShowFileSearch => &["find", "goto", "open", "search"],
       Id::ShowGlobalSearch => &["grep", "find", "content", "search"],
       Id::ToggleDiffView => &["split", "inline", "unified", "side"],
+      Id::ToggleFileDiff => &["code", "changes", "source", "switch", "open"],
       Id::ToggleHideWhitespace => &["blank", "spaces", "indent"],
       Id::ToggleSoftWrap => &["word", "wrap", "line", "width", "editor"],
       Id::SendSelectionToAgent => &["context", "attach", "prompt"],
@@ -2219,9 +2233,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::ShowFileSearch | CommandPaletteCommandId::ShowGlobalSearch => {
         Icon::new(UiIconName::Search)
       }
-      CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
-        Icon::new(UiIconName::FileDiff)
-      }
+      CommandPaletteCommandId::ToggleDiffView
+      | CommandPaletteCommandId::ToggleFileDiff
+      | CommandPaletteCommandId::ToggleHideWhitespace => Icon::new(UiIconName::FileDiff),
       CommandPaletteCommandId::ToggleSoftWrap => Icon::new(UiIconName::TextWrap),
       CommandPaletteCommandId::SendSelectionToAgent => Icon::new(UiIconName::Sparkles),
       CommandPaletteCommandId::JumpToLatestMessage => Icon::new(UiIconName::ArrowDownFromLine),
@@ -3462,6 +3476,9 @@ impl CommandPalette {
       CommandPaletteCommandId::ToggleDiffView => {
         self.trigger_action(command, CommandPaletteAction::ToggleDiffView, window, cx);
       }
+      CommandPaletteCommandId::ToggleFileDiff => {
+        self.trigger_action(command, CommandPaletteAction::ToggleFileDiff, window, cx);
+      }
       CommandPaletteCommandId::ToggleSoftWrap => {
         self.trigger_action(command, CommandPaletteAction::ToggleSoftWrap, window, cx);
       }
@@ -4547,6 +4564,7 @@ mod tests {
       CommandPaletteCommand::show_file_search(),
       CommandPaletteCommand::show_global_search(),
       CommandPaletteCommand::toggle_diff_view(),
+      CommandPaletteCommand::toggle_file_diff(),
       CommandPaletteCommand::toggle_hide_whitespace(),
       CommandPaletteCommand::toggle_soft_wrap(),
       CommandPaletteCommand::send_selection_to_agent(),
@@ -4571,6 +4589,7 @@ mod tests {
     assert!(CommandPaletteCommand::show_global_search().matches("grep"));
     assert!(CommandPaletteCommand::show_global_search().matches("content"));
     assert!(CommandPaletteCommand::toggle_diff_view().matches("split"));
+    assert!(CommandPaletteCommand::toggle_file_diff().matches("code"));
     assert!(CommandPaletteCommand::toggle_soft_wrap().matches("word wrap"));
     assert!(CommandPaletteCommand::sign_out().matches("logout"));
     assert!(CommandPaletteCommand::open_browser_extensions().matches("chrome"));

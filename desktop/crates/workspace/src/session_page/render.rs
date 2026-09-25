@@ -2470,6 +2470,28 @@ impl SessionPage {
       );
     }
 
+    // A clean file has no changes to show, so only its diff offers the way back.
+    let file_diff_available = snapshot.is_none()
+      && has_editor
+      && active_binary_preview.is_none()
+      && !previewing
+      && path.is_some_and(|path| showing_git_diff || self.path_has_changes(path, false, cx));
+    if file_diff_available {
+      let view = cx.entity();
+      let tab = tab.clone();
+      toolbar = toolbar.file_diff(ToggleControl {
+        active: showing_git_diff,
+        disabled: false,
+        debug_selector: FILE_DIFF_TOGGLE_DEBUG_SELECTOR,
+        on_toggle: Rc::new(move |window, cx| {
+          view.update(cx, |this, cx| {
+            this.activate_center_surface(&tab, window, cx);
+            this.toggle_file_diff(OpenIntent::Open, window, cx);
+          });
+        }),
+      });
+    }
+
     if has_editor && previewable {
       let view = cx.entity();
       let tab = tab.clone();
@@ -3122,6 +3144,7 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::save_file_as_action))
       .on_action(cx.listener(Self::comment_hunk_action))
       .on_action(cx.listener(Self::toggle_diff_view_action))
+      .on_action(cx.listener(Self::toggle_file_diff_action))
       .on_action(cx.listener(Self::toggle_hide_whitespace_action))
       .on_action(cx.listener(Self::previous_annotation_action))
       .on_action(cx.listener(Self::next_annotation_action))

@@ -117,6 +117,7 @@ const FILE_SEARCH_CACHE_TTL: Duration = Duration::from_secs(30);
 const FILE_SEARCH_RECENT_LIMIT: usize = 20;
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
+const FILE_DIFF_TOGGLE_DEBUG_SELECTOR: &str = "session-file-diff-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
 const WHITESPACE_TOGGLE_DEBUG_SELECTOR: &str = "session-whitespace-toggle";
 const SAVE_BUTTON_DEBUG_SELECTOR: &str = "session-save-file";

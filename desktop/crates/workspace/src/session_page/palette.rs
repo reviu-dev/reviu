@@ -202,6 +202,9 @@ impl SessionPage {
         commands.push(CommandPaletteCommand::toggle_diff_view());
         commands.push(CommandPaletteCommand::toggle_hide_whitespace());
       }
+      if self.shown_worktree_file_tab().is_some() {
+        commands.push(CommandPaletteCommand::toggle_file_diff());
+      }
       if self.selection_context(cx).is_ok() {
         commands.push(CommandPaletteCommand::send_selection_to_agent());
       }
@@ -511,6 +514,10 @@ impl SessionPage {
       }
       CommandPaletteAction::ToggleDiffView => {
         self.toggle_diff_view(cx);
+        Ok(())
+      }
+      CommandPaletteAction::ToggleFileDiff => {
+        self.toggle_file_diff(OpenIntent::Open, window, cx);
         Ok(())
       }
       CommandPaletteAction::ToggleHideWhitespace => {

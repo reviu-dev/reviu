@@ -561,6 +561,7 @@ impl SessionPage {
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
+    self.switch_worktree_tab_mode(&tab, cx);
     // Previewing is a detour, not a mode: opening a file always shows its code.
     self.show_preview = false;
     let left_commit_file = self.leave_commit_file(cx);
@@ -725,6 +726,112 @@ impl SessionPage {
     self.open_file_task = Some(task);
     self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
+  }
+
+  fn center_tab_is_open(&self, tab: &CenterTab) -> bool {
+    self.center_tabs.contains(tab)
+      || self.center_layout.contains_tab(tab)
+      || self
+        .center_layouts_by_tab
+        .values()
+        .any(|layout| layout.contains_tab(tab))
+      || self.editor_states.contains_key(tab)
+  }
+
+  /// A worktree file has one tab: asking for it in the other mode flips that
+  /// tab, so the edits, the undo history and the cursor all carry over instead
+  /// of a second buffer drifting from the first.
+  fn switch_worktree_tab_mode(&mut self, target: &CenterTab, cx: &mut Context<Self>) {
+    let other_kind = match target.kind {
+      CenterTabKind::File => CenterTabKind::Diff,
+      CenterTabKind::Diff => CenterTabKind::File,
+      _ => return,
+    };
+    if target.snapshot.is_some() || target.path.is_none() || self.center_tab_is_open(target) {
+      return;
+    }
+    let other = CenterTab {
+      kind: other_kind,
+      ..target.clone()
+    };
+    if !self.center_tab_is_open(&other) {
+      return;
+    }
+
+    replace_center_tabs(&mut self.center_tabs, &other, target);
+    replace_center_tabs(&mut self.center_tab_history, &other, target);
+    replace_center_tab_option(&mut self.active_center_tab, &other, target);
+    replace_center_tab_option(&mut self.editor_tab, &other, target);
+    self.center_layout.replace_tab(&other, target);
+    replace_center_layouts(&mut self.center_layouts_by_tab, &other, target);
+
+    let Some(state) = self.editor_states.remove(&other) else {
+      return;
+    };
+    let Some(editor) = state.editor.clone() else {
+      // Still loading under the old mode: a fresh load in the new one wins.
+      self.open_file_generation = self.open_file_generation.wrapping_add(1);
+      return;
+    };
+    self.editor_states.insert(target.clone(), state);
+    let show_git_diff = target.kind == CenterTabKind::Diff;
+    // The reading preferences may have moved since this editor last showed a diff.
+    let hide_whitespace = self.hide_whitespace;
+    let diff_view = target.path().map(|path| self.effective_diff_view(path, cx));
+    editor.update(cx, |editor, cx| {
+      editor.set_git_diff_enabled(show_git_diff, cx);
+      editor.set_ignore_whitespace(hide_whitespace, cx);
+      if let Some(diff_view) = diff_view {
+        editor.set_diff_view_mode(diff_view, cx);
+      }
+    });
+    if show_git_diff {
+      self.install_agent_review_handlers_for_editor(&editor, cx);
+      if self.editor_tab.as_ref() == Some(target) {
+        self.sync_agent_review_comments_to_editor(cx);
+      }
+    } else {
+      configure_review(&editor, ReviewDestination::None, cx);
+    }
+  }
+
+  /// The shown tab when it is a text file of the worktree: a snapshot cannot be
+  /// edited as a file, and a binary has no code to read.
+  pub(super) fn shown_worktree_file_tab(&self) -> Option<&CenterTab> {
+    self
+      .shown_editor_tab()
+      .filter(|tab| tab.snapshot.is_none() && tab.path.is_some())
+      .filter(|_| self.shown_editor().is_some() && self.shown_binary_preview().is_none())
+  }
+
+  /// The open worktree file, shown the other way: its code, or its changes.
+  pub(super) fn toggle_file_diff(
+    &mut self,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(tab) = self.shown_worktree_file_tab().cloned() else {
+      return;
+    };
+    let Some(path) = tab.path.clone() else {
+      return;
+    };
+    match tab.kind {
+      CenterTabKind::File => self.open_diff(path, None, intent, window, cx),
+      CenterTabKind::Diff => self.open_file(path, None, None, intent, window, cx),
+      _ => {}
+    }
+  }
+
+  pub(super) fn toggle_file_diff_action(
+    &mut self,
+    _: &crate::ToggleFileDiff,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_file_diff(OpenIntent::Open, window, cx);
+    cx.stop_propagation();
   }
 
   pub(super) fn handle_file_renamed(
@@ -4014,7 +4121,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn file_and_diff_tabs_for_same_path_keep_separate_diff_modes(cx: &mut TestAppContext) {
+  async fn opening_an_open_file_in_the_other_mode_flips_its_tab(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-file-and-diff-tabs");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
@@ -4032,7 +4139,7 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    page.read_with(cx, |page, cx| {
+    let file_editor = page.read_with(cx, |page, cx| {
       assert_eq!(
         page.center_tabs,
         vec![
@@ -4040,18 +4147,14 @@ mod tests {
           CenterTab::file(PathBuf::from("README.md"))
         ]
       );
-      assert_eq!(
-        page.active_center_tab,
-        Some(CenterTab::file(PathBuf::from("README.md")))
-      );
+      let editor = page.warm_editor().expect("file editor");
       assert!(
-        page
-          .warm_editor()
-          .as_ref()
-          .is_some_and(|editor| editor.read(cx).projection().is_none()),
+        editor.read(cx).projection().is_none(),
         "plain file tabs do not show git diffs"
       );
+      editor
     });
+    dirty_warm_editor(&page, cx, "v3\n");
 
     page.update_in(cx, |page, window, cx| {
       page.open_diff(
@@ -4070,7 +4173,6 @@ mod tests {
         page.center_tabs,
         vec![
           CenterTab::chat(),
-          CenterTab::file(PathBuf::from("README.md")),
           CenterTab::diff(PathBuf::from("README.md"))
         ]
       );
@@ -4079,36 +4181,40 @@ mod tests {
         Some(CenterTab::diff(PathBuf::from("README.md")))
       );
       assert!(
-        page
-          .warm_editor()
-          .as_ref()
-          .is_some_and(|editor| editor.read(cx).projection().is_some()),
+        !page
+          .editor_states
+          .contains_key(&CenterTab::file(PathBuf::from("README.md")))
+      );
+      let editor = page.warm_editor().expect("diff editor");
+      assert_eq!(editor.entity_id(), file_editor.entity_id());
+      assert!(
+        editor.read(cx).projection().is_some(),
         "diff tabs show git diffs"
       );
+      let document = editor.read(cx).document.read(cx);
+      assert_eq!(document.slice_to_string(0..document.len()), "v3\n");
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.activate_center_tab(
-        CenterTab::file(PathBuf::from("README.md")),
-        OpenIntent::Open,
-        window,
-        cx,
-      );
+      page.toggle_file_diff(OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
       assert_eq!(
-        page.active_center_tab,
-        Some(CenterTab::file(PathBuf::from("README.md")))
+        page.center_tabs,
+        vec![
+          CenterTab::chat(),
+          CenterTab::file(PathBuf::from("README.md"))
+        ]
       );
+      let editor = page.warm_editor().expect("file editor");
+      assert_eq!(editor.entity_id(), file_editor.entity_id());
       assert!(
-        page
-          .warm_editor()
-          .as_ref()
-          .is_some_and(|editor| editor.read(cx).projection().is_none()),
-        "returning to the file tab hides git diffs again"
+        editor.read(cx).projection().is_none(),
+        "back on the file, the git diff is hidden again"
       );
+      assert!(editor.read(cx).is_dirty);
     });
   }
 

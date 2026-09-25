@@ -24,8 +24,8 @@ use crate::{
   OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, PreviousAnnotation,
   PreviousCenterTab, PullChanges, PushChanges, RenameSelectedFileItem, RestoreFile, RestoreHunk,
   ReturnFocusToEditor, SaveFileAs, SendReviewCommentsToAgent, ShowBranchSwitcher,
-  ShowCommandPalette, ShowFileSearch, ShowGlobalSearch, ToggleDiffView, ToggleFileStage,
-  ToggleHideWhitespace, ToggleHunkStage,
+  ShowCommandPalette, ShowFileSearch, ShowGlobalSearch, ToggleDiffView, ToggleFileDiff,
+  ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-shift-p";
@@ -97,6 +97,7 @@ pub enum ShortcutId {
   OpenReviewSidebar,
   OpenPullRequestSidebar,
   ToggleDiffView,
+  ToggleFileDiff,
   ToggleHideWhitespace,
   ToggleSoftWrap,
   PreviousAnnotation,
@@ -140,6 +141,7 @@ impl ShortcutId {
       ShortcutId::OpenReviewSidebar => "open_review_sidebar",
       ShortcutId::OpenPullRequestSidebar => "open_pull_request_sidebar",
       ShortcutId::ToggleDiffView => "toggle_diff_view",
+      ShortcutId::ToggleFileDiff => "toggle_file_diff",
       ShortcutId::ToggleHideWhitespace => "toggle_hide_whitespace",
       ShortcutId::ToggleSoftWrap => "toggle_soft_wrap",
       ShortcutId::PreviousAnnotation => "previous_annotation",
@@ -183,6 +185,7 @@ impl ShortcutId {
       "open_review_sidebar" => Some(ShortcutId::OpenReviewSidebar),
       "open_pull_request_sidebar" => Some(ShortcutId::OpenPullRequestSidebar),
       "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
+      "toggle_file_diff" => Some(ShortcutId::ToggleFileDiff),
       "toggle_hide_whitespace" => Some(ShortcutId::ToggleHideWhitespace),
       "toggle_soft_wrap" => Some(ShortcutId::ToggleSoftWrap),
       "previous_annotation" => Some(ShortcutId::PreviousAnnotation),
@@ -224,7 +227,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -488,6 +491,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     context: TOGGLE_DIFF_VIEW_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleFileDiff,
+    title: "Toggle File and Diff",
+    description: "Switch the open file between its code and its changes.",
+    scope_label: "Editor",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-shift-d",
+    context: "WorkspaceSession",
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleSoftWrap,
@@ -784,6 +798,7 @@ impl ShortcutDefinition {
         KeyBinding::new(keystroke, OpenPullRequestSidebar, Some(&context))
       }
       ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
+      ShortcutId::ToggleFileDiff => KeyBinding::new(keystroke, ToggleFileDiff, Some(&context)),
       ShortcutId::ToggleSoftWrap => KeyBinding::new(keystroke, ToggleSoftWrap, Some(&context)),
       ShortcutId::ToggleHideWhitespace => {
         KeyBinding::new(keystroke, ToggleHideWhitespace, Some(&context))
@@ -845,7 +860,7 @@ impl ShortcutDefinition {
       | ShortcutId::NextAnnotation
       | ShortcutId::ToggleDiffView
       | ShortcutId::ToggleHideWhitespace => Some("Editor && !CodeEditor"),
-      ShortcutId::ToggleSoftWrap => Some("Editor"),
+      ShortcutId::ToggleSoftWrap | ShortcutId::ToggleFileDiff => Some("Editor"),
       ShortcutId::ToggleHunkStage | ShortcutId::RestoreHunk | ShortcutId::AcceptBothConflict => {
         Some(HUNK_OR_CONFLICT_ACTION_FOCUS)
       }
@@ -1019,6 +1034,7 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::ShowFileSearch => Some(ShortcutId::ShowFileSearch),
     Command::ShowGlobalSearch => Some(ShortcutId::ShowGlobalSearch),
     Command::ToggleDiffView => Some(ShortcutId::ToggleDiffView),
+    Command::ToggleFileDiff => Some(ShortcutId::ToggleFileDiff),
     Command::ToggleHideWhitespace => Some(ShortcutId::ToggleHideWhitespace),
     Command::ToggleSoftWrap => Some(ShortcutId::ToggleSoftWrap),
     Command::SendSelectionToAgent => Some(ShortcutId::AddSelectionToAgent),
@@ -1448,6 +1464,7 @@ pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action
     ShortcutId::OpenReviewSidebar => f(&OpenReviewSidebar),
     ShortcutId::OpenPullRequestSidebar => f(&OpenPullRequestSidebar),
     ShortcutId::ToggleDiffView => f(&ToggleDiffView),
+    ShortcutId::ToggleFileDiff => f(&ToggleFileDiff),
     ShortcutId::ToggleHideWhitespace => f(&ToggleHideWhitespace),
     ShortcutId::ToggleSoftWrap => f(&ToggleSoftWrap),
     ShortcutId::PreviousAnnotation => f(&PreviousAnnotation),
