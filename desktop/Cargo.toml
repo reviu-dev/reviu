@@ -97,7 +97,7 @@ parking_lot = "0.12.5"
 regex = "1.13.1"
 smol = "2.0.2"
 notify = "8.2.0"
-sysinfo = "0.31.4"
+sysinfo = "0.39.6"
 time = { version = "0.3.55", features = ["formatting", "macros", "parsing"] }
 blake3 = "1.8.7"
 anyhow = "1.0.104"
