@@ -10,11 +10,11 @@ When Claude or another ACP agent asks you to sign in again, Reviu now offers the
 
 ### Switch Between A File And Its Diff
 
-An open file now has a single tab that shows either its code or its changes. Press `cmd-shift-d`, or use the File / Diff button above the editor, to flip between the two without losing unsaved edits, undo history or your place in the file. Opening the file from Files shows its code, and opening it from Changes shows its diff, in the same tab. From the diff of a commit, a pull request or an agent edit, the same shortcut or the Open file button takes you to the file in your working tree at the line you were reading.
+Open files now share one tab for code and diff. Press `cmd-shift-d`, use the File / Diff button, or choose Open file from a diff to switch views without losing your edits, undo history, or position.
 
 ### Git Changes In The File Gutter
 
-A file open as code now marks what changed since the last commit next to its line numbers, using the same colors as the diff: added, modified, and a small mark where lines were removed. Staged changes are outlined instead of filled, so you can tell them apart while you edit. The scrollbar shows the same marks across the whole file, and Next Change and Previous Change (Alt-F5 and Alt-Shift-F5) jump between them without leaving the code. Click a mark, or press `cmd-'` with the cursor in a change, to show the lines it removed right above it, with the stage and restore actions of the diff; do it again to fold them away. A staged hunk stays open so you can see the result. Turn it off in Settings > Editor with Git Changes in Gutter.
+Code files now show added, modified, and deleted-line markers beside line numbers and in the scrollbar. Jump between changes with Next Change and Previous Change, or open a marker to review, stage, or restore that hunk inline. Turn it off in Settings > Editor with Git Changes in Gutter.
 
 ## 1.3.0
 
