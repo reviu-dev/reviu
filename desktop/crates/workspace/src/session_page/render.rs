@@ -1908,6 +1908,7 @@ impl SessionPage {
   }
 
   fn drop_center_tab(&mut self, tab: CenterTab, window: &mut Window, cx: &mut Context<Self>) {
+    let tab = self.tab_to_show(tab, cx);
     let Some(target) = self.center_drag_target.take() else {
       cx.notify();
       return;
@@ -1937,6 +1938,7 @@ impl SessionPage {
         self.remember_center_layout_tab(representative);
         self.center = Self::center_view_for_tab(&focused_tab);
         self.sync_agent_chat_close_control(cx);
+        self.restore_visible_center_editors(cx);
         self.persist_current_center_workspace(cx);
         cx.notify();
         return;
@@ -1958,6 +1960,9 @@ impl SessionPage {
       self.remember_center_layout_tab(representative);
       self.center = Self::center_view_for_tab(&tab);
       self.sync_agent_chat_close_control(cx);
+      // A tab restored at launch loads when first shown, and a split is a
+      // first showing too.
+      self.restore_visible_center_editors(cx);
       self.persist_current_center_workspace(cx);
       cx.notify();
       return;
@@ -8955,6 +8960,138 @@ mod tests {
       assert_eq!(page.center_layout.active_tab(), &first_terminal);
       assert_eq!(page.active_center_tab.as_ref(), Some(&second_terminal));
       assert_eq!(page.center_tabs_for_navigation(), vec![second_terminal]);
+    });
+  }
+
+  #[gpui::test]
+  fn a_restored_tab_never_shown_loads_when_dropped_into_a_split(cx: &mut TestAppContext) {
+    isolate_config_store_for_test();
+    let repo = TempRepo::init("center-persistence-drop-unloaded");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("main.rs"), "fn main() {}\n", "main");
+    std::fs::write(repo.path.join("main.rs"), "fn main() { run() }\n").expect("modify main");
+    ConfigStore::persist_recent_project_root(&repo.path);
+
+    let (page, cx) = add_session_page_window_from_config(cx);
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+    let diff = CenterTab::diff(PathBuf::from("main.rs"));
+    let file = CenterTab::file(PathBuf::from("README.md"));
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("main.rs"), None, OpenIntent::Open, window, cx);
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    page.update(cx, |page, cx| page.persist_current_center_workspace(cx));
+
+    let restored = cx.update(|window, cx| cx.new(|cx| SessionPage::new(window, cx)));
+    restored.update_in(cx, |page, window, cx| {
+      page.activate(window, cx);
+    });
+    cx.run_until_parked();
+    restored.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(file.clone(), OpenIntent::Open, window, cx);
+    });
+    cx.run_until_parked();
+    restored.update_in(cx, |page, window, cx| {
+      assert!(page.center_tabs.contains(&diff), "the diff tab is restored");
+      assert!(
+        page
+          .editor_states
+          .get(&diff)
+          .and_then(|state| state.editor.as_ref())
+          .is_none(),
+        "a tab not shown since the restart has no editor yet"
+      );
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("the file tab alone");
+      };
+      page.center_drag_target = Some(CenterDropTarget {
+        pane_id: pane.id(),
+        direction: Some(CenterSplitDirection::Right),
+      });
+      page.drop_center_tab(diff.clone(), window, cx);
+    });
+    cx.run_until_parked();
+
+    restored.read_with(cx, |page, _| {
+      assert!(page.center_layout.contains_tab(&diff));
+      assert!(
+        page
+          .editor_states
+          .get(&diff)
+          .and_then(|state| state.editor.as_ref())
+          .is_some(),
+        "the dropped tab shows its file, not a loading placeholder"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_clean_diff_tab_dropped_into_a_split_arrives_as_the_file(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-tab-drag-clean-diff");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("other.md"), "o1\n", "other");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("other.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "commit it");
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("the other file alone");
+      };
+      page.center_drag_target = Some(CenterDropTarget {
+        pane_id: pane.id(),
+        direction: Some(CenterSplitDirection::Right),
+      });
+      page.drop_center_tab(CenterTab::diff(PathBuf::from("README.md")), window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(
+        page
+          .center_layout
+          .contains_tab(&CenterTab::file(PathBuf::from("README.md")))
+      );
+      assert!(
+        !page
+          .center_layout
+          .contains_tab(&CenterTab::diff(PathBuf::from("README.md")))
+      );
     });
   }
 

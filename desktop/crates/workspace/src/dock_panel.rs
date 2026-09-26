@@ -905,6 +905,9 @@ pub struct DockPanel {
   project_root: Option<PathBuf>,
   repo_root: Option<PathBuf>,
   status_entries: Vec<RepoStatusEntry>,
+  /// The repository `status_entries` was read from: until the first read for
+  /// the current one lands, an absent file is unknown rather than clean.
+  status_repo_root: Option<PathBuf>,
   merge_in_progress: bool,
   rebase_in_progress: bool,
   head_status: HeadCommitStatus,
@@ -1210,6 +1213,7 @@ impl DockPanel {
       project_root: repo_root.clone(),
       repo_root,
       status_entries: Vec::new(),
+      status_repo_root: None,
       merge_in_progress: false,
       rebase_in_progress: false,
       head_status: HeadCommitStatus::default(),
@@ -2336,6 +2340,7 @@ impl DockPanel {
       return;
     };
 
+    let status_repo_root = repo_root.clone();
     let task = cx.spawn(async move |this, cx| {
       let (result, merge_in_progress, rebase_in_progress, head_status) = cx
         .background_spawn(async move {
@@ -2357,6 +2362,7 @@ impl DockPanel {
               list.set_entries(entries.clone(), cx);
             });
             this.status_entries = entries;
+            this.status_repo_root = Some(status_repo_root);
             this.last_error = None;
             cx.emit(DockPanelEvent::StatusRefreshed);
           }
@@ -3634,6 +3640,11 @@ impl DockPanel {
 
   pub(crate) fn status_entries(&self) -> &[RepoStatusEntry] {
     &self.status_entries
+  }
+
+  /// Whether `status_entries` describes the repository shown now.
+  pub(crate) fn status_is_current(&self) -> bool {
+    self.repo_root.is_some() && self.status_repo_root == self.repo_root
   }
 
   pub(crate) fn set_changes_action_in_flight(

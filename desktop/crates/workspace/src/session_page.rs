@@ -1992,6 +1992,7 @@ impl SessionPage {
       self.activate_project_search_tab(window, cx);
       return;
     }
+    let requested_tab = self.tab_to_show(requested_tab, cx);
 
     let tab = self
       .center_layout_representative_for_tab(&requested_tab)

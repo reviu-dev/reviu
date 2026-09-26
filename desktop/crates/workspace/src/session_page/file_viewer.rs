@@ -795,6 +795,31 @@ impl SessionPage {
     }
   }
 
+  /// A diff tab whose file has no changes left shows the file when it is next
+  /// shown: an empty diff has nothing to read. Unsaved edits are changes, and a
+  /// status not read yet says nothing, so both keep the diff.
+  pub(super) fn tab_to_show(&mut self, tab: CenterTab, cx: &mut Context<Self>) -> CenterTab {
+    if tab.kind != CenterTabKind::Diff || tab.snapshot.is_some() {
+      return tab;
+    }
+    let Some(path) = tab.path.clone() else {
+      return tab;
+    };
+    if !self.dock_panel.read(cx).status_is_current()
+      || self.path_has_changes(&path, false, cx)
+      || self.editor_tab_is_dirty(&tab, cx)
+    {
+      return tab;
+    }
+    let file = CenterTab::file(path);
+    self.switch_worktree_tab_mode(&file, cx);
+    if self.center_tab_is_open(&tab) {
+      tab
+    } else {
+      file
+    }
+  }
+
   /// The shown tab when it is a text file of the worktree: a snapshot cannot be
   /// edited as a file, and a binary has no code to read.
   pub(super) fn shown_worktree_file_tab(&self) -> Option<&CenterTab> {
@@ -1003,6 +1028,7 @@ impl SessionPage {
     let checkout_root = self.synced_checkout.clone();
     let tabs = self.center_layout.tabs();
     for tab in tabs {
+      let tab = self.tab_to_show(tab, cx);
       if !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
         || self.editor_states.contains_key(&tab)
       {
@@ -4745,6 +4771,110 @@ mod tests {
     editor.read_with(cx, |editor, _| {
       assert!(editor.projection().is_none());
       assert_eq!(editor.git_gutter_lines_for_driver(), vec![1, 9]);
+    });
+  }
+
+  async fn open_diff_then_commit_it<'a>(
+    repo: &TempRepo,
+    dirty_text: Option<&str>,
+    cx: &'a mut TestAppContext,
+  ) -> (
+    Entity<SessionPage>,
+    Entity<Editor>,
+    &'a mut gpui::VisualTestContext,
+  ) {
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "other");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    let editor = page
+      .read_with(cx, |page, _| page.warm_editor())
+      .expect("diff editor");
+    if let Some(text) = dirty_text {
+      dirty_warm_editor(&page, cx, text);
+    }
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("b.txt"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    // As a real commit does: the file is left as it is on disk.
+    let committed = std::process::Command::new("git")
+      .current_dir(&repo.path)
+      .args([
+        "-c",
+        "user.name=Reviu Tests",
+        "-c",
+        "user.email=tests@reviu.local",
+        "commit",
+        "--quiet",
+        "--message",
+        "commit it",
+        "a.txt",
+      ])
+      .status()
+      .expect("run git commit");
+    assert!(committed.success());
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    (page, editor, cx)
+  }
+
+  #[gpui::test]
+  async fn a_diff_tab_with_nothing_left_to_show_opens_as_the_file(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-clean-diff-tab");
+    let (page, editor, cx) = open_diff_then_commit_it(&repo, None, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::diff(PathBuf::from("a.txt")),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let file = CenterTab::file(PathBuf::from("a.txt"));
+      assert_eq!(page.active_center_tab.as_ref(), Some(&file));
+      assert!(
+        !page
+          .center_tabs
+          .contains(&CenterTab::diff(PathBuf::from("a.txt")))
+      );
+      let shown = page.warm_editor().expect("file editor");
+      assert_eq!(shown.entity_id(), editor.entity_id());
+      assert!(shown.read(cx).projection().is_none());
+    });
+  }
+
+  #[gpui::test]
+  async fn a_diff_tab_with_unsaved_edits_stays_a_diff(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-dirty-clean-diff-tab");
+    let (page, _, cx) = open_diff_then_commit_it(&repo, Some("v3\n"), cx).await;
+
+    let diff = CenterTab::diff(PathBuf::from("a.txt"));
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(diff.clone(), OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab.as_ref(), Some(&diff));
     });
   }
 
