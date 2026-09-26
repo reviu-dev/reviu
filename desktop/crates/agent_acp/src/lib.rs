@@ -322,21 +322,27 @@ pub struct AuthMethodInfo {
 
 #[derive(Clone, Debug)]
 pub struct TerminalAuthCommand {
+  command: Option<String>,
   pub args: Vec<String>,
   pub env: Vec<(String, String)>,
 }
 
 impl TerminalAuthCommand {
   /// Render as a single shell-safe command string. `base_args` are the
-  /// backend's own args, without which the executable resolves to the wrong
-  /// program (`npx` alone rather than the packaged adapter).
+  /// backend's own args, without which first-class terminal auth would resolve
+  /// to the wrong program (`npx` alone rather than the packaged adapter).
   pub fn to_shell_string(&self, executable: &str, base_args: &[String]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for (k, v) in &self.env {
       parts.push(format!("{}={}", k, shell_words::quote(v)));
     }
-    parts.push(executable.to_string());
-    for arg in base_args.iter().chain(self.args.iter()) {
+    parts.push(self.command.as_deref().unwrap_or(executable).to_string());
+    if self.command.is_none() {
+      for arg in base_args {
+        parts.push(shell_words::quote(arg).to_string());
+      }
+    }
+    for arg in &self.args {
       parts.push(shell_words::quote(arg).to_string());
     }
     parts.join(" ")
@@ -661,11 +667,31 @@ fn auth_method_description(m: &AuthMethod) -> Option<&str> {
 fn auth_method_terminal_command(m: &AuthMethod) -> Option<TerminalAuthCommand> {
   match m {
     AuthMethod::Terminal(x) => Some(TerminalAuthCommand {
+      command: None,
       args: x.args.clone(),
       env: x.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
     }),
-    _ => None,
+    _ => auth_method_meta_terminal_command(m),
   }
+}
+
+fn auth_method_meta_terminal_command(m: &AuthMethod) -> Option<TerminalAuthCommand> {
+  #[derive(serde::Deserialize)]
+  struct MetaTerminalAuth {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+  }
+
+  let auth =
+    serde_json::from_value::<MetaTerminalAuth>(m.meta()?.get("terminal-auth")?.clone()).ok()?;
+  Some(TerminalAuthCommand {
+    command: Some(auth.command),
+    args: auth.args,
+    env: auth.env.into_iter().collect(),
+  })
 }
 
 // Prefer AllowOnce over AllowAlways; return None for reject-only sets so
@@ -1649,6 +1675,7 @@ mod tests {
   #[test]
   fn terminal_auth_keeps_the_backend_args_ahead_of_its_own() {
     let auth = TerminalAuthCommand {
+      command: None,
       args: vec!["--terminal-login".into()],
       env: vec![("PI_TOKEN".into(), "a b".into())],
     };
@@ -1657,6 +1684,30 @@ mod tests {
     assert_eq!(
       auth.to_shell_string(&config.command, &config.args),
       "PI_TOKEN='a b' npx -y pi-acp@0.0.33 --terminal-login"
+    );
+  }
+
+  #[test]
+  fn meta_terminal_auth_uses_its_own_command() {
+    let method = AuthMethod::Agent(
+      agent_client_protocol::schema::AuthMethodAgent::new("claude-login", "Claude login").meta(
+        serde_json::json!({
+          "terminal-auth": {
+            "command": "claude",
+            "args": ["login"],
+            "env": { "CLAUDE_CONFIG_DIR": "/tmp/claude" }
+          }
+        })
+        .as_object()
+        .cloned()
+        .expect("meta object"),
+      ),
+    );
+    let auth = auth_method_terminal_command(&method).expect("terminal auth");
+
+    assert_eq!(
+      auth.to_shell_string("npx", &["-y".into(), "claude-agent-acp".into()]),
+      "CLAUDE_CONFIG_DIR=/tmp/claude claude login"
     );
   }
 

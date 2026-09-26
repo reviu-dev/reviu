@@ -896,6 +896,11 @@ pub enum AgentChatPanelEvent {
   NewWorktreeSessionRequested { draft: String },
   /// User asked the host to replace this pane with a fresh chat.
   NewSessionInPaneRequested,
+  /// User asked the host to run an agent login command in an app terminal.
+  AuthTerminalRequested {
+    command: String,
+    success_patterns: Vec<String>,
+  },
   /// User asked the host to hide the chat pane.
   CloseRequested,
   /// User asked the host to rearrange the split pane holding this chat.
@@ -3852,6 +3857,30 @@ fn agent_error_hint(raw: &str) -> Option<&'static str> {
     return Some("The provider looks unreachable. Check your connection and retry.");
   }
   None
+}
+
+fn is_agent_auth_error(raw: &str) -> bool {
+  let lowered = raw.to_ascii_lowercase();
+  [
+    "auth_required",
+    "authentication required",
+    "failed to authenticate",
+    "oauth session expired",
+    "could not be refreshed",
+    "not logged in",
+  ]
+  .iter()
+  .any(|needle| lowered.contains(needle))
+}
+
+fn auth_success_patterns(method_id: &str) -> Vec<String> {
+  match method_id {
+    "claude-login" => vec![
+      "Login successful".to_string(),
+      "Type your message".to_string(),
+    ],
+    _ => Vec::new(),
+  }
 }
 
 /// Pull the human-readable message out of a structured agent error, e.g. Codex's

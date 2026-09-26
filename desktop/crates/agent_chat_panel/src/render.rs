@@ -3469,9 +3469,7 @@ impl AgentChatPanel {
         let copy_value = shell_cmd.clone();
         let copy_id = SharedString::from(format!("auth-copy-{}", method.id));
         let open_id = SharedString::from(format!("auth-open-{}", method.id));
-        let launch_cmd = cmd.clone();
-        let exec_owned = executable.to_string();
-        let launch_args = base_args.clone();
+        let success_patterns = auth_success_patterns(&method.id);
         row = row.child(
           div()
             .text_xs()
@@ -3483,13 +3481,14 @@ impl AgentChatPanel {
             .gap_2()
             .child(
               Button::new(open_id)
-                .label("Open in Terminal")
+                .label("Open in Reviu Terminal")
                 .small()
                 .primary()
                 .on_click(cx.listener(move |_, _, _, cx| {
-                  if !launch_cmd.try_launch_terminal(&exec_owned, &launch_args) {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_value.clone()));
-                  }
+                  cx.emit(AgentChatPanelEvent::AuthTerminalRequested {
+                    command: copy_value.clone(),
+                    success_patterns: success_patterns.clone(),
+                  });
                 })),
             )
             .child(

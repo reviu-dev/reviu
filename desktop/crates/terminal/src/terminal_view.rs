@@ -242,6 +242,12 @@ impl TerminalView {
     self.working_directory.as_deref()
   }
 
+  pub fn submit_command(&mut self, command: &str, cx: &mut Context<Self>) {
+    let mut text = command.to_string();
+    text.push('\r');
+    self.commit_text(&text, cx);
+  }
+
   #[doc(hidden)]
   pub fn visible_text_for_driver(&self) -> String {
     if self.screen.rows == 0 || self.screen.cols == 0 {

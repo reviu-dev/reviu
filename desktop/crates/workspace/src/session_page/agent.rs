@@ -422,6 +422,18 @@ impl SessionPage {
           let tab = Self::chat_tab_for_panel(panel, cx);
           this.new_session_in_chat_pane(panel.clone(), tab, window, cx);
         }
+        AgentChatPanelEvent::AuthTerminalRequested {
+          command,
+          success_patterns,
+        } => {
+          this.open_agent_auth_terminal(
+            panel.clone(),
+            command.clone(),
+            success_patterns.clone(),
+            window,
+            cx,
+          );
+        }
         AgentChatPanelEvent::CloseRequested => {
           let tab = Self::chat_tab_for_panel(panel, cx);
           this.close_center_surface(tab, window, cx);

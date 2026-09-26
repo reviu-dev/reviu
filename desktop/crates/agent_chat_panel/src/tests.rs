@@ -1461,6 +1461,27 @@ fn agent_error_hints_name_the_classes_users_hit() {
   assert_eq!(agent_error_hint("something exotic went wrong"), None);
 }
 
+#[test]
+fn auth_errors_surface_agent_login() {
+  assert!(is_agent_auth_error(
+    "Failed to authenticate: OAuth session expired and could not be refreshed"
+  ));
+  assert!(is_agent_auth_error("auth_required: Claude needs login"));
+  assert!(!is_agent_auth_error("connection reset by peer"));
+}
+
+#[test]
+fn claude_login_has_success_patterns() {
+  assert_eq!(
+    auth_success_patterns("claude-login"),
+    vec![
+      "Login successful".to_string(),
+      "Type your message".to_string()
+    ]
+  );
+  assert!(auth_success_patterns("other-login").is_empty());
+}
+
 #[gpui::test]
 async fn a_failed_turn_is_loud_everywhere(cx: &mut gpui::TestAppContext) {
   use std::cell::RefCell;

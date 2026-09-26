@@ -17,6 +17,35 @@ impl SessionPage {
       );
       return;
     };
+    self.open_terminal_tab_at(working_directory, None, window, cx);
+  }
+
+  pub(super) fn open_agent_auth_terminal(
+    &mut self,
+    panel: Entity<AgentChatPanel>,
+    command: String,
+    success_patterns: Vec<String>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let working_directory = panel.read(cx).cwd().to_path_buf();
+    let Some(terminal) = self.open_terminal_tab_at(working_directory, Some(command), window, cx)
+    else {
+      return;
+    };
+    if success_patterns.is_empty() {
+      return;
+    }
+    self.watch_agent_auth_terminal(panel, terminal, success_patterns, cx);
+  }
+
+  fn open_terminal_tab_at(
+    &mut self,
+    working_directory: PathBuf,
+    command: Option<String>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Option<Entity<TerminalView>> {
     let project_root = self
       .project_root(cx)
       .unwrap_or_else(|| working_directory.clone());
@@ -29,7 +58,39 @@ impl SessionPage {
     self.center = CenterView::Terminal;
     self.remember_center_tab(tab.clone(), cx);
     self.focus_terminal_tab(&tab, window, cx);
+    let terminal = self.terminal_for_tab(&tab);
+    if let Some(command) = command
+      && let Some(terminal) = terminal.as_ref()
+    {
+      terminal.update(cx, |terminal, cx| terminal.submit_command(&command, cx));
+    }
     cx.notify();
+    terminal
+  }
+
+  fn watch_agent_auth_terminal(
+    &mut self,
+    panel: Entity<AgentChatPanel>,
+    terminal: Entity<TerminalView>,
+    success_patterns: Vec<String>,
+    cx: &mut Context<Self>,
+  ) {
+    cx.spawn(async move |_, cx| {
+      for _ in 0..180 {
+        cx.background_executor().timer(Duration::from_secs(1)).await;
+        let matched = terminal.update(cx, |terminal, _| {
+          let output = terminal.visible_text_for_driver();
+          success_patterns
+            .iter()
+            .any(|pattern| output.contains(pattern))
+        });
+        if matched {
+          panel.update(cx, |panel, cx| panel.reconnect(cx));
+          return;
+        }
+      }
+    })
+    .detach();
   }
 
   pub(super) fn create_terminal_tab(

@@ -548,7 +548,7 @@ Its provider may have refused it (credits, usage limit) without reporting an err
           }
           Err(e) => {
             let msg = format!("{e}");
-            if msg.contains("auth_required") {
+            if is_agent_auth_error(&msg) {
               panel.auth_required = true;
               panel.items.push(ChatItem::Message(ChatMessage {
                 role: ChatRole::System,
