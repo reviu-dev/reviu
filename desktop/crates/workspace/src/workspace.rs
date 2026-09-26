@@ -1573,7 +1573,7 @@ mod tests {
         .filter(|definition| {
           !matches!(
             definition.id,
-            ShortcutId::CommitChanges | ShortcutId::ToggleSoftWrap
+            ShortcutId::CommitChanges | ShortcutId::ToggleSoftWrap | ShortcutId::ToggleHunkExpanded
           )
         })
         .filter_map(|definition| {

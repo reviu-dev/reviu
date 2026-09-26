@@ -2637,9 +2637,12 @@ impl SessionPage {
     } else if let Some(editor) = active_editor.clone() {
       // Actions of the hovered hunk or conflict float over the editor.
       let showing_git_diff = tab.kind == CenterTabKind::Diff;
-      let hunk_actions = (showing_git_diff && snapshot.is_none())
+      let file_status = path.and_then(|path| self.status_for_path(path, cx));
+      // A file open as code offers them on the hunks it expanded.
+      let shows_expanded_hunks = editor.read(cx).projection().is_some()
+        && !matches!(file_status, Some(git::RepoStatusKind::Conflicted));
+      let hunk_actions = ((showing_git_diff || shows_expanded_hunks) && snapshot.is_none())
         .then(|| {
-          let file_status = path.and_then(|path| self.status_for_path(path, cx));
           let conflict_labels =
             ConflictActionLabels::for_rebase(self.dock_panel.read(cx).rebase_in_progress());
           render_hunk_actions(&editor, file_status, conflict_labels, window, cx)

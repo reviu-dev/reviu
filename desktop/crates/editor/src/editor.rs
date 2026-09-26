@@ -90,7 +90,7 @@ mod line_actions;
 pub(crate) mod navigation;
 #[path = "soft_wrap.rs"]
 pub(crate) mod soft_wrap;
-use crate::git_gutter::{GitGutterLineKind, GitGutterMarkers};
+use crate::git_gutter::{GitGutterLineKind, GitGutterMarkers, expanded_file_projection};
 use crate::selections::{Selection, Selections};
 use document_lifecycle::SelectionSnapshot;
 #[path = "multicursor.rs"]
@@ -1026,6 +1026,10 @@ pub struct Editor {
   git_diff_enabled: bool,
   git_gutter_enabled: bool,
   pub(crate) git_gutter_markers: Option<Arc<GitGutterMarkers>>,
+  /// The whole inline diff behind the gutter, which expanded hunks are cut from.
+  file_diff_projection: Option<Arc<Projection>>,
+  /// Hunks of the plain file shown with their removed lines, by head anchor.
+  expanded_file_hunks: HashSet<usize>,
   pub is_read_only: bool,
   is_unmerged: bool,
 
@@ -1111,10 +1115,10 @@ fn push_scrollbar_marker(
   markers.push(ScrollbarMarker { range, kind });
 }
 
-/// The plain file shows every document line, so its rows are document lines.
 fn push_git_gutter_scrollbar_markers(
   markers: &mut Vec<ScrollbarMarker>,
   git_gutter_markers: &GitGutterMarkers,
+  display_line_for_doc_line: impl Fn(usize) -> usize,
 ) {
   let mut lines = git_gutter_markers
     .lines
@@ -1135,7 +1139,8 @@ fn push_git_gutter_scrollbar_markers(
     .collect::<Vec<_>>();
   lines.sort_by_key(|(doc_line, _)| *doc_line);
   for (doc_line, kind) in lines {
-    push_scrollbar_marker(markers, kind, doc_line..doc_line + 1);
+    let display_line = display_line_for_doc_line(doc_line);
+    push_scrollbar_marker(markers, kind, display_line..display_line + 1);
   }
 }
 
@@ -1598,6 +1603,8 @@ impl Editor {
       git_diff_enabled: true,
       git_gutter_enabled: crate::settings::EditorSettings::get(cx).git_gutter,
       git_gutter_markers: None,
+      file_diff_projection: None,
+      expanded_file_hunks: HashSet::new(),
       is_read_only: loaded.is_read_only,
       is_unmerged: false,
     };
@@ -1800,7 +1807,7 @@ impl Editor {
   pub(crate) fn scrollbar_markers(&self, cx: &App) -> Vec<ScrollbarMarker> {
     let mut markers = Vec::new();
 
-    if let Some(projection) = self.projection.as_ref() {
+    if let Some(projection) = self.projection.as_ref().filter(|_| self.git_diff_enabled) {
       let mut active_diff_kind = None;
       let mut active_diff_start = 0;
 
@@ -1841,10 +1848,12 @@ impl Editor {
       }
     }
 
-    if self.projection.is_none()
+    if !self.git_diff_enabled
       && let Some(git_gutter_markers) = self.git_gutter_markers.as_ref()
     {
-      push_git_gutter_scrollbar_markers(&mut markers, git_gutter_markers);
+      push_git_gutter_scrollbar_markers(&mut markers, git_gutter_markers, |doc_line| {
+        self.doc_to_display_line(doc_line).unwrap_or(doc_line)
+      });
     }
 
     for find_match in self.find.matches() {
@@ -6946,7 +6955,7 @@ impl Editor {
       return;
     }
     self.git_diff_enabled = enabled;
-    self.git_gutter_markers = None;
+    self.clear_file_git_state();
     if enabled {
       self.reload_git_bases(cx);
       return;
@@ -6972,10 +6981,71 @@ impl Editor {
     if enabled {
       self.reload_git_bases(cx);
     } else {
-      self.git_gutter_markers = None;
+      self.clear_file_git_state();
       self.stop_tracking_git_changes();
-      cx.notify();
+      self.rebuild_projection(cx);
     }
+  }
+
+  fn clear_file_git_state(&mut self) {
+    self.git_gutter_markers = None;
+    self.file_diff_projection = None;
+    self.expanded_file_hunks.clear();
+  }
+
+  /// Whether the editor shows the diff, rather than the file with its changes
+  /// marked beside it.
+  pub(crate) fn shows_git_diff(&self) -> bool {
+    self.git_diff_enabled
+  }
+
+  /// Expands the hunk the cursor is in, or folds it back.
+  pub fn toggle_hunk_expanded_at_cursor(&mut self, cx: &mut Context<Self>) {
+    let doc_line = {
+      let document = self.document.read(cx);
+      document.char_to_line(self.cursor_offset().min(document.len()))
+    };
+    self.toggle_file_hunk_at_doc_line(doc_line, cx);
+  }
+
+  pub(crate) fn toggle_file_hunk_at_doc_line(
+    &mut self,
+    doc_line: usize,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    if self.git_diff_enabled {
+      return false;
+    }
+    let Some(head_anchor) = self.git_gutter_markers.as_ref().and_then(|markers| {
+      markers
+        .hunks
+        .iter()
+        .find(|hunk| hunk.touches_doc_line(doc_line))
+        .map(|hunk| hunk.head_anchor)
+    }) else {
+      return false;
+    };
+    if !self.expanded_file_hunks.remove(&head_anchor) {
+      self.expanded_file_hunks.insert(head_anchor);
+    }
+    self.rebuild_projection(cx);
+    true
+  }
+
+  pub fn expanded_hunk_count_for_driver(&self) -> usize {
+    self.expanded_file_hunks.len()
+  }
+
+  fn expanded_file_projection(&self, doc_line_count: usize) -> Option<Projection> {
+    if self.git_diff_enabled {
+      return None;
+    }
+    expanded_file_projection(
+      self.file_diff_projection.as_deref()?,
+      self.git_gutter_markers.as_deref()?,
+      &self.expanded_file_hunks,
+      doc_line_count,
+    )
   }
 
   fn stop_tracking_git_changes(&mut self) {
@@ -7141,17 +7211,34 @@ impl Editor {
       }
 
       if markers_only {
-        let markers = cx
-          .background_spawn(async move { GitGutterMarkers::from_diffs(doc_line_count, &diffs) })
+        let (source, markers) = cx
+          .background_spawn(async move {
+            let source = GitGutterMarkers::source_projection(doc_line_count, &diffs);
+            let markers = GitGutterMarkers::from_projection(&source);
+            (source, markers)
+          })
           .await;
         if diff_generation.load(Ordering::Relaxed) != generation {
           return;
         }
         let _ = this.update(cx, |editor, cx| {
-          if !editor.git_diff_enabled && editor.git_gutter_enabled {
-            editor.git_gutter_markers = Some(Arc::new(markers));
-            cx.notify();
+          if editor.git_diff_enabled || !editor.git_gutter_enabled {
+            return;
           }
+          // A hunk that is gone, restored or committed, forgets it was open.
+          editor.expanded_file_hunks.retain(|head_anchor| {
+            markers
+              .hunks
+              .iter()
+              .any(|hunk| hunk.head_anchor == *head_anchor)
+          });
+          let had_projection = editor.projection.is_some();
+          editor.file_diff_projection = Some(Arc::new(source));
+          editor.git_gutter_markers = Some(Arc::new(markers));
+          if had_projection || !editor.expanded_file_hunks.is_empty() {
+            editor.rebuild_projection(cx);
+          }
+          cx.notify();
         });
         return;
       }
@@ -7283,6 +7370,12 @@ impl Editor {
   fn rebuild_projection(&mut self, cx: &mut Context<Self>) {
     let doc_line_count = self.document.read(cx).len_lines();
     if self.diffs.is_none() {
+      if let Some(projection) = self.expanded_file_projection(doc_line_count) {
+        self.invalidate_projection_builds();
+        self.virtual_line_layouts.clear();
+        self.apply_projection_result(projection, doc_line_count, cx);
+        return;
+      }
       let scroll_anchor = self
         .pending_reload_scroll_anchor
         .take()
@@ -8286,14 +8379,26 @@ impl Editor {
   }
 
   fn ordered_hunk_display_lines(&self) -> Vec<(Arc<str>, usize)> {
-    let Some(projection) = &self.projection else {
-      // The plain file shows every document line, so the gutter's hunk starts
-      // are already display lines.
+    if !self.git_diff_enabled {
+      // The plain file walks the hunks its gutter marks, expanded or not.
       return self
         .git_gutter_markers
         .as_ref()
-        .map(|markers| markers.hunk_starts.clone())
+        .map(|markers| {
+          markers
+            .hunks
+            .iter()
+            .map(|hunk| {
+              let start = hunk.doc_lines.start;
+              let display_line = self.doc_to_display_line(start).unwrap_or(start);
+              (hunk.group_id.clone(), display_line)
+            })
+            .collect()
+        })
         .unwrap_or_default();
+    }
+    let Some(projection) = &self.projection else {
+      return Vec::new();
     };
     let mut seen: HashSet<Arc<str>> = HashSet::new();
     let mut result = Vec::new();
@@ -8411,7 +8516,7 @@ impl Editor {
 
     // A diff opens on its first hunk. The plain file shows the code above it,
     // where the cursor has not reached that hunk yet: it is the next stop.
-    let before_first_hunk = self.projection.is_none()
+    let before_first_hunk = !self.git_diff_enabled
       && self.selected_hunk_index(&ordered).is_none()
       && ordered
         .first()
@@ -10602,6 +10707,7 @@ impl Render for Editor {
       .when(editor_actions_enabled, |el| {
         el.on_action(cx.listener(crate::actions::up))
           .on_action(cx.listener(crate::actions::toggle_soft_wrap))
+          .on_action(cx.listener(crate::actions::toggle_hunk_expanded))
           .on_action(cx.listener(crate::actions::down))
           .on_action(cx.listener(crate::actions::page_up))
           .on_action(cx.listener(crate::actions::page_down))
@@ -12089,6 +12195,8 @@ pub mod tests {
           git_diff_enabled: true,
           git_gutter_enabled: false,
           git_gutter_markers: None,
+          file_diff_projection: None,
+          expanded_file_hunks: HashSet::new(),
           is_read_only: false,
           is_unmerged: false,
           last_highlights_version: 0,
@@ -13888,6 +13996,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.git_diff_enabled = false;
       editor.set_projection(None);
       editor.git_gutter_markers = Some(Arc::new(GitGutterMarkers {
         lines: HashMap::from([
@@ -13917,7 +14026,7 @@ pub mod tests {
           before_doc_line: 8,
           state: HunkState::Unstaged,
         }],
-        hunk_starts: Vec::new(),
+        hunks: Vec::new(),
       }));
 
       let markers = editor.scrollbar_markers(cx);

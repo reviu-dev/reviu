@@ -5,7 +5,7 @@ use crate::shortcut_bindings::{
 };
 #[cfg(test)]
 use editor::*;
-use editor::{FindNext, FindPrevious, ToggleSoftWrap};
+use editor::{FindNext, FindPrevious, ToggleHunkExpanded, ToggleSoftWrap};
 use gpui::{Action, App, Global, KeyBinding, KeyContext, Keystroke, Window};
 use ui::{COMMAND_PALETTE_CONTEXT, CommandPaletteCommand, CommandPaletteCommandId};
 
@@ -98,6 +98,7 @@ pub enum ShortcutId {
   OpenPullRequestSidebar,
   ToggleDiffView,
   ToggleFileDiff,
+  ToggleHunkExpanded,
   ToggleHideWhitespace,
   ToggleSoftWrap,
   PreviousAnnotation,
@@ -142,6 +143,7 @@ impl ShortcutId {
       ShortcutId::OpenPullRequestSidebar => "open_pull_request_sidebar",
       ShortcutId::ToggleDiffView => "toggle_diff_view",
       ShortcutId::ToggleFileDiff => "toggle_file_diff",
+      ShortcutId::ToggleHunkExpanded => "toggle_hunk_expanded",
       ShortcutId::ToggleHideWhitespace => "toggle_hide_whitespace",
       ShortcutId::ToggleSoftWrap => "toggle_soft_wrap",
       ShortcutId::PreviousAnnotation => "previous_annotation",
@@ -186,6 +188,7 @@ impl ShortcutId {
       "open_pull_request_sidebar" => Some(ShortcutId::OpenPullRequestSidebar),
       "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
       "toggle_file_diff" => Some(ShortcutId::ToggleFileDiff),
+      "toggle_hunk_expanded" => Some(ShortcutId::ToggleHunkExpanded),
       "toggle_hide_whitespace" => Some(ShortcutId::ToggleHideWhitespace),
       "toggle_soft_wrap" => Some(ShortcutId::ToggleSoftWrap),
       "previous_annotation" => Some(ShortcutId::PreviousAnnotation),
@@ -227,7 +230,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 40] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -499,6 +502,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
     scope_label: "Editor",
     category: ShortcutCategory::Review,
     keystroke: "cmd-shift-d",
+    context: "WorkspaceSession",
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleHunkExpanded,
+    title: "Expand Change",
+    description: "Show or hide the removed lines of the change under the cursor in a file open as code.",
+    scope_label: "Editor",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-'",
     context: "WorkspaceSession",
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -799,6 +813,9 @@ impl ShortcutDefinition {
       }
       ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
       ShortcutId::ToggleFileDiff => KeyBinding::new(keystroke, ToggleFileDiff, Some(&context)),
+      ShortcutId::ToggleHunkExpanded => {
+        KeyBinding::new(keystroke, ToggleHunkExpanded, Some(&context))
+      }
       ShortcutId::ToggleSoftWrap => KeyBinding::new(keystroke, ToggleSoftWrap, Some(&context)),
       ShortcutId::ToggleHideWhitespace => {
         KeyBinding::new(keystroke, ToggleHideWhitespace, Some(&context))
@@ -864,6 +881,8 @@ impl ShortcutDefinition {
       | ShortcutId::NextAnnotation
       | ShortcutId::ToggleSoftWrap
       | ShortcutId::ToggleFileDiff => Some("Editor"),
+      // A diff already shows every hunk open.
+      ShortcutId::ToggleHunkExpanded => Some("Editor && CodeEditor"),
       ShortcutId::ToggleHunkStage | ShortcutId::RestoreHunk | ShortcutId::AcceptBothConflict => {
         Some(HUNK_OR_CONFLICT_ACTION_FOCUS)
       }
@@ -1468,6 +1487,7 @@ pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action
     ShortcutId::OpenPullRequestSidebar => f(&OpenPullRequestSidebar),
     ShortcutId::ToggleDiffView => f(&ToggleDiffView),
     ShortcutId::ToggleFileDiff => f(&ToggleFileDiff),
+    ShortcutId::ToggleHunkExpanded => f(&ToggleHunkExpanded),
     ShortcutId::ToggleHideWhitespace => f(&ToggleHideWhitespace),
     ShortcutId::ToggleSoftWrap => f(&ToggleSoftWrap),
     ShortcutId::PreviousAnnotation => f(&PreviousAnnotation),

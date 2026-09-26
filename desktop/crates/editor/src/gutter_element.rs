@@ -1,8 +1,8 @@
 use gpui::{
-  App, Bounds, DispatchPhase, ElementId, Entity, GlobalElementId, Hitbox, HitboxBehavior,
-  InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels,
-  ScrollDelta, ScrollWheelEvent, Style, TextAlign, TextRun, Window, fill, point, prelude::*, px,
-  relative, size,
+  App, Bounds, CursorStyle, DispatchPhase, ElementId, Entity, GlobalElementId, Hitbox,
+  HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+  PaintQuad, Pixels, ScrollDelta, ScrollWheelEvent, Style, TextAlign, TextRun, Window, fill, point,
+  prelude::*, px, relative, size,
 };
 use gpui_component::ActiveTheme as _;
 use std::{collections::HashMap, ops::Range, sync::Arc};
@@ -218,6 +218,8 @@ fn hunk_border_colors_for_kinds(
 }
 
 const GIT_GUTTER_STRIPE_WIDTH: f32 = 4.0;
+/// Wider than the stripe: a 4px target is too thin to aim at.
+const GIT_GUTTER_CLICK_WIDTH: f32 = 10.0;
 const GIT_GUTTER_BORDER: f32 = 1.0;
 const GIT_GUTTER_STAGED_FILL_OPACITY: f32 = 0.3;
 const GIT_GUTTER_DELETION_HEIGHT: f32 = 2.0;
@@ -230,13 +232,66 @@ fn git_gutter_color(theme: &ui::Theme, kind: GitGutterLineKind) -> gpui::Hsla {
   }
 }
 
-/// The plain file view has one display line per document line, so rows and
-/// document lines are the same numbers here. Staged changes read as in the
-/// diff: outlined over a pale fill, where unstaged ones are solid.
+/// The stripe of one display row of the plain file.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GitGutterRowMark {
+  color: gpui::Hsla,
+  /// Solid as in the diff, or outlined for a staged hunk that is folded: an
+  /// expanded one already reads as staged from its outlined, paler lines.
+  outlined: bool,
+}
+
+fn git_gutter_row_mark(
+  markers: &GitGutterMarkers,
+  theme: &ui::Theme,
+  display_line: Option<DisplayLine>,
+) -> Option<GitGutterRowMark> {
+  match display_line? {
+    // Only the lines of an expanded hunk keep their group in the projection.
+    DisplayLine::Doc {
+      doc_line, group_id, ..
+    } => markers.lines.get(&doc_line).map(|marker| GitGutterRowMark {
+      color: git_gutter_color(theme, marker.kind),
+      outlined: marker.state == HunkState::Staged && group_id.is_none(),
+    }),
+    // An expanded hunk's removed lines carry its stripe, as in the diff: the
+    // kind of the lines that replaced them, or removed when nothing did.
+    DisplayLine::Removed { anchor_line, .. } => Some(GitGutterRowMark {
+      color: markers
+        .lines
+        .get(&anchor_line)
+        .map(|marker| git_gutter_color(theme, marker.kind))
+        .unwrap_or_else(|| theme.diff_gutter_removed()),
+      outlined: false,
+    }),
+    _ => None,
+  }
+}
+
+/// Whether a click on the stripe of this row expands or folds a hunk.
+fn git_gutter_row_toggles_hunk(
+  markers: &GitGutterMarkers,
+  display_line: Option<DisplayLine>,
+) -> bool {
+  match display_line {
+    Some(DisplayLine::Doc { doc_line, .. }) => markers
+      .hunks
+      .iter()
+      .any(|hunk| hunk.touches_doc_line(doc_line)),
+    Some(DisplayLine::Removed { .. }) => true,
+    _ => false,
+  }
+}
+
+/// Staged changes read as in the diff: outlined over a pale fill, where
+/// unstaged ones are solid. Rows are display lines, which an expanded hunk
+/// shifts from document lines with the removed lines it brings back.
 fn push_git_gutter_quads(
   markers: &GitGutterMarkers,
   theme: &ui::Theme,
   viewport: Range<usize>,
+  display_line_at: &dyn Fn(usize) -> Option<DisplayLine>,
+  display_line_of: &dyn Fn(usize) -> Option<usize>,
   doc_line_count: usize,
   bounds: Bounds<Pixels>,
   line_height: Pixels,
@@ -246,16 +301,14 @@ fn push_git_gutter_quads(
   let left = bounds.left();
   let width = px(GIT_GUTTER_STRIPE_WIDTH);
   let border = px(GIT_GUTTER_BORDER);
-  for doc_line in viewport.clone() {
-    if doc_line >= doc_line_count {
-      break;
-    }
-    let Some(marker) = markers.lines.get(&doc_line) else {
+  let mark_at = |row: usize| git_gutter_row_mark(markers, theme, display_line_at(row));
+  for row in viewport.clone() {
+    let Some(mark) = mark_at(row) else {
       continue;
     };
-    let color = git_gutter_color(theme, marker.kind);
-    let y = line_y(bounds.top(), line_height, doc_line, scroll_offset);
-    if marker.state == HunkState::Unstaged {
+    let color = mark.color;
+    let y = line_y(bounds.top(), line_height, row, scroll_offset);
+    if !mark.outlined {
       quads.push(fill(
         Bounds::new(point(left, y), size(width, line_height)),
         color,
@@ -263,8 +316,7 @@ fn push_git_gutter_quads(
       continue;
     }
 
-    let continues_run =
-      |line: Option<usize>| line.and_then(|line| markers.lines.get(&line)) == Some(marker);
+    let continues_run = |other: Option<usize>| other.and_then(mark_at) == Some(mark);
     quads.push(fill(
       Bounds::new(point(left, y), size(width, line_height)),
       color.opacity(GIT_GUTTER_STAGED_FILL_OPACITY),
@@ -277,13 +329,13 @@ fn push_git_gutter_quads(
       Bounds::new(point(left + width - border, y), size(border, line_height)),
       color,
     ));
-    if !continues_run(doc_line.checked_sub(1)) {
+    if !continues_run(row.checked_sub(1)) {
       quads.push(fill(
         Bounds::new(point(left, y), size(width, border)),
         color,
       ));
     }
-    if !continues_run(Some(doc_line + 1)) {
+    if !continues_run(Some(row + 1)) {
       quads.push(fill(
         Bounds::new(point(left, y + line_height - border), size(width, border)),
         color,
@@ -295,10 +347,13 @@ fn push_git_gutter_quads(
   for deletion in &markers.deletions {
     // Drawn on the edge the removed lines sat on: the top of the line after
     // them, or the bottom of the last line when they ended the file.
-    let (row, offset) = if deletion.before_doc_line < doc_line_count {
+    let (doc_line, offset) = if deletion.before_doc_line < doc_line_count {
       (deletion.before_doc_line, px(0.0))
     } else {
       (doc_line_count.saturating_sub(1), line_height - height)
+    };
+    let Some(row) = display_line_of(doc_line) else {
+      continue;
     };
     if !viewport.contains(&row) {
       continue;
@@ -329,6 +384,8 @@ pub struct GutterPrepaintState {
   conflict_borders: Vec<PaintQuad>,
   group_borders: Vec<PaintQuad>,
   scroll_hitbox: Hitbox,
+  /// Stripe rows a click expands or folds.
+  hunk_toggle_hitboxes: Vec<Hitbox>,
 }
 
 impl GutterElement {
@@ -418,6 +475,7 @@ impl Element for GutterElement {
       conflict_borders,
       group_borders,
       scroll_hitbox,
+      hunk_toggle_hitboxes,
     ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
@@ -427,8 +485,11 @@ impl Element for GutterElement {
       let total_lines = editor.display_line_count(doc_line_count);
       let theme = editor.theme.clone();
       let projection = editor.projection.clone();
-      let show_stripes = true;
+      // The plain file marks its changes on its own; an expanded hunk only adds
+      // its line backgrounds there.
+      let show_stripes = editor.shows_git_diff();
       let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+      let mut hunk_toggle_hitboxes = Vec::new();
       let line_number_right_padding = editor.gutter_line_number_right_padding();
 
       let viewport = editor
@@ -823,19 +884,43 @@ impl Element for GutterElement {
         }
       }
 
-      if projection.is_none()
+      if !editor.shows_git_diff()
         && let Some(markers) = editor.git_gutter_markers.as_deref()
       {
+        let display_line_at =
+          |display_line: usize| editor.display_line(display_line, doc_line_count);
         push_git_gutter_quads(
           markers,
           &theme,
           viewport.clone(),
+          &display_line_at,
+          &|doc_line| editor.doc_to_display_line(doc_line),
           doc_line_count,
           bounds,
           line_height,
           scroll_offset,
           &mut stripe_quads,
         );
+        let map = &editor.soft_wrap.map;
+        for row in viewport.clone() {
+          if !git_gutter_row_toggles_hunk(markers, display_line_at(row)) {
+            continue;
+          }
+          let y = line_y(bounds.top(), line_height, row, scroll_offset);
+          let quad = map.block_quad(
+            fill(
+              Bounds::new(
+                point(bounds.left(), y),
+                size(px(GIT_GUTTER_CLICK_WIDTH), line_height),
+              ),
+              gpui::transparent_black(),
+            ),
+            bounds.top(),
+            line_height,
+            scroll_offset,
+          );
+          hunk_toggle_hitboxes.push(window.insert_hitbox(quad.bounds, HitboxBehavior::Normal));
+        }
       }
 
       let line_number_color = editor.theme.line_number();
@@ -868,6 +953,7 @@ impl Element for GutterElement {
         conflict_borders,
         group_borders,
         scroll_hitbox,
+        hunk_toggle_hitboxes,
       )
     };
 
@@ -887,6 +973,7 @@ impl Element for GutterElement {
       conflict_borders,
       group_borders,
       scroll_hitbox,
+      hunk_toggle_hitboxes,
     }
   }
 
@@ -924,6 +1011,10 @@ impl Element for GutterElement {
       window.paint_quad(quad.clone());
     }
 
+    for hitbox in &prepaint.hunk_toggle_hitboxes {
+      window.set_cursor_style(CursorStyle::PointingHand, hitbox);
+    }
+
     window.on_mouse_event({
       let editor = self.editor.clone();
       let hitbox = prepaint.scroll_hitbox.clone();
@@ -938,6 +1029,27 @@ impl Element for GutterElement {
           || event.button != MouseButton::Left
           || !hitbox.is_hovered(window)
         {
+          return;
+        }
+        let toggled_hunk = editor.update(cx, |editor, cx| {
+          let line = (editor.scroll_offset_y + (event.position.y - bounds.top()) / line_height)
+            .max(0.0)
+            .floor() as usize;
+          let line = editor.soft_wrap.map.line(line);
+          if editor.shows_git_diff()
+            || event.position.x > bounds.left() + px(GIT_GUTTER_CLICK_WIDTH)
+          {
+            return false;
+          }
+          let doc_line = match editor.display_line(line, editor.document().read(cx).len_lines()) {
+            Some(DisplayLine::Doc { doc_line, .. }) => doc_line,
+            Some(DisplayLine::Removed { anchor_line, .. }) => anchor_line,
+            _ => return false,
+          };
+          editor.toggle_file_hunk_at_doc_line(doc_line, cx)
+        });
+        if toggled_hunk {
+          cx.stop_propagation();
           return;
         }
         editor.update(cx, |editor, cx| {
@@ -1145,6 +1257,71 @@ impl Element for GutterElement {
 mod tests {
   use super::*;
   use crate::projection::HunkState;
+
+  #[test]
+  fn a_staged_hunk_is_outlined_only_while_folded() {
+    use crate::git_gutter::{GitGutterLine, GitGutterLineKind, GitGutterMarkers};
+    use std::collections::HashMap;
+
+    let theme = ui::Theme::dark();
+    let markers = GitGutterMarkers {
+      lines: HashMap::from([(
+        2,
+        GitGutterLine {
+          kind: GitGutterLineKind::Modified,
+          state: HunkState::Staged,
+        },
+      )]),
+      ..Default::default()
+    };
+    let removed = |anchor_line| DisplayLine::Removed {
+      text: Arc::from("old"),
+      anchor_line,
+      old_line: 1,
+      hunk: HunkState::Staged,
+      group_id: None,
+      secondary: true,
+    };
+
+    let doc = |group_id: Option<Arc<str>>| DisplayLine::Doc {
+      doc_line: 2,
+      old_line: None,
+      change: Some(ChangeKind::Added),
+      hunk: Some(HunkState::Staged),
+      group_id,
+      secondary: true,
+    };
+    let solid = |color| {
+      Some(GitGutterRowMark {
+        color,
+        outlined: false,
+      })
+    };
+
+    assert_eq!(
+      git_gutter_row_mark(&markers, &theme, Some(removed(2))),
+      solid(theme.diff_gutter_modified())
+    );
+    assert_eq!(
+      git_gutter_row_mark(&markers, &theme, Some(removed(5))),
+      solid(theme.diff_gutter_removed()),
+      "nothing replaced it: a removal"
+    );
+    assert_eq!(
+      git_gutter_row_mark(&markers, &theme, Some(doc(Some(Arc::from("group"))))),
+      solid(theme.diff_gutter_modified()),
+      "expanded, it looks like the diff"
+    );
+    assert_eq!(
+      git_gutter_row_mark(&markers, &theme, Some(doc(None))),
+      Some(GitGutterRowMark {
+        color: theme.diff_gutter_modified(),
+        outlined: true,
+      }),
+      "folded, the outline is the only sign it is staged"
+    );
+    assert!(git_gutter_row_toggles_hunk(&markers, Some(removed(5))));
+  }
 
   #[test]
   fn conflict_stripe_color_marks_the_whole_conflict_as_one_block() {

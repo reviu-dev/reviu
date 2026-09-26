@@ -26,6 +26,7 @@ actions!(
     NewlineBelow,
     ToggleComments,
     ToggleSoftWrap,
+    ToggleHunkExpanded,
     Backspace,
     BackspaceWord,
     BackspaceAll,
@@ -174,6 +175,15 @@ pub fn toggle_soft_wrap(
   cx: &mut Context<Editor>,
 ) {
   editor.toggle_soft_wrap(window, cx);
+}
+
+pub fn toggle_hunk_expanded(
+  editor: &mut Editor,
+  _: &ToggleHunkExpanded,
+  _window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.toggle_hunk_expanded_at_cursor(cx);
 }
 
 pub fn toggle_comments(

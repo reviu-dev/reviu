@@ -4687,6 +4687,68 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn an_expanded_hunk_stays_open_when_it_is_staged(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-expanded-hunk");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n",
+      "initial",
+    );
+    std::fs::write(repo.path.join("a.txt"), "a\nB\nc\nd\ne\nf\ng\nh\ni\nJ\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("a.txt"),
+        Some(10),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    let editor = page
+      .read_with(cx, |page, _| page.warm_editor())
+      .expect("file editor");
+
+    editor.update(cx, |editor, cx| editor.toggle_hunk_expanded_at_cursor(cx));
+    let group_id = editor.read_with(cx, |editor, cx| {
+      let projection = editor.projection().expect("an expanded hunk");
+      assert_eq!(
+        projection.lines.len(),
+        editor.document().read(cx).len_lines() + 1,
+        "only the removed line of the expanded hunk comes back"
+      );
+      assert_eq!(projection.groups.len(), 1);
+      projection.groups.keys().next().cloned().expect("group")
+    });
+
+    editor.update(cx, |editor, cx| {
+      editor.enqueue_group_action(group_id, editor::HunkAction::Stage, cx)
+    });
+    await_editor_diff(&page, cx).await;
+    editor.read_with(cx, |editor, _| {
+      assert_eq!(editor.expanded_hunk_count_for_driver(), 1);
+      let projection = editor.projection().expect("still expanded");
+      assert!(
+        projection
+          .groups
+          .values()
+          .all(|group| group.state == editor::HunkState::Staged)
+      );
+    });
+
+    editor.update(cx, |editor, cx| editor.toggle_hunk_expanded_at_cursor(cx));
+    editor.read_with(cx, |editor, _| {
+      assert!(editor.projection().is_none());
+      assert_eq!(editor.git_gutter_lines_for_driver(), vec![1, 9]);
+    });
+  }
+
+  #[gpui::test]
   async fn the_git_gutter_setting_turns_the_marks_off(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-git-gutter-off");
     commit_text_file(&repo.path, Path::new("a.txt"), "one\n", "initial");
