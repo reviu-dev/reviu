@@ -3528,7 +3528,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.6.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#32b4526823e60208a75b094c16f3b9ec95c59339"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#bbc555587f86c92f99b8d06fc31be80a794237a6"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3562,7 +3562,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.6.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#32b4526823e60208a75b094c16f3b9ec95c59339"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#bbc555587f86c92f99b8d06fc31be80a794237a6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3605,7 +3605,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.6.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#32b4526823e60208a75b094c16f3b9ec95c59339"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#bbc555587f86c92f99b8d06fc31be80a794237a6"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -3616,7 +3616,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.6.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#32b4526823e60208a75b094c16f3b9ec95c59339"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#bbc555587f86c92f99b8d06fc31be80a794237a6"
 dependencies = [
  "anyhow",
  "gpui",
