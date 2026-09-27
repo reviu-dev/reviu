@@ -40,7 +40,6 @@ fn resolve_api_base_url(
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubNotificationRepositoryOwner {
   pub login: String,
   #[serde(rename = "avatar_url")]
@@ -48,7 +47,6 @@ pub struct GithubNotificationRepositoryOwner {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubNotificationRepository {
   pub name: String,
   #[serde(rename = "full_name")]
@@ -57,7 +55,6 @@ pub struct GithubNotificationRepository {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubNotificationSubject {
   pub title: String,
   #[serde(rename = "type")]
@@ -68,7 +65,6 @@ pub struct GithubNotificationSubject {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubNotification {
   pub id: String,
   pub repository: GithubNotificationRepository,
@@ -105,7 +101,6 @@ pub enum CustomerStateSubscriptionStatus {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct CustomerStateSubscription {
   pub id: String,
   #[serde(rename = "createdAt")]
@@ -138,7 +133,6 @@ pub struct CustomerStateSubscription {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-#[allow(dead_code)]
 pub struct UserSubscription {
   #[serde(default, rename = "portalUrl")]
   pub portal_url: Option<String>,
@@ -147,7 +141,6 @@ pub struct UserSubscription {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct User {
   pub id: String,
   pub name: String,
@@ -170,205 +163,21 @@ impl User {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubRepository {
-  pub owner: String,
-  pub repo: String,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum GithubIssueStateReason {
-  Completed,
-  Reopened,
-  NotPlanned,
-  Duplicate,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubIssue {
-  pub id: u64,
-  pub number: u64,
-  pub title: String,
-  pub state: String,
-  pub state_reason: Option<GithubIssueStateReason>,
-  #[serde(rename = "created_at")]
-  pub created_at: String,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
-  #[serde(rename = "closed_at")]
-  pub closed_at: Option<String>,
-  pub comments_count: u64,
-  pub repository: GithubRepository,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubIssueDetailsComment {
-  #[serde(rename = "node_id", default)]
-  pub node_id: String,
-  pub id: u64,
-  pub body: Option<String>,
-  #[serde(rename = "created_at")]
-  pub created_at: String,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubIssueDetails {
-  #[serde(rename = "node_id", default)]
-  pub node_id: String,
-  pub id: u64,
-  pub number: u64,
-  pub title: String,
-  pub body: Option<String>,
-  pub state: String,
-  pub state_reason: Option<GithubIssueStateReason>,
-  #[serde(rename = "created_at")]
-  pub created_at: String,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
-  #[serde(rename = "closed_at")]
-  pub closed_at: Option<String>,
-  pub comments: Vec<GithubIssueDetailsComment>,
-  pub repository: GithubRepository,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubIssueDescriptionUpdate {
-  pub id: u64,
-  pub number: u64,
-  pub body: Option<String>,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct GithubRepositoryDetails {
   #[serde(rename = "default_branch")]
   pub default_branch: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubRepositoryLanguage {
-  pub name: String,
-  pub color: Option<String>,
-  pub size: u64,
-  pub percentage: f64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubUserProfileRepository {
-  pub owner: String,
-  pub repo: String,
-  #[serde(rename = "full_name")]
-  pub full_name: String,
-  pub description: Option<String>,
-  pub private: bool,
-  pub fork: bool,
-  pub archived: bool,
-  #[serde(rename = "html_url")]
-  pub html_url: String,
-  pub language: Option<String>,
-  #[serde(rename = "language_color")]
-  pub language_color: Option<String>,
-  #[serde(rename = "stargazers_count")]
-  pub stargazers_count: u64,
-  #[serde(rename = "forks_count")]
-  pub forks_count: u64,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
-  #[serde(rename = "pushed_at")]
-  pub pushed_at: Option<String>,
-  #[serde(default)]
-  pub languages: Vec<GithubRepositoryLanguage>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubUserProfile {
-  pub login: String,
-  pub name: Option<String>,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: Option<String>,
-  pub bio: Option<String>,
-  pub company: Option<String>,
-  pub location: Option<String>,
-  #[serde(rename = "website_url")]
-  pub website_url: Option<String>,
-  #[serde(rename = "twitter_username")]
-  pub twitter_username: Option<String>,
-  #[serde(rename = "html_url")]
-  pub html_url: String,
-  #[serde(rename = "created_at")]
-  pub created_at: String,
-  #[serde(rename = "followers_count")]
-  pub followers_count: u64,
-  #[serde(rename = "following_count")]
-  pub following_count: u64,
-  #[serde(rename = "repositories_count")]
-  pub repositories_count: u64,
-  #[serde(rename = "repositories_indexed_count")]
-  pub repositories_indexed_count: u64,
-  #[serde(rename = "repositories_truncated")]
-  pub repositories_truncated: bool,
-  #[serde(rename = "stargazers_count")]
-  pub stargazers_count: u64,
-  #[serde(rename = "forks_count")]
-  pub forks_count: u64,
-  #[serde(default)]
-  pub languages: Vec<GithubRepositoryLanguage>,
-  #[serde(default)]
-  pub repositories: Vec<GithubUserProfileRepository>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubRepositoryTreeEntry {
   pub path: String,
-  pub mode: String,
   #[serde(rename = "type")]
   pub entry_type: String,
-  pub sha: String,
-  pub size: Option<u64>,
-  pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubRepositoryTree {
-  pub sha: String,
-  pub url: Option<String>,
   pub tree: Vec<GithubRepositoryTreeEntry>,
-  pub truncated: bool,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubRepositoryBranchCommit {
-  pub sha: String,
-  pub url: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubRepositoryBranch {
-  pub name: String,
-  pub commit: GithubRepositoryBranchCommit,
-  pub protected: bool,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubRepositoryReadme {
-  pub content: Option<String>,
-  pub path: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -379,7 +188,6 @@ pub struct GithubPullRequestFilterOptionUser {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
@@ -389,7 +197,6 @@ pub struct GithubPullRequest {
   pub draft: bool,
   #[serde(rename = "comments_count", default)]
   pub comments_count: u64,
-  pub repository: GithubRepository,
 }
 
 impl GithubPullRequest {
@@ -403,33 +210,9 @@ impl GithubPullRequest {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestAuthor {
   #[serde(default)]
   pub login: String,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestCommitUser {
-  pub login: String,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubCommitAssociatedPullRequest {
-  pub number: u64,
-  pub title: String,
-  pub state: String,
-  #[serde(rename = "merged_at")]
-  pub merged_at: Option<String>,
-  #[serde(rename = "html_url")]
-  #[allow(dead_code)]
-  pub html_url: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -440,33 +223,10 @@ pub struct GithubPullRequestReviewCommentUser {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestReviewUser {
   pub login: String,
   #[serde(rename = "avatar_url")]
   pub avatar_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestIssueCommentUser {
-  pub login: String,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestIssueComment {
-  #[serde(rename = "node_id", default)]
-  pub node_id: String,
-  pub id: u64,
-  pub body: String,
-  #[serde(rename = "created_at")]
-  pub created_at: String,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
-  pub user: Option<GithubPullRequestIssueCommentUser>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -489,24 +249,17 @@ pub enum GithubPullRequestReviewState {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestReview {
   #[serde(rename = "node_id", default)]
   pub node_id: String,
-  pub id: u64,
   pub body: Option<String>,
   pub state: GithubPullRequestReviewState,
   #[serde(rename = "submitted_at")]
   pub submitted_at: Option<String>,
-  #[serde(rename = "commit_id")]
-  pub commit_id: Option<String>,
-  #[serde(rename = "html_url")]
-  pub html_url: String,
   pub user: Option<GithubPullRequestReviewUser>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestReviewComment {
   #[serde(rename = "node_id", default)]
   pub node_id: String,
@@ -516,33 +269,20 @@ pub struct GithubPullRequestReviewComment {
   pub thread_id: String,
   #[serde(default, rename = "is_resolved")]
   pub is_resolved: bool,
-  #[serde(default, rename = "is_collapsed")]
-  pub is_collapsed: bool,
   #[serde(default, rename = "viewer_can_resolve")]
   pub viewer_can_resolve: bool,
   #[serde(default, rename = "viewer_can_unresolve")]
   pub viewer_can_unresolve: bool,
   pub id: u64,
-  #[serde(rename = "pull_request_review_id")]
-  pub pull_request_review_id: Option<u64>,
   #[serde(rename = "diff_hunk")]
   pub diff_hunk: String,
   pub path: String,
-  pub position: Option<i64>,
-  #[serde(rename = "original_position")]
-  pub original_position: Option<i64>,
-  #[serde(rename = "commit_id")]
-  pub commit_id: String,
-  #[serde(rename = "original_commit_id")]
-  pub original_commit_id: String,
   #[serde(rename = "in_reply_to_id")]
   pub in_reply_to_id: Option<u64>,
   pub user: GithubPullRequestReviewCommentUser,
   pub body: String,
   #[serde(rename = "created_at")]
   pub created_at: String,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
   #[serde(rename = "start_line")]
   pub start_line: Option<i64>,
   #[serde(rename = "original_start_line")]
@@ -558,16 +298,6 @@ pub struct GithubPullRequestReviewComment {
   pub is_pending: bool,
   #[serde(default, rename = "pull_request_review_node_id")]
   pub pull_request_review_node_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestFile {
-  pub filename: String,
-  pub status: String,
-  pub patch: Option<String>,
-  #[serde(rename = "previous_filename")]
-  pub previous_filename: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -606,77 +336,23 @@ pub enum GithubPullRequestMergeReadinessStatus {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestDetails {
   #[serde(rename = "node_id")]
   pub node_id: String,
-  pub number: u64,
-  pub title: String,
-  pub state: GithubPullRequestState,
-  pub draft: bool,
-  #[serde(rename = "created_at")]
-  pub created_at: String,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
-  #[serde(rename = "merged_at")]
-  pub merged_at: Option<String>,
   #[serde(rename = "merge_base_sha")]
   pub merge_base_sha: String,
-  #[serde(rename = "base_sha")]
-  pub base_sha: String,
   #[serde(rename = "head_sha")]
   pub head_sha: String,
   #[serde(rename = "base_ref_name")]
   pub base_ref_name: String,
   #[serde(rename = "head_ref_name")]
   pub head_ref_name: String,
-  pub body: Option<String>,
   pub author: GithubPullRequestAuthor,
-  #[serde(default)]
-  pub assignees: Vec<GithubPullRequestFilterOptionUser>,
   #[serde(default, rename = "requested_reviewers")]
   pub requested_reviewers: Vec<GithubPullRequestFilterOptionUser>,
-  #[allow(dead_code)]
-  pub comments: u64,
-  #[serde(rename = "review_comments")]
-  #[allow(dead_code)]
-  pub review_comments: u64,
-  #[allow(dead_code)]
-  pub commits: u64,
-  pub additions: u64,
-  pub deletions: u64,
-  #[serde(rename = "changed_files")]
-  pub changed_files: u64,
-  pub repository: GithubRepository,
-  #[serde(rename = "head_repository")]
-  pub head_repository: Option<GithubRepository>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestAutoMergeEnabledBy {
-  pub login: String,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestAutoMergeDetails {
-  #[serde(rename = "merge_method")]
-  pub merge_method: GithubPullRequestMergeMethod,
-  #[serde(rename = "commit_headline")]
-  pub commit_headline: Option<String>,
-  #[serde(rename = "commit_body")]
-  pub commit_body: Option<String>,
-  #[serde(rename = "enabled_at")]
-  pub enabled_at: Option<String>,
-  #[serde(rename = "enabled_by")]
-  pub enabled_by: Option<GithubPullRequestAutoMergeEnabledBy>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestMergeReadiness {
   pub status: GithubPullRequestMergeReadinessStatus,
   pub message: String,
@@ -690,9 +366,6 @@ pub struct GithubPullRequestMergeReadiness {
   pub can_merge_now: bool,
   #[serde(rename = "viewer_can_merge")]
   pub viewer_can_merge: bool,
-  #[serde(rename = "mergeable_state")]
-  pub mergeable_state: Option<String>,
-  pub rebaseable: Option<bool>,
   #[serde(rename = "commit_defaults", default)]
   pub commit_defaults: Option<GithubPullRequestMergeCommitDefaults>,
 }
@@ -711,22 +384,6 @@ pub struct GithubPullRequestMergeCommitDefaults {
   pub squash: Option<GithubMergeCommitDefaults>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestMergeResult {
-  pub merged: bool,
-  pub sha: String,
-  pub message: String,
-  pub method: GithubPullRequestMergeMethod,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubSuggestedChangeCommitResult {
-  pub sha: String,
-  pub url: String,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GithubPullRequestChecksRollupState {
@@ -737,26 +394,9 @@ pub enum GithubPullRequestChecksRollupState {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestWorkflowStep {
-  pub number: u64,
-  pub name: String,
-  pub status: Option<String>,
-  pub conclusion: Option<String>,
-  pub state: GithubPullRequestChecksRollupState,
-  #[serde(rename = "started_at")]
-  pub started_at: Option<String>,
-  #[serde(rename = "completed_at")]
-  pub completed_at: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestWorkflowJob {
   pub id: u64,
   pub name: String,
-  pub status: Option<String>,
-  pub conclusion: Option<String>,
   pub state: GithubPullRequestChecksRollupState,
   #[serde(rename = "started_at")]
   pub started_at: Option<String>,
@@ -764,26 +404,19 @@ pub struct GithubPullRequestWorkflowJob {
   pub completed_at: Option<String>,
   #[serde(rename = "html_url")]
   pub html_url: Option<String>,
-  pub required: bool,
   #[serde(default, rename = "app_name")]
   pub app_name: Option<String>,
   #[serde(default, rename = "app_slug")]
   pub app_slug: Option<String>,
   #[serde(default, rename = "app_avatar_url")]
   pub app_avatar_url: Option<String>,
-  pub steps: Vec<GithubPullRequestWorkflowStep>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestWorkflowRun {
   pub id: u64,
   pub name: Option<String>,
-  #[serde(rename = "display_title")]
-  pub display_title: Option<String>,
   pub event: String,
-  pub status: Option<String>,
-  pub conclusion: Option<String>,
   pub state: GithubPullRequestChecksRollupState,
   #[serde(rename = "created_at")]
   pub created_at: String,
@@ -791,22 +424,15 @@ pub struct GithubPullRequestWorkflowRun {
   pub updated_at: String,
   #[serde(rename = "run_started_at")]
   pub run_started_at: Option<String>,
-  #[serde(rename = "run_number")]
-  pub run_number: u64,
-  #[serde(rename = "run_attempt")]
-  pub run_attempt: Option<u64>,
   #[serde(rename = "html_url")]
   pub html_url: Option<String>,
   pub jobs: Vec<GithubPullRequestWorkflowJob>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestCheckRun {
   pub id: u64,
   pub name: String,
-  pub status: Option<String>,
-  pub conclusion: Option<String>,
   pub state: GithubPullRequestChecksRollupState,
   #[serde(rename = "started_at")]
   pub started_at: Option<String>,
@@ -816,28 +442,19 @@ pub struct GithubPullRequestCheckRun {
   pub html_url: Option<String>,
   #[serde(rename = "details_url")]
   pub details_url: Option<String>,
-  pub required: bool,
   #[serde(rename = "app_name")]
   pub app_name: Option<String>,
   #[serde(rename = "app_slug")]
   pub app_slug: Option<String>,
   #[serde(default, rename = "app_avatar_url")]
   pub app_avatar_url: Option<String>,
-  pub title: Option<String>,
-  pub summary: Option<String>,
-  pub text: Option<String>,
-  #[serde(rename = "annotations_count")]
-  pub annotations_count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestLegacyStatus {
   pub id: u64,
   pub context: String,
-  pub status: String,
   pub state: GithubPullRequestChecksRollupState,
-  pub description: Option<String>,
   #[serde(rename = "target_url")]
   pub target_url: Option<String>,
   #[serde(default, rename = "avatar_url")]
@@ -846,18 +463,12 @@ pub struct GithubPullRequestLegacyStatus {
   pub created_at: String,
   #[serde(rename = "updated_at")]
   pub updated_at: String,
-  pub required: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestChecksSummary {
-  #[serde(rename = "head_sha")]
-  pub head_sha: String,
   #[serde(rename = "overall_state")]
   pub overall_state: GithubPullRequestChecksRollupState,
-  #[serde(rename = "required_state")]
-  pub required_state: GithubPullRequestChecksRollupState,
   #[serde(rename = "total_checks")]
   pub total_checks: u64,
   #[serde(rename = "successful_checks")]
@@ -868,37 +479,14 @@ pub struct GithubPullRequestChecksSummary {
   pub pending_checks: u64,
   #[serde(default, rename = "skipped_checks")]
   pub skipped_checks: u64,
-  #[serde(rename = "required_checks_total")]
-  pub required_checks_total: u64,
-  #[serde(rename = "required_checks_passed")]
-  pub required_checks_passed: u64,
-  #[serde(rename = "required_checks_failed")]
-  pub required_checks_failed: u64,
-  #[serde(rename = "required_checks_pending")]
-  pub required_checks_pending: u64,
-  #[serde(default, rename = "required_checks_skipped")]
-  pub required_checks_skipped: u64,
-  #[serde(rename = "required_contexts")]
-  pub required_contexts: Vec<String>,
   #[serde(rename = "missing_required_contexts")]
   pub missing_required_contexts: Vec<String>,
-  #[serde(rename = "requires_up_to_date_branch")]
-  pub requires_up_to_date_branch: bool,
   #[serde(rename = "actions_runs")]
   pub actions_runs: Vec<GithubPullRequestWorkflowRun>,
   #[serde(rename = "other_checks")]
   pub other_checks: Vec<GithubPullRequestCheckRun>,
   #[serde(rename = "legacy_statuses")]
   pub legacy_statuses: Vec<GithubPullRequestLegacyStatus>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubPullRequestDescriptionUpdate {
-  pub number: u64,
-  pub body: Option<String>,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
 }
 
 #[derive(Clone)]
@@ -930,8 +518,6 @@ struct CheckoutSubscriptionRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct CheckoutSubscriptionResponse {
   url: String,
-  #[allow(dead_code)]
-  redirect: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -971,27 +557,6 @@ struct GithubPullRequestMergeReadinessResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubPullRequestMergeResultResponse {
-  #[serde(rename = "mergeResult")]
-  merge_result: GithubPullRequestMergeResult,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubReviewThreadResolutionResponse {
-  #[allow(dead_code)]
-  thread: GithubReviewThreadResolution,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubReviewThreadResolution {
-  pub thread_id: String,
-  pub is_resolved: bool,
-  pub viewer_can_resolve: bool,
-  pub viewer_can_unresolve: bool,
-}
-
-#[derive(Debug, Deserialize)]
 struct GithubAssetResolveResponse {
   url: String,
 }
@@ -1008,12 +573,9 @@ pub struct GithubPullRequestConversationPullRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubPullRequestConversation {
   #[serde(default, rename = "pull_request")]
   pub pull_request: GithubPullRequestConversationPullRequest,
-  #[serde(rename = "issue_comments")]
-  pub issue_comments: Vec<GithubPullRequestIssueComment>,
   pub reviews: Vec<GithubPullRequestReview>,
   #[serde(rename = "review_comments")]
   pub review_comments: Vec<GithubPullRequestReviewComment>,
@@ -1138,14 +700,11 @@ struct GithubFileContentResponse {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct DesktopUpdateCheckResponse {
   #[serde(rename = "updateAvailable")]
   pub update_available: bool,
   #[serde(rename = "forceUpdate")]
   pub force_update: bool,
-  #[serde(rename = "currentVersion")]
-  pub current_version: String,
   #[serde(rename = "latestVersion")]
   pub latest_version: String,
   #[serde(rename = "minimumSupportedVersion")]
@@ -1572,7 +1131,7 @@ impl ApiClient {
     expected_head_sha: &str,
     commit_title: Option<&str>,
     commit_message: Option<&str>,
-  ) -> Result<GithubPullRequestMergeResult> {
+  ) -> Result<()> {
     let route = format!("/github/pr/{number}/merge");
     let trimmed_title = commit_title
       .map(str::trim)
@@ -1598,8 +1157,7 @@ impl ApiClient {
     if !status.is_success() {
       return Err(Self::api_error_from_response(response));
     }
-    let payload = response.json::<GithubPullRequestMergeResultResponse>()?;
-    Ok(payload.merge_result)
+    Ok(())
   }
 
   pub fn fetch_github_notifications(&self) -> Result<Vec<GithubNotification>> {
@@ -1826,7 +1384,6 @@ impl ApiClient {
     if !status.is_success() {
       return Err(Self::api_error_from_response(response));
     }
-    let _ = response.json::<GithubReviewThreadResolutionResponse>()?;
     Ok(())
   }
 
@@ -2316,10 +1873,6 @@ mod tests {
       merged_at: merged_at.map(str::to_string),
       draft,
       comments_count: 0,
-      repository: GithubRepository {
-        owner: "acme".to_string(),
-        repo: "widget".to_string(),
-      },
     }
   }
 
@@ -2493,7 +2046,6 @@ mod tests {
     assert_eq!(pull_request.title, "Improve docs");
     assert_eq!(pull_request.comments_count, 7);
     assert!(!pull_request.draft);
-    assert_eq!(pull_request.repository.owner, "acme");
     handle.join().expect("join server thread");
   }
 
@@ -2637,13 +2189,11 @@ mod tests {
     let tree = api
       .fetch_github_repository_tree("acme", "widget", "main")
       .expect("fetch repository tree");
-    assert_eq!(tree.sha, "9fb037999f264ba9a7fc6274d15fa3ae2ab98312");
     assert_eq!(tree.tree.len(), 2);
     assert_eq!(tree.tree[0].path, "file.rb");
     assert_eq!(tree.tree[0].entry_type, "blob");
     assert_eq!(tree.tree[1].path, "subdir");
     assert_eq!(tree.tree[1].entry_type, "tree");
-    assert!(!tree.truncated);
     handle.join().expect("join server thread");
   }
 
@@ -2714,22 +2264,9 @@ mod tests {
       .fetch_pull_request_details("acme", "widget", 42)
       .expect("fetch pull request details");
     assert_eq!(details.node_id, "PR_kwDOExample");
-    assert_eq!(details.number, 42);
     assert_eq!(details.head_ref_name, "feature/parser");
     assert_eq!(details.author.login, "octocat");
-    assert_eq!(details.assignees[0].login, "alice");
     assert_eq!(details.requested_reviewers[0].login, "bob");
-    assert_eq!(details.comments, 2);
-    assert_eq!(details.review_comments, 3);
-    assert_eq!(
-      details
-        .head_repository
-        .as_ref()
-        .expect("head repo")
-        .repo
-        .as_str(),
-      "widget-fork"
-    );
     handle.join().expect("join server thread");
   }
 
@@ -2916,19 +2453,13 @@ mod tests {
       .fetch_pull_request_checks("acme", "widget", 42)
       .expect("fetch pull request checks");
 
-    assert_eq!(checks.head_sha, "head123");
     assert_eq!(
       checks.overall_state,
       GithubPullRequestChecksRollupState::Failure
     );
-    assert_eq!(
-      checks.required_state,
-      GithubPullRequestChecksRollupState::Pending
-    );
     assert_eq!(checks.missing_required_contexts, vec!["deploy"]);
     assert_eq!(checks.actions_runs.len(), 1);
     assert_eq!(checks.actions_runs[0].jobs.len(), 1);
-    assert_eq!(checks.actions_runs[0].jobs[0].steps.len(), 1);
     assert_eq!(
       checks.actions_runs[0].jobs[0].app_avatar_url.as_deref(),
       Some("https://avatars.githubusercontent.com/in/15368?v=4")
@@ -3045,7 +2576,7 @@ mod tests {
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let result = api
+    api
       .merge_pull_request(
         "acme",
         "widget",
@@ -3057,9 +2588,6 @@ mod tests {
       )
       .expect("merge pull request");
 
-    assert!(result.merged);
-    assert_eq!(result.sha, "merged123");
-    assert_eq!(result.method, GithubPullRequestMergeMethod::Squash);
     handle.join().expect("join server thread");
   }
 
@@ -3076,7 +2604,7 @@ mod tests {
     let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let _ = api
+    api
       .merge_pull_request(
         "acme",
         "widget",
@@ -3113,7 +2641,7 @@ mod tests {
     let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let _ = api
+    api
       .merge_pull_request(
         "acme",
         "widget",
@@ -3219,7 +2747,6 @@ mod tests {
       .fetch_pull_request_conversation("acme", "widget", 42)
       .expect("fetch pull request conversation");
     assert_eq!(conversation.pull_request.node_id, "PR_kwDOExample");
-    assert_eq!(conversation.issue_comments[0].node_id, "IC_kwDOExample");
     assert_eq!(
       conversation.reviews[0].state,
       GithubPullRequestReviewState::Approved
@@ -3420,7 +2947,7 @@ mod tests {
         "LGTM",
       )
       .expect("submit pending review");
-    assert_eq!(review.id, 12);
+    assert_eq!(review.state, GithubPullRequestReviewState::Approved);
 
     handle.join().expect("join server thread");
     let request = request
@@ -3585,7 +3112,6 @@ mod tests {
       )
       .expect("submit pull request review");
 
-    assert_eq!(review.id, 123);
     assert_eq!(review.state, GithubPullRequestReviewState::Approved);
     assert_eq!(review.body.as_deref(), Some("Ship it"));
     assert_eq!(
@@ -3621,7 +3147,6 @@ mod tests {
       )
       .expect("submit pull request review");
 
-    assert_eq!(review.id, 124);
     assert_eq!(review.state, GithubPullRequestReviewState::Commented);
     assert_eq!(review.body.as_deref(), Some("Looks good to me"));
     handle.join().expect("join server thread");
@@ -3786,7 +3311,6 @@ mod tests {
       .start_pending_review("acme", "widget", 42, "PR_kwDOExample")
       .expect("start pending review");
 
-    assert_eq!(review.id, 500);
     assert_eq!(review.state, GithubPullRequestReviewState::Pending);
     assert_eq!(review.node_id, "PRR_kwDOPending");
     handle.join().expect("join server thread");
@@ -4688,7 +4212,6 @@ mod tests {
       .expect("check desktop update");
     assert!(payload.update_available);
     assert!(!payload.force_update);
-    assert_eq!(payload.current_version, "0.1.0");
     assert_eq!(payload.latest_version, "0.2.0");
     assert_eq!(payload.minimum_supported_version, "0.1.0");
     assert_eq!(

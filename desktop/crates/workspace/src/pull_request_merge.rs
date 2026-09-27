@@ -148,8 +148,6 @@ mod tests {
       default_method: Some(GithubPullRequestMergeMethod::Squash),
       can_merge_now: true,
       viewer_can_merge: true,
-      mergeable_state: None,
-      rebaseable: None,
       commit_defaults: None,
     }
   }

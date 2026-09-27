@@ -550,11 +550,7 @@ mod tests {
   fn make_repository_tree_entry(path: &str) -> crate::api::GithubRepositoryTreeEntry {
     crate::api::GithubRepositoryTreeEntry {
       path: path.to_string(),
-      mode: "100644".to_string(),
       entry_type: "blob".to_string(),
-      sha: "deadbeef".to_string(),
-      size: Some(128),
-      url: None,
     }
   }
 

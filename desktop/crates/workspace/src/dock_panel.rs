@@ -8331,8 +8331,6 @@ mod tests {
       available_methods: methods,
       can_merge_now: true,
       viewer_can_merge: true,
-      mergeable_state: None,
-      rebaseable: None,
       commit_defaults: None,
     }
   }
