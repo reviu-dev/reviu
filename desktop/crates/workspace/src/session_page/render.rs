@@ -15,6 +15,9 @@ use gpui_component::{
 };
 
 const CENTER_NEW_MENU_MAX_HEIGHT_PX: f32 = 360.0;
+const CENTER_HISTORY_EMPTY_HEIGHT_PX: f32 = 96.0;
+const CENTER_HISTORY_MAX_VISIBLE_ROWS: usize = 7;
+const CENTER_HISTORY_ROW_HEIGHT_PX: f32 = 48.0;
 const CENTER_SPLIT_MIN_WIDTH_PX: f32 = 240.0;
 const CENTER_SPLIT_MIN_HEIGHT_PX: f32 = 160.0;
 
@@ -929,16 +932,10 @@ impl SessionPage {
           })
           .map(|item| item.id.clone())
           .collect::<Vec<_>>();
-        let visible_rows = items.len().clamp(1, 8) as f32;
-        let list_height = if items.is_empty() {
-          px(148.0)
-        } else {
-          px((visible_rows * 48.0).min(360.0))
-        };
+        let history_scrolls = items.len() > CENTER_HISTORY_MAX_VISIBLE_ROWS;
+        let history_list_height =
+          px(CENTER_HISTORY_MAX_VISIBLE_ROWS as f32 * CENTER_HISTORY_ROW_HEIGHT_PX);
         let mut list = v_flex();
-        if items.is_empty() {
-          list = list.child(Self::render_center_history_empty(&theme));
-        }
         for item in items.clone() {
           let tab = CenterTab::chat_for(item.id.clone());
           let open_page = page.clone();
@@ -960,6 +957,7 @@ impl SessionPage {
               .items_center()
               .flex_shrink_0()
               .gap_2()
+              .h(px(CENTER_HISTORY_ROW_HEIGHT_PX))
               .px_3()
               .py_2()
               .min_w(px(300.0))
@@ -1062,6 +1060,26 @@ impl SessionPage {
           );
         }
 
+        let history_body = if items.is_empty() {
+          div()
+            .debug_selector(|| "session-center-history-list".to_string())
+            .h(px(CENTER_HISTORY_EMPTY_HEIGHT_PX))
+            .child(Self::render_center_history_empty(&theme))
+            .into_any_element()
+        } else if history_scrolls {
+          div()
+            .debug_selector(|| "session-center-history-list".to_string())
+            .h(history_list_height)
+            .overflow_hidden()
+            .child(list.size_full().overflow_y_scrollbar())
+            .into_any_element()
+        } else {
+          div()
+            .debug_selector(|| "session-center-history-list".to_string())
+            .child(list)
+            .into_any_element()
+        };
+
         v_flex()
           .debug_selector(|| "session-center-history-popover".to_string())
           .w(px(360.0))
@@ -1120,66 +1138,25 @@ impl SessionPage {
                   })
               }),
           )
-          .child(
-            div()
-              .debug_selector(|| "session-center-history-list".to_string())
-              .h(list_height)
-              .overflow_hidden()
-              .child(list.size_full().overflow_y_scrollbar()),
-          )
+          .child(history_body)
       })
       .into_any_element()
   }
 
   fn render_center_history_empty(theme: &gpui_component::Theme) -> AnyElement {
-    v_flex()
+    div()
       .debug_selector(|| "session-center-history-empty".to_string())
-      .p_3()
+      .size_full()
+      .flex()
+      .items_center()
+      .justify_center()
+      .px_3()
       .child(
-        h_flex()
-          .w_full()
-          .items_center()
-          .gap_3()
-          .rounded(px(16.0))
-          .border_1()
-          .border_color(theme.border.opacity(0.75))
-          .bg(theme.secondary.opacity(0.45))
-          .p_4()
-          .child(
-            h_flex()
-              .size(px(54.0))
-              .flex_shrink_0()
-              .items_center()
-              .justify_center()
-              .rounded(px(16.0))
-              .border_1()
-              .border_color(theme.primary.opacity(0.22))
-              .bg(theme.primary.opacity(0.10))
-              .child(
-                gpui_component::Icon::new(UiIconName::History)
-                  .size_6()
-                  .text_color(theme.primary),
-              ),
-          )
-          .child(
-            v_flex()
-              .min_w_0()
-              .gap_1()
-              .child(
-                div()
-                  .text_sm()
-                  .font_weight(gpui::FontWeight::SEMIBOLD)
-                  .text_color(theme.foreground)
-                  .child("No chat history yet"),
-              )
-              .child(
-                div()
-                  .text_xs()
-                  .line_height(px(17.0))
-                  .text_color(theme.muted_foreground)
-                  .child("Closed chats will appear here so you can reopen them quickly."),
-              ),
-          ),
+        div()
+          .debug_selector(|| "session-center-history-empty-label".to_string())
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child("No chat history yet"),
       )
       .into_any_element()
   }
@@ -6026,6 +6003,106 @@ mod tests {
     assert_eq!(history_ids(&page, cx), vec!["worktree-chat".to_string()]);
 
     let _ = git::remove_worktree(&repo.path, &worktree.path);
+  }
+
+  #[gpui::test]
+  async fn center_history_empty_state_is_simple_and_centered(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-history-empty");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (_page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let history = cx
+      .debug_bounds("session-center-history")
+      .expect("history button");
+    cx.simulate_click(history.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let list = cx
+      .debug_bounds("session-center-history-list")
+      .expect("history list");
+    let empty = cx
+      .debug_bounds("session-center-history-empty-label")
+      .expect("empty history label");
+
+    assert_eq!(list.size.height, px(CENTER_HISTORY_EMPTY_HEIGHT_PX));
+    assert!(
+      (empty.center().y - list.center().y).abs() < px(1.0),
+      "the simple empty state is vertically centered in the body"
+    );
+  }
+
+  #[gpui::test]
+  async fn center_history_short_lists_do_not_scroll(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-history-short");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let now = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or(0);
+    let store = page.update(cx, |page, cx| {
+      let access = page
+        .chat_store_for_project(&repo.path, cx)
+        .expect("chat store");
+      page.chat_store = Some(access.store.clone());
+      access.store
+    });
+    for (id, updated_at_secs) in [("short-a", now), ("short-b", now.saturating_sub(1))] {
+      store.update(cx, |store, _| {
+        store.insert_meta_for_test(agent_chat_panel::ConversationMeta {
+          id: id.to_string(),
+          started_at_secs: updated_at_secs,
+          updated_at_secs,
+          title: id.to_string(),
+          message_count: 1,
+          agent_id: agent_chat_panel::default_agent_id(),
+          session_id: None,
+          preview: id.to_string(),
+        });
+      });
+    }
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let history = cx
+      .debug_bounds("session-center-history")
+      .expect("history button");
+    cx.simulate_click(history.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let first_row = cx
+      .debug_bounds("session-history-chat-row-short-a")
+      .expect("newest conversation in history");
+    let first_row_y = first_row.origin.y;
+    let list = cx
+      .debug_bounds("session-center-history-list")
+      .expect("history list");
+
+    assert_eq!(
+      list.size.height,
+      px(CENTER_HISTORY_ROW_HEIGHT_PX * 2.0),
+      "short history lists shrink to their rows instead of reserving scroll space"
+    );
+
+    cx.simulate_event(gpui::ScrollWheelEvent {
+      position: list.center(),
+      delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-180.))),
+      ..Default::default()
+    });
+    cx.run_until_parked();
+
+    let scrolled_row_y = cx
+      .debug_bounds("session-history-chat-row-short-a")
+      .expect("newest conversation after wheel")
+      .origin
+      .y;
+    assert_eq!(
+      scrolled_row_y, first_row_y,
+      "short history lists should not move on wheel events"
+    );
   }
 
   #[gpui::test]
