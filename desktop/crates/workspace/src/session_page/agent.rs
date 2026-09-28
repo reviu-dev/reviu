@@ -1351,31 +1351,57 @@ impl SessionPage {
     // Decided before parking: a pinned checkout only holds while the chat it
     // was pinned on stays shown.
     let worktree = self.worktree_for_new_chat(&project_root, cx);
+    let target_cwd = worktree
+      .as_ref()
+      .map(|binding| binding.path.clone())
+      .unwrap_or_else(|| project_root.clone());
+    let target_agent = agent_id.unwrap_or_else(AgentSettings::load);
+    let mut keep_blank_active_chat = false;
     if let Some(panel) = self.agent_chat_view.clone() {
       // The shown conversation is still blank: it already is the new session.
       // Not while hydrating (its transcript may be about to land) and not when
-      // its connection died (a fresh panel is the revival).
-      let target_cwd = worktree
-        .as_ref()
-        .map_or(project_root.as_path(), |binding| binding.path.as_path());
-      let reusable = {
+      // its connection died (a fresh panel is the revival). The selected agent
+      // is part of the session identity: a blank chat for another agent remains
+      // a separate tab.
+      let (blank_same_place, needs_reconnect, same_agent, has_unsent_prompt) = {
         let panel = panel.read(cx);
-        !panel.has_persistable_content()
-          && panel.loading_conversation_id().is_none()
-          && !panel.needs_reconnect()
-          && panel.project_root() == project_root.as_path()
-          && panel.cwd() == target_cwd
+        (
+          !panel.has_persistable_content()
+            && panel.loading_conversation_id().is_none()
+            && panel.project_root() == project_root.as_path()
+            && panel.cwd() == target_cwd.as_path(),
+          panel.needs_reconnect(),
+          panel.backend_kind() == &target_agent,
+          panel.has_unsent_prompt(cx),
+        )
       };
-      if reusable {
-        if let Some(agent_id) = agent_id {
-          panel.update(cx, |panel, cx| panel.switch_backend(agent_id, cx));
-        }
+      if blank_same_place && !needs_reconnect && same_agent {
         self.reveal_active_session_chat(window, cx);
         return;
       }
+      keep_blank_active_chat = blank_same_place && !same_agent && !has_unsent_prompt;
     }
-    self.park_active_chat_panel(cx);
-    let view = self.build_fresh_chat_panel(project_root, store, worktree, agent_id, window, cx);
+    let parked_blank_active_tab = keep_blank_active_chat.then(|| self.active_chat_tab(cx));
+    if let Some(tab) = parked_blank_active_tab {
+      self.park_visible_active_chat_panel(cx);
+      if !self.center_tabs.contains(&tab) {
+        self.center_tabs.push(tab.clone());
+      }
+      self
+        .center_layouts_by_tab
+        .entry(tab.clone())
+        .or_insert_with(|| CenterLayout::single(CenterSurface::from_tab(tab)));
+    } else {
+      self.park_active_chat_panel(cx);
+    }
+    let view = self.build_fresh_chat_panel(
+      project_root,
+      store,
+      worktree,
+      Some(target_agent),
+      window,
+      cx,
+    );
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.remember_active_chat_tab(cx);
@@ -6762,6 +6788,54 @@ mod tests {
       assert!(page.background_chat_panels.is_empty());
       let store = page.chat_store.as_ref().expect("store").read(cx);
       assert!(store.list().is_empty(), "nothing blank was persisted");
+    });
+  }
+
+  #[gpui::test]
+  async fn a_blank_session_with_another_agent_does_not_block_new_chat(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-blank-other-agent");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let default_agent = AgentSettings::load();
+    let other_agent = if default_agent == agent_registry::AgentId::new("pi-acp") {
+      agent_registry::AgentId::new("codex-acp")
+    } else {
+      agent_registry::AgentId::new("pi-acp")
+    };
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_session_with_agent(other_agent.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    let other_id = active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(panel.backend_kind(), &other_agent);
+      panel.current_conversation().id.clone()
+    });
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+
+    let default_id = active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(panel.backend_kind(), &default_agent);
+      panel.current_conversation().id.clone()
+    });
+    assert_ne!(default_id, other_id);
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page
+          .center_tabs
+          .contains(&CenterTab::chat_for(other_id.clone()))
+      );
+      assert!(page.center_tabs.contains(&CenterTab::chat_for(default_id)));
+      assert!(page.chat_panel_for_id(&other_id, cx).is_some());
+      let store = page.chat_store.as_ref().expect("store").read(cx);
+      assert!(store.list().is_empty(), "blank chats stay out of history");
     });
   }
 
