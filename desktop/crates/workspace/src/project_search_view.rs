@@ -25,12 +25,14 @@ use gpui_component::{
   h_flex,
   input::{Input, InputEvent, InputState},
   list::ListItem,
-  menu::{DropdownMenu as _, PopupMenuItem},
   scroll::Scrollbar,
   spinner::Spinner,
   v_flex, v_virtual_list,
 };
 
+use crate::center_pane_controls::{
+  CenterPaneControlActions, CenterPaneControlIds, render_center_pane_controls,
+};
 use crate::diff_toolbar::DIFF_TOOLBAR_HEIGHT;
 use ui::{FILE_ICON_SIZE_PX, UiIconName, file_icon_path_for_path_with_theme};
 
@@ -53,24 +55,6 @@ pub(crate) struct ProjectSearchOpenRequest {
 
 pub(crate) type ProjectSearchHandler =
   Arc<dyn Fn(ProjectSearchOpenRequest, &mut Window, &mut App) -> Result<(), SharedString>>;
-
-type ProjectSearchPaneCommand = Rc<dyn Fn(&mut Window, &mut App)>;
-type ProjectSearchPaneEnabled = Rc<dyn Fn(&App) -> bool>;
-
-#[derive(Clone)]
-pub(crate) struct ProjectSearchPaneActions {
-  pub visible: ProjectSearchPaneEnabled,
-  pub move_left_enabled: ProjectSearchPaneEnabled,
-  pub move_right_enabled: ProjectSearchPaneEnabled,
-  pub move_up_enabled: ProjectSearchPaneEnabled,
-  pub move_down_enabled: ProjectSearchPaneEnabled,
-  pub move_left: ProjectSearchPaneCommand,
-  pub move_right: ProjectSearchPaneCommand,
-  pub move_up: ProjectSearchPaneCommand,
-  pub move_down: ProjectSearchPaneCommand,
-  pub separate: ProjectSearchPaneCommand,
-  pub close: ProjectSearchPaneCommand,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProjectSearchMatch {
@@ -134,7 +118,7 @@ pub(crate) struct ProjectSearchView {
   include_hidden: bool,
   error: Option<SharedString>,
   on_open: ProjectSearchHandler,
-  pane_actions: ProjectSearchPaneActions,
+  pane_actions: CenterPaneControlActions,
   scroll_handle: VirtualListScrollHandle,
   search_generation: u64,
   latest_search_generation: Arc<AtomicU64>,
@@ -150,7 +134,7 @@ impl ProjectSearchView {
     files: Vec<PathBuf>,
     loading_files: bool,
     on_open: ProjectSearchHandler,
-    pane_actions: ProjectSearchPaneActions,
+    pane_actions: CenterPaneControlActions,
   ) -> Self {
     let query_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
     let include_input =
@@ -903,61 +887,17 @@ impl Render for ProjectSearchView {
                       .when(self.searching, |this| this.child(Spinner::new().small()))
                       .child(result_count_label),
                   )
-                  .when(pane_actions_visible, |this| {
-                    let move_actions = pane_actions.clone();
-                    let close_actions = pane_actions.clone();
-                    this
-                      .child(
-                        Button::new("project-search-pane-actions")
-                          .debug_selector(|| "project-search-pane-actions".to_string())
-                          .icon(IconName::Ellipsis)
-                          .ghost()
-                          .xsmall()
-                          .compact()
-                          .dropdown_menu(move |menu, _, cx| {
-                            let move_left = move_actions.move_left.clone();
-                            let move_right = move_actions.move_right.clone();
-                            let move_up = move_actions.move_up.clone();
-                            let move_down = move_actions.move_down.clone();
-                            let separate = move_actions.separate.clone();
-                            menu
-                              .item(
-                                PopupMenuItem::new("Move Left")
-                                  .disabled(!(move_actions.move_left_enabled)(cx))
-                                  .on_click(move |_, window, cx| move_left(window, cx)),
-                              )
-                              .item(
-                                PopupMenuItem::new("Move Right")
-                                  .disabled(!(move_actions.move_right_enabled)(cx))
-                                  .on_click(move |_, window, cx| move_right(window, cx)),
-                              )
-                              .item(
-                                PopupMenuItem::new("Move Up")
-                                  .disabled(!(move_actions.move_up_enabled)(cx))
-                                  .on_click(move |_, window, cx| move_up(window, cx)),
-                              )
-                              .item(
-                                PopupMenuItem::new("Move Down")
-                                  .disabled(!(move_actions.move_down_enabled)(cx))
-                                  .on_click(move |_, window, cx| move_down(window, cx)),
-                              )
-                              .separator()
-                              .item(
-                                PopupMenuItem::new("Separate Tab from Split")
-                                  .on_click(move |_, window, cx| separate(window, cx)),
-                              )
-                          }),
-                      )
-                      .child(
-                        Button::new("project-search-close-pane")
-                          .debug_selector(|| "project-search-close-pane".to_string())
-                          .icon(IconName::Close)
-                          .ghost()
-                          .xsmall()
-                          .compact()
-                          .on_click(move |_, window, cx| (close_actions.close)(window, cx)),
-                      )
-                  }),
+                  .children(pane_actions_visible.then(|| {
+                    render_center_pane_controls(
+                      pane_actions.clone(),
+                      CenterPaneControlIds {
+                        actions_id: "project-search-pane-actions".to_string(),
+                        actions_debug_selector: "project-search-pane-actions",
+                        close_id: "project-search-close-pane".to_string(),
+                        close_debug_selector: "project-search-close-pane",
+                      },
+                    )
+                  })),
               ),
           )
           .when(filters_open, |this| {

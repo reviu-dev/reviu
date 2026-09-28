@@ -81,11 +81,12 @@ use sentry::protocol::Map;
 use crate::annotations::{AnnotationDirection, navigate_annotation};
 #[cfg(test)]
 use crate::annotations::{AnnotationNavigationState, annotation_navigation_state_for};
+use crate::center_pane_controls::CenterPaneControlActions;
 use crate::palette_branches::{
   delete_branch_candidates, palette_branch, palette_stashes, rebase_branch_candidates,
 };
 use crate::project_search_view::{
-  ProjectSearchHandler, ProjectSearchOpenRequest, ProjectSearchPaneActions, ProjectSearchView,
+  ProjectSearchHandler, ProjectSearchOpenRequest, ProjectSearchView,
 };
 use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_dialog};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
@@ -3121,9 +3122,12 @@ impl SessionPage {
     cx.notify();
   }
 
-  fn project_search_pane_actions(&self, cx: &mut Context<Self>) -> ProjectSearchPaneActions {
+  fn center_pane_control_actions(
+    &self,
+    tab: CenterTab,
+    cx: &mut Context<Self>,
+  ) -> CenterPaneControlActions {
     let page = cx.entity().downgrade();
-    let tab = CenterTab::project_search();
     let visible_page = page.clone();
     let move_left_page = page.clone();
     let move_right_page = page.clone();
@@ -3136,7 +3140,7 @@ impl SessionPage {
     let separate_page = page.clone();
     let close_page = page.clone();
 
-    ProjectSearchPaneActions {
+    CenterPaneControlActions {
       visible: Rc::new(move |cx| {
         visible_page
           .read_with(cx, |page, _| page.center_layout.surface_count() > 1)
@@ -3277,7 +3281,7 @@ impl SessionPage {
           });
           Ok(())
         });
-      let pane_actions = self.project_search_pane_actions(cx);
+      let pane_actions = self.center_pane_control_actions(CenterTab::project_search(), cx);
       self.project_search_view = Some(cx.new(|cx| {
         ProjectSearchView::new(
           window,

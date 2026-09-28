@@ -5,6 +5,7 @@ use super::*;
 #[cfg(test)]
 use crate::annotations::AnnotationKind;
 use crate::center_file_drag::{CenterFileDrag, CenterFileDragMode};
+use crate::center_pane_controls::{CenterPaneControlIds, render_center_pane_controls};
 use crate::diff_toolbar::{DIFF_TOOLBAR_HEIGHT, DiffToolbar, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
 use gpui_component::{
@@ -2448,107 +2449,22 @@ impl SessionPage {
     )
   }
 
-  fn render_center_surface_actions(&self, tab: CenterTab, cx: &mut Context<Self>) -> AnyElement {
-    let page = cx.entity().clone();
-    let move_left_enabled = self
-      .center_layout
-      .can_move_surface_to_edge(&tab, CenterSplitDirection::Left);
-    let move_right_enabled = self
-      .center_layout
-      .can_move_surface_to_edge(&tab, CenterSplitDirection::Right);
-    let move_up_enabled = self
-      .center_layout
-      .can_move_surface_to_edge(&tab, CenterSplitDirection::Up);
-    let move_down_enabled = self
-      .center_layout
-      .can_move_surface_to_edge(&tab, CenterSplitDirection::Down);
-
-    Button::new(Self::center_surface_control_id(
-      "session-page-center-surface-actions",
-      &tab,
-    ))
-    .debug_selector(|| "session-page-center-surface-actions".to_string())
-    .icon(gpui_component::IconName::Ellipsis)
-    .xsmall()
-    .ghost()
-    .dropdown_menu(move |menu, _, _| {
-      let move_left_page = page.clone();
-      let move_left_tab = tab.clone();
-      let move_right_page = page.clone();
-      let move_right_tab = tab.clone();
-      let move_up_page = page.clone();
-      let move_up_tab = tab.clone();
-      let move_down_page = page.clone();
-      let move_down_tab = tab.clone();
-      let separate_page = page.clone();
-      let separate_tab = tab.clone();
-      menu
-        .item(
-          PopupMenuItem::new("Move Left")
-            .disabled(!move_left_enabled)
-            .on_click(move |_, window, cx| {
-              move_left_page.update(cx, |page, cx| {
-                page.move_center_surface_to_edge(
-                  move_left_tab.clone(),
-                  CenterSplitDirection::Left,
-                  window,
-                  cx,
-                );
-              });
-            }),
-        )
-        .item(
-          PopupMenuItem::new("Move Right")
-            .disabled(!move_right_enabled)
-            .on_click(move |_, window, cx| {
-              move_right_page.update(cx, |page, cx| {
-                page.move_center_surface_to_edge(
-                  move_right_tab.clone(),
-                  CenterSplitDirection::Right,
-                  window,
-                  cx,
-                );
-              });
-            }),
-        )
-        .item(
-          PopupMenuItem::new("Move Up")
-            .disabled(!move_up_enabled)
-            .on_click(move |_, window, cx| {
-              move_up_page.update(cx, |page, cx| {
-                page.move_center_surface_to_edge(
-                  move_up_tab.clone(),
-                  CenterSplitDirection::Up,
-                  window,
-                  cx,
-                );
-              });
-            }),
-        )
-        .item(
-          PopupMenuItem::new("Move Down")
-            .disabled(!move_down_enabled)
-            .on_click(move |_, window, cx| {
-              move_down_page.update(cx, |page, cx| {
-                page.move_center_surface_to_edge(
-                  move_down_tab.clone(),
-                  CenterSplitDirection::Down,
-                  window,
-                  cx,
-                );
-              });
-            }),
-        )
-        .separator()
-        .item(
-          PopupMenuItem::new("Separate Tab from Split").on_click(move |_, window, cx| {
-            separate_page.update(cx, |page, cx| {
-              page.separate_center_surface(separate_tab.clone(), window, cx);
-            });
-          }),
-        )
+  fn render_center_surface_pane_controls(
+    &self,
+    tab: CenterTab,
+    cx: &mut Context<Self>,
+  ) -> Option<AnyElement> {
+    (self.center_layout.surface_count() > 1).then(|| {
+      render_center_pane_controls(
+        self.center_pane_control_actions(tab.clone(), cx),
+        CenterPaneControlIds {
+          actions_id: Self::center_surface_control_id("session-page-center-surface-actions", &tab),
+          actions_debug_selector: "session-page-center-surface-actions",
+          close_id: Self::center_surface_control_id("session-page-close-center-surface", &tab),
+          close_debug_selector: "session-page-close-center-surface",
+        },
+      )
     })
-    .into_any_element()
   }
 
   fn render_diff_header(&self, tab: &CenterTab, cx: &mut Context<Self>) -> AnyElement {
@@ -2710,26 +2626,8 @@ impl SessionPage {
       );
     }
 
-    if self.center_layout.surface_count() > 1 {
-      let tab = tab.clone();
-      let close_button_id =
-        Self::center_surface_control_id("session-page-close-center-surface", &tab);
-      let page = cx.entity().clone();
-      toolbar = toolbar
-        .after_toggles(self.render_center_surface_actions(tab.clone(), cx))
-        .after_toggles(
-          Button::new(close_button_id)
-            .debug_selector(|| "session-page-close-center-surface".to_string())
-            .icon(gpui_component::IconName::Close)
-            .xsmall()
-            .ghost()
-            .on_click(move |_, window, cx| {
-              page.update(cx, |page, cx| {
-                page.close_center_surface(tab.clone(), window, cx);
-              });
-            })
-            .into_any_element(),
-        );
+    if let Some(controls) = self.render_center_surface_pane_controls(tab.clone(), cx) {
+      toolbar = toolbar.after_toggles(controls);
     }
 
     if active_editor
@@ -2864,9 +2762,7 @@ impl SessionPage {
       return body().into_any_element();
     }
 
-    let close_button_id =
-      Self::center_surface_control_id("session-page-close-center-surface", &tab);
-    let page = cx.entity().clone();
+    let controls = self.render_center_surface_pane_controls(tab.clone(), cx);
     v_flex()
       .size_full()
       .min_w(px(0.0))
@@ -2904,24 +2800,7 @@ impl SessionPage {
                   .child(self.terminal_label(&tab, cx)),
               ),
           )
-          .child(
-            h_flex()
-              .items_center()
-              .gap_1()
-              .child(self.render_center_surface_actions(tab.clone(), cx))
-              .child(
-                Button::new(close_button_id)
-                  .debug_selector(|| "session-page-close-center-surface".to_string())
-                  .icon(gpui_component::IconName::Close)
-                  .xsmall()
-                  .ghost()
-                  .on_click(move |_, window, cx| {
-                    page.update(cx, |page, cx| {
-                      page.close_center_surface(tab.clone(), window, cx);
-                    });
-                  }),
-              ),
-          ),
+          .children(controls),
       )
       .child(div().flex_1().min_h_0().min_w(px(0.0)).child(body()))
       .into_any_element()
