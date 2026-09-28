@@ -5271,6 +5271,60 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn project_search_split_header_matches_pane_controls(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-project-search-split-header");
+    commit_text_file(&repo.path, Path::new("README.md"), "needle\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.show_global_search_action(&crate::ShowGlobalSearch, window, cx)
+    });
+    cx.run_until_parked();
+    page.update(cx, |page, cx| {
+      assert!(page.center_layout.split_active(
+        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(CenterTab::project_search());
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let header = cx
+      .debug_bounds("project-search-header")
+      .expect("project search header");
+    assert_eq!(header.size.height, px(DIFF_TOOLBAR_HEIGHT));
+    assert!(cx.debug_bounds("project-search-pane-actions").is_some());
+    let filters = cx
+      .debug_bounds("project-search-filters")
+      .expect("project search filters button");
+    let close = cx
+      .debug_bounds("project-search-close-pane")
+      .expect("project search close pane button");
+    assert!(close.right() >= header.right() - px(12.0));
+
+    cx.simulate_click(filters.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    let filters_row = cx
+      .debug_bounds("project-search-filters-row")
+      .expect("project search filters row");
+    assert_eq!(filters_row.size.height, px(DIFF_TOOLBAR_HEIGHT));
+
+    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(
+        !page
+          .center_layout
+          .contains_tab(&CenterTab::project_search())
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn activating_project_search_preserves_tab_order(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-render-project-search-order");
     commit_text_file(&repo.path, Path::new("README.md"), "needle\n", "initial");

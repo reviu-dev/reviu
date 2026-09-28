@@ -408,8 +408,9 @@ mod tests {
   use super::*;
   use crate::session_page::center_layout::{CenterNode, CenterPaneId, CenterSplitDirection};
   use crate::session_page::test_support::{
-    add_session_page_window_from_config, isolate_config_store_for_test,
+    add_session_page_window, add_session_page_window_from_config, isolate_config_store_for_test,
   };
+  use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
 
   fn split_of(first: CenterTab, second: CenterTab) -> CenterLayout {
@@ -484,6 +485,42 @@ mod tests {
       }
     });
     panel.read_with(cx, |panel, _| panel.current_conversation().id.clone())
+  }
+
+  #[gpui::test]
+  fn project_search_split_creates_visible_search_view(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("center-persistence-project-search");
+    commit_text_file(
+      &repo.path,
+      std::path::Path::new("README.md"),
+      "needle\n",
+      "initial",
+    );
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      let file = CenterTab::file(PathBuf::from("README.md"));
+      let search = CenterTab::project_search();
+      let mut layout = split_of(file.clone(), search.clone());
+      layout.set_active_surface(CenterSurface::from_tab(file.clone()));
+      page.center_tabs = vec![file.clone()];
+      page.center_layouts_by_tab.insert(file.clone(), layout);
+      page.project_search_view = None;
+      page.activate_center_tab(file, OpenIntent::Browse, window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(
+        page
+          .center_layout
+          .contains_tab(&CenterTab::project_search())
+      );
+      assert!(page.project_search_view.is_some());
+    });
   }
 
   #[gpui::test]

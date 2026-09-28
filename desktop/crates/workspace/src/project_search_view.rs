@@ -25,10 +25,13 @@ use gpui_component::{
   h_flex,
   input::{Input, InputEvent, InputState},
   list::ListItem,
+  menu::{DropdownMenu as _, PopupMenuItem},
   scroll::Scrollbar,
   spinner::Spinner,
   v_flex, v_virtual_list,
 };
+
+use crate::diff_toolbar::DIFF_TOOLBAR_HEIGHT;
 use ui::{FILE_ICON_SIZE_PX, UiIconName, file_icon_path_for_path_with_theme};
 
 use crate::project_files::list_project_search_files_with_options;
@@ -50,6 +53,24 @@ pub(crate) struct ProjectSearchOpenRequest {
 
 pub(crate) type ProjectSearchHandler =
   Arc<dyn Fn(ProjectSearchOpenRequest, &mut Window, &mut App) -> Result<(), SharedString>>;
+
+type ProjectSearchPaneCommand = Rc<dyn Fn(&mut Window, &mut App)>;
+type ProjectSearchPaneEnabled = Rc<dyn Fn(&App) -> bool>;
+
+#[derive(Clone)]
+pub(crate) struct ProjectSearchPaneActions {
+  pub visible: ProjectSearchPaneEnabled,
+  pub move_left_enabled: ProjectSearchPaneEnabled,
+  pub move_right_enabled: ProjectSearchPaneEnabled,
+  pub move_up_enabled: ProjectSearchPaneEnabled,
+  pub move_down_enabled: ProjectSearchPaneEnabled,
+  pub move_left: ProjectSearchPaneCommand,
+  pub move_right: ProjectSearchPaneCommand,
+  pub move_up: ProjectSearchPaneCommand,
+  pub move_down: ProjectSearchPaneCommand,
+  pub separate: ProjectSearchPaneCommand,
+  pub close: ProjectSearchPaneCommand,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProjectSearchMatch {
@@ -113,6 +134,7 @@ pub(crate) struct ProjectSearchView {
   include_hidden: bool,
   error: Option<SharedString>,
   on_open: ProjectSearchHandler,
+  pane_actions: ProjectSearchPaneActions,
   scroll_handle: VirtualListScrollHandle,
   search_generation: u64,
   latest_search_generation: Arc<AtomicU64>,
@@ -128,6 +150,7 @@ impl ProjectSearchView {
     files: Vec<PathBuf>,
     loading_files: bool,
     on_open: ProjectSearchHandler,
+    pane_actions: ProjectSearchPaneActions,
   ) -> Self {
     let query_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
     let include_input =
@@ -163,6 +186,7 @@ impl ProjectSearchView {
       include_hidden: false,
       error: None,
       on_open,
+      pane_actions,
       scroll_handle: VirtualListScrollHandle::new(),
       search_generation: 0,
       latest_search_generation: Arc::new(AtomicU64::new(0)),
@@ -719,6 +743,8 @@ impl Render for ProjectSearchView {
     let include_ignored = self.include_ignored;
     let include_hidden = self.include_hidden;
     let entity = cx.entity();
+    let pane_actions = self.pane_actions.clone();
+    let pane_actions_visible = (pane_actions.visible)(cx);
 
     v_flex()
       .size_full()
@@ -731,28 +757,27 @@ impl Render for ProjectSearchView {
       .bg(theme.background)
       .child(
         v_flex()
-          .gap_1()
-          .px_2()
-          .py_1p5()
-          .border_b_1()
-          .border_color(theme.border)
           .child(
             h_flex()
-              .gap_2()
+              .debug_selector(|| "project-search-header".to_string())
+              .h(px(DIFF_TOOLBAR_HEIGHT))
+              .min_h(px(DIFF_TOOLBAR_HEIGHT))
+              .max_h(px(DIFF_TOOLBAR_HEIGHT))
               .items_center()
+              .border_b_1()
+              .border_color(theme.border)
               .child(
                 div()
                   .flex_1()
                   .min_w(px(0.0))
-                  .h(px(32.0))
+                  .h_full()
                   .flex()
                   .items_center()
                   .gap_1()
-                  .pl_1()
-                  .pr_1()
-                  .border_1()
+                  .pl_2()
+                  .pr_2()
+                  .border_r_1()
                   .border_color(theme.border)
-                  .rounded_md()
                   .bg(theme.background)
                   .child(
                     div().flex_1().min_w(px(0.0)).child(
@@ -816,11 +841,14 @@ impl Render for ProjectSearchView {
               )
               .child(
                 h_flex()
-                  .w(px(224.0))
+                  .flex_none()
+                  .justify_end()
                   .gap_2()
                   .items_center()
+                  .px_2()
                   .child(
                     Button::new("project-search-filters")
+                      .debug_selector(|| "project-search-filters".to_string())
                       .icon(IconName::Settings2)
                       .ghost()
                       .xsmall()
@@ -874,26 +902,83 @@ impl Render for ProjectSearchView {
                       .text_color(theme.muted_foreground)
                       .when(self.searching, |this| this.child(Spinner::new().small()))
                       .child(result_count_label),
-                  ),
+                  )
+                  .when(pane_actions_visible, |this| {
+                    let move_actions = pane_actions.clone();
+                    let close_actions = pane_actions.clone();
+                    this
+                      .child(
+                        Button::new("project-search-pane-actions")
+                          .debug_selector(|| "project-search-pane-actions".to_string())
+                          .icon(IconName::Ellipsis)
+                          .ghost()
+                          .xsmall()
+                          .compact()
+                          .dropdown_menu(move |menu, _, cx| {
+                            let move_left = move_actions.move_left.clone();
+                            let move_right = move_actions.move_right.clone();
+                            let move_up = move_actions.move_up.clone();
+                            let move_down = move_actions.move_down.clone();
+                            let separate = move_actions.separate.clone();
+                            menu
+                              .item(
+                                PopupMenuItem::new("Move Left")
+                                  .disabled(!(move_actions.move_left_enabled)(cx))
+                                  .on_click(move |_, window, cx| move_left(window, cx)),
+                              )
+                              .item(
+                                PopupMenuItem::new("Move Right")
+                                  .disabled(!(move_actions.move_right_enabled)(cx))
+                                  .on_click(move |_, window, cx| move_right(window, cx)),
+                              )
+                              .item(
+                                PopupMenuItem::new("Move Up")
+                                  .disabled(!(move_actions.move_up_enabled)(cx))
+                                  .on_click(move |_, window, cx| move_up(window, cx)),
+                              )
+                              .item(
+                                PopupMenuItem::new("Move Down")
+                                  .disabled(!(move_actions.move_down_enabled)(cx))
+                                  .on_click(move |_, window, cx| move_down(window, cx)),
+                              )
+                              .separator()
+                              .item(
+                                PopupMenuItem::new("Separate Tab from Split")
+                                  .on_click(move |_, window, cx| separate(window, cx)),
+                              )
+                          }),
+                      )
+                      .child(
+                        Button::new("project-search-close-pane")
+                          .debug_selector(|| "project-search-close-pane".to_string())
+                          .icon(IconName::Close)
+                          .ghost()
+                          .xsmall()
+                          .compact()
+                          .on_click(move |_, window, cx| (close_actions.close)(window, cx)),
+                      )
+                  }),
               ),
           )
           .when(filters_open, |this| {
             this.child(
               h_flex()
-                .gap_2()
+                .debug_selector(|| "project-search-filters-row".to_string())
+                .h(px(DIFF_TOOLBAR_HEIGHT))
                 .items_center()
+                .border_b_1()
+                .border_color(theme.border)
                 .child(
                   div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .h(px(32.0))
+                    .h_full()
                     .flex()
                     .items_center()
-                    .pl_1()
-                    .pr_1()
-                    .border_1()
+                    .pl_2()
+                    .pr_2()
+                    .border_r_1()
                     .border_color(theme.border)
-                    .rounded_md()
                     .bg(theme.background)
                     .child(
                       Input::new(&include_input)
@@ -907,14 +992,13 @@ impl Render for ProjectSearchView {
                   div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .h(px(32.0))
+                    .h_full()
                     .flex()
                     .items_center()
-                    .pl_1()
-                    .pr_1()
-                    .border_1()
+                    .pl_2()
+                    .pr_2()
+                    .border_r_1()
                     .border_color(theme.border)
-                    .rounded_md()
                     .bg(theme.background)
                     .child(
                       Input::new(&exclude_input)
@@ -926,9 +1010,11 @@ impl Render for ProjectSearchView {
                 )
                 .child(
                   h_flex()
-                    .w(px(224.0))
+                    .flex_none()
+                    .justify_end()
                     .gap_2()
                     .items_center()
+                    .px_2()
                     .child(
                       Button::new("project-search-include-ignored")
                         .icon(UiIconName::FileX)

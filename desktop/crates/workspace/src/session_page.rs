@@ -85,7 +85,7 @@ use crate::palette_branches::{
   delete_branch_candidates, palette_branch, palette_stashes, rebase_branch_candidates,
 };
 use crate::project_search_view::{
-  ProjectSearchHandler, ProjectSearchOpenRequest, ProjectSearchView,
+  ProjectSearchHandler, ProjectSearchOpenRequest, ProjectSearchPaneActions, ProjectSearchView,
 };
 use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_dialog};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
@@ -1677,6 +1677,20 @@ impl SessionPage {
       .unwrap_or_else(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())));
   }
 
+  fn ensure_project_search_view_for_visible_layout(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self
+      .center_layout
+      .contains_tab(&CenterTab::project_search())
+      && let Some(repo_root) = self.checkout_root(cx)
+    {
+      self.ensure_project_search_view(repo_root, window, cx);
+    }
+  }
+
   fn detach_project_search_from_layouts(&mut self) {
     let tab = CenterTab::project_search();
     self.center_layouts_by_tab.retain(|representative, layout| {
@@ -2007,6 +2021,7 @@ impl SessionPage {
       .is_some_and(|layout| layout.surface_count() > 1);
     self.save_active_center_layout();
     self.restore_center_layout_for_tab(&tab);
+    self.ensure_project_search_view_for_visible_layout(window, cx);
     if requested_tab != tab && self.center_layout.contains_tab(&requested_tab) {
       self
         .center_layout
@@ -2035,11 +2050,6 @@ impl SessionPage {
         CenterTabKind::Terminal => CenterView::Terminal,
         CenterTabKind::PaneLauncher => CenterView::PaneLauncher,
       };
-      if focused_tab.kind == CenterTabKind::ProjectSearch
-        && let Some(repo_root) = self.checkout_root(cx)
-      {
-        self.ensure_project_search_view(repo_root, window, cx);
-      }
       self.sync_agent_chat_close_control(cx);
       self.clear_visible_finished_unseen_session(cx);
       match self.center {
@@ -3105,6 +3115,123 @@ impl SessionPage {
     cx.notify();
   }
 
+  fn project_search_pane_actions(&self, cx: &mut Context<Self>) -> ProjectSearchPaneActions {
+    let page = cx.entity().downgrade();
+    let tab = CenterTab::project_search();
+    let visible_page = page.clone();
+    let move_left_page = page.clone();
+    let move_right_page = page.clone();
+    let move_up_page = page.clone();
+    let move_down_page = page.clone();
+    let can_move_left_page = page.clone();
+    let can_move_right_page = page.clone();
+    let can_move_up_page = page.clone();
+    let can_move_down_page = page.clone();
+    let separate_page = page.clone();
+    let close_page = page.clone();
+
+    ProjectSearchPaneActions {
+      visible: Rc::new(move |cx| {
+        visible_page
+          .read_with(cx, |page, _| page.center_layout.surface_count() > 1)
+          .unwrap_or(false)
+      }),
+      move_left_enabled: Rc::new({
+        let tab = tab.clone();
+        move |cx| {
+          can_move_left_page
+            .read_with(cx, |page, _| {
+              page
+                .center_layout
+                .can_move_surface_to_edge(&tab, CenterSplitDirection::Left)
+            })
+            .unwrap_or(false)
+        }
+      }),
+      move_right_enabled: Rc::new({
+        let tab = tab.clone();
+        move |cx| {
+          can_move_right_page
+            .read_with(cx, |page, _| {
+              page
+                .center_layout
+                .can_move_surface_to_edge(&tab, CenterSplitDirection::Right)
+            })
+            .unwrap_or(false)
+        }
+      }),
+      move_up_enabled: Rc::new({
+        let tab = tab.clone();
+        move |cx| {
+          can_move_up_page
+            .read_with(cx, |page, _| {
+              page
+                .center_layout
+                .can_move_surface_to_edge(&tab, CenterSplitDirection::Up)
+            })
+            .unwrap_or(false)
+        }
+      }),
+      move_down_enabled: Rc::new({
+        let tab = tab.clone();
+        move |cx| {
+          can_move_down_page
+            .read_with(cx, |page, _| {
+              page
+                .center_layout
+                .can_move_surface_to_edge(&tab, CenterSplitDirection::Down)
+            })
+            .unwrap_or(false)
+        }
+      }),
+      move_left: Rc::new({
+        let tab = tab.clone();
+        move |window, cx| {
+          let _ = move_left_page.update(cx, |page, cx| {
+            page.move_center_surface_to_edge(tab.clone(), CenterSplitDirection::Left, window, cx)
+          });
+        }
+      }),
+      move_right: Rc::new({
+        let tab = tab.clone();
+        move |window, cx| {
+          let _ = move_right_page.update(cx, |page, cx| {
+            page.move_center_surface_to_edge(tab.clone(), CenterSplitDirection::Right, window, cx)
+          });
+        }
+      }),
+      move_up: Rc::new({
+        let tab = tab.clone();
+        move |window, cx| {
+          let _ = move_up_page.update(cx, |page, cx| {
+            page.move_center_surface_to_edge(tab.clone(), CenterSplitDirection::Up, window, cx)
+          });
+        }
+      }),
+      move_down: Rc::new({
+        let tab = tab.clone();
+        move |window, cx| {
+          let _ = move_down_page.update(cx, |page, cx| {
+            page.move_center_surface_to_edge(tab.clone(), CenterSplitDirection::Down, window, cx)
+          });
+        }
+      }),
+      separate: Rc::new({
+        let tab = tab.clone();
+        move |window, cx| {
+          let _ = separate_page.update(cx, |page, cx| {
+            page.separate_center_surface(tab.clone(), window, cx);
+          });
+        }
+      }),
+      close: Rc::new(move |window, cx| {
+        let _ = close_page.update(cx, |page, cx| {
+          page.close_center_surface(tab.clone(), window, cx);
+        });
+      }),
+    }
+  }
+
   fn ensure_project_search_view(
     &mut self,
     repo_root: PathBuf,
@@ -3144,6 +3271,7 @@ impl SessionPage {
           });
           Ok(())
         });
+      let pane_actions = self.project_search_pane_actions(cx);
       self.project_search_view = Some(cx.new(|cx| {
         ProjectSearchView::new(
           window,
@@ -3152,6 +3280,7 @@ impl SessionPage {
           repository_paths.clone(),
           !cache_is_fresh,
           handler,
+          pane_actions,
         )
       }));
     }
