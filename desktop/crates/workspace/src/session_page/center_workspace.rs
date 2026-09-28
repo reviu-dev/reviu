@@ -175,6 +175,53 @@ impl SessionPage {
     self.move_active_center_tab(1, cx);
   }
 
+  pub(super) fn move_center_pane_left_action(
+    &mut self,
+    _: &crate::MoveCenterPaneLeft,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.move_active_center_pane_to_edge(CenterSplitDirection::Left, window, cx);
+  }
+
+  pub(super) fn move_center_pane_right_action(
+    &mut self,
+    _: &crate::MoveCenterPaneRight,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.move_active_center_pane_to_edge(CenterSplitDirection::Right, window, cx);
+  }
+
+  pub(super) fn move_center_pane_up_action(
+    &mut self,
+    _: &crate::MoveCenterPaneUp,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.move_active_center_pane_to_edge(CenterSplitDirection::Up, window, cx);
+  }
+
+  pub(super) fn move_center_pane_down_action(
+    &mut self,
+    _: &crate::MoveCenterPaneDown,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.move_active_center_pane_to_edge(CenterSplitDirection::Down, window, cx);
+  }
+
+  fn move_active_center_pane_to_edge(
+    &mut self,
+    direction: CenterSplitDirection,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tab = self.center_layout.active_tab().clone();
+    self.move_center_surface_to_edge(tab, direction, window, cx);
+    cx.stop_propagation();
+  }
+
   fn move_active_center_tab(&mut self, direction: isize, cx: &mut Context<Self>) {
     let Some(active) = self.active_center_tab.as_ref() else {
       return;

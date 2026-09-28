@@ -383,6 +383,54 @@ fn keyboard_reordering_keeps_focus_and_stops_at_the_edges(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn moving_the_active_pane_uses_the_focused_split_surface(cx: &mut TestAppContext) {
+  let (_project, page, cx) = setup(cx);
+  let file = draft(&page, "move me", cx);
+  let chat = CenterTab::chat();
+  group(&page, &chat, &file, cx);
+
+  page.update_in(cx, |page, window, cx| {
+    page.move_center_pane_left_action(&crate::MoveCenterPaneLeft, window, cx);
+  });
+
+  page.read_with(cx, |page, _| {
+    assert_eq!(page.center_layout.active_tab(), &file);
+    let CenterNode::Split(split) = page.center_layout.root() else {
+      panic!("layout should stay split");
+    };
+    assert_eq!(split.direction(), CenterSplitDirection::Left);
+    let CenterNode::Pane(first) = split.first() else {
+      panic!("first side should be a pane");
+    };
+    let CenterNode::Pane(second) = split.second() else {
+      panic!("second side should be a pane");
+    };
+    assert_eq!(first.active_surface().tab(), &file);
+    assert_eq!(second.active_surface().tab(), &chat);
+  });
+
+  page.update_in(cx, |page, window, cx| {
+    page.move_center_pane_down_action(&crate::MoveCenterPaneDown, window, cx);
+  });
+
+  page.read_with(cx, |page, _| {
+    assert_eq!(page.center_layout.active_tab(), &file);
+    let CenterNode::Split(split) = page.center_layout.root() else {
+      panic!("layout should stay split");
+    };
+    assert_eq!(split.direction(), CenterSplitDirection::Down);
+    let CenterNode::Pane(first) = split.first() else {
+      panic!("first side should be a pane");
+    };
+    let CenterNode::Pane(second) = split.second() else {
+      panic!("second side should be a pane");
+    };
+    assert_eq!(first.active_surface().tab(), &chat);
+    assert_eq!(second.active_surface().tab(), &file);
+  });
+}
+
+#[gpui::test]
 fn a_group_can_be_closed_while_its_empty_chat_surface_is_focused(cx: &mut TestAppContext) {
   let (_project, page, cx) = setup(cx);
   let file = draft(&page, "", cx);

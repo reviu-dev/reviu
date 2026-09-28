@@ -18,7 +18,8 @@ use crate::config::ConfigStore;
 use crate::project_search_view::PROJECT_SEARCH_CONTEXT;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CloseCenterTab, CommentHunk,
-  CommitChanges, DeleteSelectedFileItem, ForcePushChanges, JumpToLatestMessage, NewAgentSession,
+  CommitChanges, DeleteSelectedFileItem, ForcePushChanges, JumpToLatestMessage, MoveCenterPaneDown,
+  MoveCenterPaneLeft, MoveCenterPaneRight, MoveCenterPaneUp, NewAgentSession,
   NewAgentWorktreeSession, NewFile, NewFileInFilesPanel, NextAnnotation, NextCenterTab,
   OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenProject,
   OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, OpenTerminalInSplitDown,
@@ -80,6 +81,10 @@ pub enum ShortcutId {
   PreviousCenterTab,
   MoveCenterTabLeft,
   MoveCenterTabRight,
+  MoveCenterPaneLeft,
+  MoveCenterPaneRight,
+  MoveCenterPaneUp,
+  MoveCenterPaneDown,
   OpenTerminalInSplitRight,
   OpenTerminalInSplitDown,
   CloseCenterTab,
@@ -127,6 +132,10 @@ impl ShortcutId {
       ShortcutId::PreviousCenterTab => "previous_center_tab",
       ShortcutId::MoveCenterTabLeft => "move_center_tab_left",
       ShortcutId::MoveCenterTabRight => "move_center_tab_right",
+      ShortcutId::MoveCenterPaneLeft => "move_center_pane_left",
+      ShortcutId::MoveCenterPaneRight => "move_center_pane_right",
+      ShortcutId::MoveCenterPaneUp => "move_center_pane_up",
+      ShortcutId::MoveCenterPaneDown => "move_center_pane_down",
       ShortcutId::OpenTerminalInSplitRight => "open_terminal_in_split_right",
       ShortcutId::OpenTerminalInSplitDown => "open_terminal_in_split_down",
       ShortcutId::CloseCenterTab => "close_center_tab",
@@ -174,6 +183,10 @@ impl ShortcutId {
       "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
       "move_center_tab_left" => Some(ShortcutId::MoveCenterTabLeft),
       "move_center_tab_right" => Some(ShortcutId::MoveCenterTabRight),
+      "move_center_pane_left" => Some(ShortcutId::MoveCenterPaneLeft),
+      "move_center_pane_right" => Some(ShortcutId::MoveCenterPaneRight),
+      "move_center_pane_up" => Some(ShortcutId::MoveCenterPaneUp),
+      "move_center_pane_down" => Some(ShortcutId::MoveCenterPaneDown),
       "open_terminal_in_split_right" => Some(ShortcutId::OpenTerminalInSplitRight),
       "open_terminal_in_split_down" => Some(ShortcutId::OpenTerminalInSplitDown),
       "close_center_tab" => Some(ShortcutId::CloseCenterTab),
@@ -237,7 +250,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 42] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 46] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -289,6 +302,50 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 42] = [
     scope_label: "Workspace",
     category: ShortcutCategory::Core,
     keystroke: "ctrl-shift-pagedown",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::MoveCenterPaneLeft,
+    title: "Move Pane Left",
+    description: "Move the active center pane to the left edge of the split group.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-alt-shift-left",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::MoveCenterPaneRight,
+    title: "Move Pane Right",
+    description: "Move the active center pane to the right edge of the split group.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-alt-shift-right",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::MoveCenterPaneUp,
+    title: "Move Pane Up",
+    description: "Move the active center pane to the top edge of the split group.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-alt-shift-up",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::MoveCenterPaneDown,
+    title: "Move Pane Down",
+    description: "Move the active center pane to the bottom edge of the split group.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-alt-shift-down",
     context: CENTER_TAB_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -813,6 +870,16 @@ impl ShortcutDefinition {
       ShortcutId::MoveCenterTabRight => {
         KeyBinding::new(keystroke, crate::MoveCenterTabRight, Some(&context))
       }
+      ShortcutId::MoveCenterPaneLeft => {
+        KeyBinding::new(keystroke, MoveCenterPaneLeft, Some(&context))
+      }
+      ShortcutId::MoveCenterPaneRight => {
+        KeyBinding::new(keystroke, MoveCenterPaneRight, Some(&context))
+      }
+      ShortcutId::MoveCenterPaneUp => KeyBinding::new(keystroke, MoveCenterPaneUp, Some(&context)),
+      ShortcutId::MoveCenterPaneDown => {
+        KeyBinding::new(keystroke, MoveCenterPaneDown, Some(&context))
+      }
       ShortcutId::OpenTerminalInSplitRight => {
         KeyBinding::new(keystroke, OpenTerminalInSplitRight, Some(&context))
       }
@@ -891,6 +958,10 @@ impl ShortcutDefinition {
         | ShortcutId::PreviousCenterTab
         | ShortcutId::MoveCenterTabLeft
         | ShortcutId::MoveCenterTabRight
+        | ShortcutId::MoveCenterPaneLeft
+        | ShortcutId::MoveCenterPaneRight
+        | ShortcutId::MoveCenterPaneUp
+        | ShortcutId::MoveCenterPaneDown
         | ShortcutId::OpenTerminalInSplitRight
         | ShortcutId::OpenTerminalInSplitDown
         | ShortcutId::CloseCenterTab
@@ -1507,6 +1578,10 @@ pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action
     ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
     ShortcutId::MoveCenterTabLeft => f(&crate::MoveCenterTabLeft),
     ShortcutId::MoveCenterTabRight => f(&crate::MoveCenterTabRight),
+    ShortcutId::MoveCenterPaneLeft => f(&MoveCenterPaneLeft),
+    ShortcutId::MoveCenterPaneRight => f(&MoveCenterPaneRight),
+    ShortcutId::MoveCenterPaneUp => f(&MoveCenterPaneUp),
+    ShortcutId::MoveCenterPaneDown => f(&MoveCenterPaneDown),
     ShortcutId::OpenTerminalInSplitRight => f(&OpenTerminalInSplitRight),
     ShortcutId::OpenTerminalInSplitDown => f(&OpenTerminalInSplitDown),
     ShortcutId::CloseCenterTab => f(&CloseCenterTab),
@@ -1954,6 +2029,14 @@ mod tests {
   fn session_creation_bindings_live_in_the_workspace() {
     assert!(has_binding("workspace", "ctrl-alt-n"));
     assert!(has_binding("workspace", "ctrl-alt-shift-n"));
+  }
+
+  #[test]
+  fn center_pane_movement_bindings_live_in_the_workspace() {
+    assert!(has_binding("workspace", "cmd-alt-shift-left"));
+    assert!(has_binding("workspace", "cmd-alt-shift-right"));
+    assert!(has_binding("workspace", "cmd-alt-shift-up"));
+    assert!(has_binding("workspace", "cmd-alt-shift-down"));
   }
 
   #[test]
