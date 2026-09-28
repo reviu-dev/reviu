@@ -2055,11 +2055,10 @@ impl SessionPage {
         if focused_tab.kind == CenterTabKind::Terminal {
           self.focus_terminal_tab(&focused_tab, window, cx);
         }
-        self.ensure_center_layout_chat_panels(window, cx);
+        self.ensure_visible_center_surfaces(window, cx);
         self.remember_center_layout_tab(representative);
         self.center = Self::center_view_for_tab(&focused_tab);
         self.sync_agent_chat_close_control(cx);
-        self.restore_visible_center_editors(cx);
         self.persist_current_center_workspace(cx);
         cx.notify();
         return;
@@ -2077,13 +2076,10 @@ impl SessionPage {
       if tab.kind == CenterTabKind::Terminal {
         self.focus_terminal_tab(&tab, window, cx);
       }
-      self.ensure_center_layout_chat_panels(window, cx);
+      self.ensure_visible_center_surfaces(window, cx);
       self.remember_center_layout_tab(representative);
       self.center = Self::center_view_for_tab(&tab);
       self.sync_agent_chat_close_control(cx);
-      // A tab restored at launch loads when first shown, and a split is a
-      // first showing too.
-      self.restore_visible_center_editors(cx);
       self.persist_current_center_workspace(cx);
       cx.notify();
       return;

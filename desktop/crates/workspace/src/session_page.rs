@@ -1356,7 +1356,7 @@ impl SessionPage {
     }
     self.refresh_session_list(cx);
     self.activate_center_tab(restored_selected_tab, OpenIntent::Browse, window, cx);
-    self.restore_visible_center_editors(cx);
+    self.ensure_visible_center_surfaces(window, cx);
   }
 
   /// Selects a sidebar checkout and keeps the project context, footer and git
@@ -1678,11 +1678,12 @@ impl SessionPage {
       .unwrap_or_else(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())));
   }
 
-  fn ensure_project_search_view_for_visible_layout(
+  pub(super) fn ensure_visible_center_surfaces(
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.ensure_center_layout_chat_panels(window, cx);
     if self
       .center_layout
       .contains_tab(&CenterTab::project_search())
@@ -1690,6 +1691,7 @@ impl SessionPage {
     {
       self.ensure_project_search_view(repo_root, window, cx);
     }
+    self.restore_visible_center_editors(cx);
   }
 
   fn detach_project_search_from_layouts(&mut self) {
@@ -2022,7 +2024,7 @@ impl SessionPage {
       .is_some_and(|layout| layout.surface_count() > 1);
     self.save_active_center_layout();
     self.restore_center_layout_for_tab(&tab);
-    self.ensure_project_search_view_for_visible_layout(window, cx);
+    self.ensure_visible_center_surfaces(window, cx);
     if requested_tab != tab && self.center_layout.contains_tab(&requested_tab) {
       self
         .center_layout
@@ -2031,15 +2033,12 @@ impl SessionPage {
     self.active_center_tab = Some(tab.clone());
     if has_saved_split_layout {
       let focused_tab = self.center_layout.active_tab().clone();
-      if self.agent_chat_view.is_some() {
-        self.ensure_center_layout_chat_panels(window, cx);
-        let active_chat_id = focused_tab
-          .conversation_id()
-          .map(ToOwned::to_owned)
-          .or_else(|| self.center_layout_chat_id());
-        if let Some(conversation_id) = active_chat_id {
-          self.activate_session_panel(&conversation_id, window, cx);
-        }
+      let active_chat_id = focused_tab
+        .conversation_id()
+        .map(ToOwned::to_owned)
+        .or_else(|| self.center_layout_chat_id());
+      if let Some(conversation_id) = active_chat_id {
+        self.activate_session_panel(&conversation_id, window, cx);
       }
       self.active_center_tab = Some(tab.clone());
       self.reveal_center_tab_in_files_panel(&focused_tab, cx);
@@ -2061,7 +2060,7 @@ impl SessionPage {
         CenterView::Terminal => self.focus_terminal_tab(&focused_tab, window, cx),
         CenterView::PaneLauncher => {}
       }
-      self.restore_visible_center_editors(cx);
+      self.ensure_visible_center_surfaces(window, cx);
       self.persist_current_center_workspace(cx);
       cx.notify();
       return;
@@ -2290,7 +2289,7 @@ impl SessionPage {
       .set_active_surface(CenterSurface::from_tab(active_tab.clone()));
     self.remember_center_layout_tab(active_tab.clone());
     self.center = Self::center_view_for_tab(&active_tab);
-    self.restore_visible_center_editors(cx);
+    self.ensure_visible_center_surfaces(window, cx);
     self.persist_current_center_workspace(cx);
     match self.center {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
@@ -3076,7 +3075,7 @@ impl SessionPage {
   fn open_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let tab = CenterTab::project_search();
     if self.center_layout.contains_tab(&tab) {
-      self.ensure_project_search_view_for_visible_layout(window, cx);
+      self.ensure_visible_center_surfaces(window, cx);
       self.activate_center_surface(&tab, window, cx);
       return;
     }

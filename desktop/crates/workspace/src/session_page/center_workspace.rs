@@ -91,11 +91,10 @@ impl SessionPage {
     if tab.kind == CenterTabKind::Terminal {
       self.focus_terminal_tab(&tab, window, cx);
     }
-    self.ensure_center_layout_chat_panels(window, cx);
+    self.ensure_visible_center_surfaces(window, cx);
     self.remember_center_layout_tab(representative);
     self.reveal_center_tab_in_files_panel(&tab, cx);
     self.sync_agent_chat_close_control(cx);
-    self.restore_visible_center_editors(cx);
     self.persist_current_center_workspace(cx);
     cx.notify();
     true
@@ -331,7 +330,7 @@ impl SessionPage {
     if let Some(conversation_id) = tab.conversation_id() {
       self.activate_session_panel(conversation_id, window, cx);
     }
-    self.ensure_center_layout_chat_panels(window, cx);
+    self.ensure_visible_center_surfaces(window, cx);
     self.remember_center_layout_tab(
       self
         .active_center_tab
@@ -340,7 +339,6 @@ impl SessionPage {
     );
     self.reveal_center_tab_in_files_panel(&tab, cx);
     self.sync_agent_chat_close_control(cx);
-    self.restore_visible_center_editors(cx);
     match self.center {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
       CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
