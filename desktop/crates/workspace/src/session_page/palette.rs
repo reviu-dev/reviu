@@ -196,6 +196,34 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::new_terminal());
       commands.push(CommandPaletteCommand::open_terminal_in_split_right());
       commands.push(CommandPaletteCommand::open_terminal_in_split_down());
+      if self
+        .center_layout
+        .adjacent_pane_info(CenterSplitDirection::Left)
+        .is_some()
+      {
+        commands.push(CommandPaletteCommand::focus_pane_left());
+      }
+      if self
+        .center_layout
+        .adjacent_pane_info(CenterSplitDirection::Right)
+        .is_some()
+      {
+        commands.push(CommandPaletteCommand::focus_pane_right());
+      }
+      if self
+        .center_layout
+        .adjacent_pane_info(CenterSplitDirection::Up)
+        .is_some()
+      {
+        commands.push(CommandPaletteCommand::focus_pane_up());
+      }
+      if self
+        .center_layout
+        .adjacent_pane_info(CenterSplitDirection::Down)
+        .is_some()
+      {
+        commands.push(CommandPaletteCommand::focus_pane_down());
+      }
       commands.push(CommandPaletteCommand::show_file_search());
       commands.push(CommandPaletteCommand::show_global_search());
 
@@ -499,6 +527,22 @@ impl SessionPage {
         self.open_terminal_in_split(CenterSplitDirection::Down, window, cx);
         Ok(())
       }
+      CommandPaletteAction::FocusPaneLeft => {
+        self.focus_center_pane_left_action(&crate::FocusCenterPaneLeft, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::FocusPaneRight => {
+        self.focus_center_pane_right_action(&crate::FocusCenterPaneRight, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::FocusPaneUp => {
+        self.focus_center_pane_up_action(&crate::FocusCenterPaneUp, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::FocusPaneDown => {
+        self.focus_center_pane_down_action(&crate::FocusCenterPaneDown, window, cx);
+        Ok(())
+      }
       CommandPaletteAction::ShowChanges => {
         self.open_dock_tab(DockPanelTab::Changes, window, cx);
         Ok(())
@@ -572,7 +616,7 @@ mod tests {
   use super::super::*;
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
-  use std::path::Path;
+  use std::path::{Path, PathBuf};
   use ui::CommandPaletteCommandId;
 
   #[gpui::test]
@@ -611,6 +655,43 @@ mod tests {
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleHideWhitespace));
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleSoftWrap));
       assert!(!ids.contains(&CommandPaletteCommandId::SendSelectionToAgent));
+    });
+  }
+
+  #[gpui::test]
+  async fn split_focus_commands_follow_available_neighbors(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-split-focus-commands");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let chat = CenterTab::chat();
+    let file = CenterTab::file(PathBuf::from("a.txt"));
+    page.update(cx, |page, cx| {
+      page.center_layout = CenterLayout::single(CenterSurface::from_tab(chat.clone()));
+      assert!(page.center_layout.split_active(
+        CenterSurface::from_tab(file.clone()),
+        CenterSplitDirection::Right,
+      ));
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::FocusPaneLeft));
+      assert!(!ids.contains(&CommandPaletteCommandId::FocusPaneRight));
+
+      page
+        .center_layout
+        .set_active_surface(CenterSurface::from_tab(chat));
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(!ids.contains(&CommandPaletteCommandId::FocusPaneLeft));
+      assert!(ids.contains(&CommandPaletteCommandId::FocusPaneRight));
     });
   }
 

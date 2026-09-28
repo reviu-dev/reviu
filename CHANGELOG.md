@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Open a terminal directly beside or below your current chat, file, or diff from the command palette or the new configurable shortcuts, without creating a tab and dragging it into place.
 
+### Keyboard Split Pane Navigation
+
+Focus the pane beside, above, or below your current split from the command palette or the new configurable directional shortcuts.
+
 ### Agent Sign-In In Reviu
 
 When Claude or another ACP agent asks you to sign in again, Reviu now offers the login command directly in the chat and can open it in a Reviu terminal. Claude logins reconnect the chat automatically once the terminal reports success.

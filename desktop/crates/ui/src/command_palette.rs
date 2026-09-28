@@ -409,6 +409,10 @@ pub enum CommandPaletteAction {
   NewTerminal,
   OpenTerminalInSplitRight,
   OpenTerminalInSplitDown,
+  FocusPaneLeft,
+  FocusPaneRight,
+  FocusPaneUp,
+  FocusPaneDown,
   ShowChanges,
   ShowReview,
   ShowFiles,
@@ -1042,6 +1046,10 @@ pub enum CommandPaletteCommandId {
   NewTerminal,
   OpenTerminalInSplitRight,
   OpenTerminalInSplitDown,
+  FocusPaneLeft,
+  FocusPaneRight,
+  FocusPaneUp,
+  FocusPaneDown,
   ShowChanges,
   ShowReview,
   ShowFiles,
@@ -1124,6 +1132,10 @@ impl CommandPaletteCommandId {
       Self::NewTerminal => "new_terminal",
       Self::OpenTerminalInSplitRight => "open_terminal_in_split_right",
       Self::OpenTerminalInSplitDown => "open_terminal_in_split_down",
+      Self::FocusPaneLeft => "focus_pane_left",
+      Self::FocusPaneRight => "focus_pane_right",
+      Self::FocusPaneUp => "focus_pane_up",
+      Self::FocusPaneDown => "focus_pane_down",
       Self::ShowChanges => "show_changes",
       Self::ShowReview => "show_review",
       Self::ShowFiles => "show_files",
@@ -1202,6 +1214,10 @@ impl CommandPaletteCommandId {
       "new_terminal" => Some(Self::NewTerminal),
       "open_terminal_in_split_right" => Some(Self::OpenTerminalInSplitRight),
       "open_terminal_in_split_down" => Some(Self::OpenTerminalInSplitDown),
+      "focus_pane_left" => Some(Self::FocusPaneLeft),
+      "focus_pane_right" => Some(Self::FocusPaneRight),
+      "focus_pane_up" => Some(Self::FocusPaneUp),
+      "focus_pane_down" => Some(Self::FocusPaneDown),
       "show_changes" => Some(Self::ShowChanges),
       "show_review" => Some(Self::ShowReview),
       "show_files" => Some(Self::ShowFiles),
@@ -1789,6 +1805,38 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn focus_pane_left() -> Self {
+    Self::new(
+      CommandPaletteCommandId::FocusPaneLeft,
+      "Focus Pane Left",
+      "Focus the split pane to the left of the active pane",
+    )
+  }
+
+  pub fn focus_pane_right() -> Self {
+    Self::new(
+      CommandPaletteCommandId::FocusPaneRight,
+      "Focus Pane Right",
+      "Focus the split pane to the right of the active pane",
+    )
+  }
+
+  pub fn focus_pane_up() -> Self {
+    Self::new(
+      CommandPaletteCommandId::FocusPaneUp,
+      "Focus Pane Up",
+      "Focus the split pane above the active pane",
+    )
+  }
+
+  pub fn focus_pane_down() -> Self {
+    Self::new(
+      CommandPaletteCommandId::FocusPaneDown,
+      "Focus Pane Down",
+      "Focus the split pane below the active pane",
+    )
+  }
+
   pub fn show_changes() -> Self {
     Self::new(
       CommandPaletteCommandId::ShowChanges,
@@ -2093,7 +2141,11 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::ShowGlobalSearch
       | CommandPaletteCommandId::JumpToLatestMessage => CommandPaletteGroup::Navigation,
 
-      CommandPaletteCommandId::ToggleDiffView
+      CommandPaletteCommandId::FocusPaneLeft
+      | CommandPaletteCommandId::FocusPaneRight
+      | CommandPaletteCommandId::FocusPaneUp
+      | CommandPaletteCommandId::FocusPaneDown
+      | CommandPaletteCommandId::ToggleDiffView
       | CommandPaletteCommandId::ToggleFileDiff
       | CommandPaletteCommandId::ToggleHideWhitespace
       | CommandPaletteCommandId::ToggleSoftWrap => CommandPaletteGroup::View,
@@ -2147,6 +2199,9 @@ impl CommandPaletteCommand {
       Id::SwitchProject => &["recent"],
       Id::NewTerminal | Id::OpenTerminalInSplitRight | Id::OpenTerminalInSplitDown => {
         &["shell", "console", "terminal", "pane", "split"]
+      }
+      Id::FocusPaneLeft | Id::FocusPaneRight | Id::FocusPaneUp | Id::FocusPaneDown => {
+        &["split", "pane", "window", "navigate", "move"]
       }
       Id::ShowChanges => &["staged", "working", "show"],
       Id::ShowReview => &["comments", "show"],
@@ -2255,6 +2310,10 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::NewTerminal
       | CommandPaletteCommandId::OpenTerminalInSplitRight
       | CommandPaletteCommandId::OpenTerminalInSplitDown => Icon::new(UiIconName::Terminal),
+      CommandPaletteCommandId::FocusPaneLeft
+      | CommandPaletteCommandId::FocusPaneRight
+      | CommandPaletteCommandId::FocusPaneUp
+      | CommandPaletteCommandId::FocusPaneDown => Icon::new(UiIconName::Maximize2),
       CommandPaletteCommandId::ShowChanges => Icon::new(UiIconName::FileDiff),
       CommandPaletteCommandId::ShowReview => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::ShowFiles => Icon::new(IconName::FolderOpen),
@@ -3497,6 +3556,18 @@ impl CommandPalette {
           window,
           cx,
         );
+      }
+      CommandPaletteCommandId::FocusPaneLeft => {
+        self.trigger_action(command, CommandPaletteAction::FocusPaneLeft, window, cx);
+      }
+      CommandPaletteCommandId::FocusPaneRight => {
+        self.trigger_action(command, CommandPaletteAction::FocusPaneRight, window, cx);
+      }
+      CommandPaletteCommandId::FocusPaneUp => {
+        self.trigger_action(command, CommandPaletteAction::FocusPaneUp, window, cx);
+      }
+      CommandPaletteCommandId::FocusPaneDown => {
+        self.trigger_action(command, CommandPaletteAction::FocusPaneDown, window, cx);
       }
       CommandPaletteCommandId::ShowChanges => {
         self.trigger_action(command, CommandPaletteAction::ShowChanges, window, cx);

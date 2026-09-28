@@ -211,6 +211,42 @@ impl SessionPage {
     self.move_active_center_pane_to_edge(CenterSplitDirection::Down, window, cx);
   }
 
+  pub(super) fn focus_center_pane_left_action(
+    &mut self,
+    _: &crate::FocusCenterPaneLeft,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.focus_center_pane(CenterSplitDirection::Left, window, cx);
+  }
+
+  pub(super) fn focus_center_pane_right_action(
+    &mut self,
+    _: &crate::FocusCenterPaneRight,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.focus_center_pane(CenterSplitDirection::Right, window, cx);
+  }
+
+  pub(super) fn focus_center_pane_up_action(
+    &mut self,
+    _: &crate::FocusCenterPaneUp,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.focus_center_pane(CenterSplitDirection::Up, window, cx);
+  }
+
+  pub(super) fn focus_center_pane_down_action(
+    &mut self,
+    _: &crate::FocusCenterPaneDown,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.focus_center_pane(CenterSplitDirection::Down, window, cx);
+  }
+
   fn move_active_center_pane_to_edge(
     &mut self,
     direction: CenterSplitDirection,
@@ -219,6 +255,22 @@ impl SessionPage {
   ) {
     let tab = self.center_layout.active_tab().clone();
     self.move_center_surface_to_edge(tab, direction, window, cx);
+    cx.stop_propagation();
+  }
+
+  fn focus_center_pane(
+    &mut self,
+    direction: CenterSplitDirection,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if let Some(tab) = self
+      .center_layout
+      .adjacent_pane_info(direction)
+      .map(|pane| pane.active_tab)
+    {
+      self.activate_center_surface(&tab, window, cx);
+    }
     cx.stop_propagation();
   }
 

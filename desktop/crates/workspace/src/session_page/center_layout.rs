@@ -151,6 +151,59 @@ impl CenterPaneBounds {
     bottom: 10_000,
   };
 
+  fn center_x(self) -> u16 {
+    self.left + self.right.saturating_sub(self.left) / 2
+  }
+
+  fn center_y(self) -> u16 {
+    self.top + self.bottom.saturating_sub(self.top) / 2
+  }
+
+  fn horizontal_overlap(self, other: Self) -> u16 {
+    self
+      .right
+      .min(other.right)
+      .saturating_sub(self.left.max(other.left))
+  }
+
+  fn vertical_overlap(self, other: Self) -> u16 {
+    self
+      .bottom
+      .min(other.bottom)
+      .saturating_sub(self.top.max(other.top))
+  }
+
+  fn directional_distance(self, other: Self, direction: CenterSplitDirection) -> Option<u16> {
+    match direction {
+      CenterSplitDirection::Left => (other.right <= self.left && self.vertical_overlap(other) > 0)
+        .then(|| self.left - other.right),
+      CenterSplitDirection::Right => (other.left >= self.right && self.vertical_overlap(other) > 0)
+        .then(|| other.left - self.right),
+      CenterSplitDirection::Up => (other.bottom <= self.top && self.horizontal_overlap(other) > 0)
+        .then(|| self.top - other.bottom),
+      CenterSplitDirection::Down => (other.top >= self.bottom
+        && self.horizontal_overlap(other) > 0)
+        .then(|| other.top - self.bottom),
+    }
+  }
+
+  fn adjacent_score(self, other: Self, direction: CenterSplitDirection) -> Option<(u16, u16, u16)> {
+    let distance = self.directional_distance(other, direction)?;
+    let overlap = match direction {
+      CenterSplitDirection::Left | CenterSplitDirection::Right => self.vertical_overlap(other),
+      CenterSplitDirection::Up | CenterSplitDirection::Down => self.horizontal_overlap(other),
+    };
+    let perpendicular_distance = match direction {
+      CenterSplitDirection::Left | CenterSplitDirection::Right => {
+        self.center_y().abs_diff(other.center_y())
+      }
+      CenterSplitDirection::Up | CenterSplitDirection::Down => {
+        self.center_x().abs_diff(other.center_x())
+      }
+    };
+    Some((distance, u16::MAX - overlap, perpendicular_distance))
+  }
+
   fn split(
     self,
     direction: CenterSplitDirection,
@@ -959,6 +1012,25 @@ impl CenterLayout {
     self.active_pane_info().map(|pane| pane.id)
   }
 
+  pub(super) fn adjacent_pane_info(
+    &self,
+    direction: CenterSplitDirection,
+  ) -> Option<CenterPaneInfo> {
+    let active = self.active_pane_info()?;
+    self
+      .pane_infos()
+      .into_iter()
+      .filter(|pane| pane.id != active.id)
+      .filter_map(|pane| {
+        active
+          .bounds
+          .adjacent_score(pane.bounds, direction)
+          .map(|score| (score, pane))
+      })
+      .min_by_key(|(score, _)| *score)
+      .map(|(_, pane)| pane)
+  }
+
   pub(super) fn contains_tab(&self, tab: &CenterTab) -> bool {
     self.root.contains_tab(tab)
   }
@@ -1314,6 +1386,60 @@ mod tests {
     assert_eq!(lib_info.bounds.top, 0);
     assert_eq!(lib_info.bounds.right, 10_000);
     assert_eq!(lib_info.bounds.bottom, 10_000);
+  }
+
+  #[test]
+  fn adjacent_pane_info_finds_directional_neighbors() {
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+    let lib = CenterTab::file(PathBuf::from("src/lib.rs"));
+    let license = CenterTab::file(PathBuf::from("LICENSE"));
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(readme.clone()));
+    let root_pane_id = root_pane_id(&layout);
+    assert!(layout.split_pane(
+      root_pane_id,
+      CenterSurface::from_tab(lib.clone()),
+      CenterSplitDirection::Right,
+    ));
+    let readme_pane_id = pane_info_for_tab(&layout, &readme).id;
+    assert!(layout.split_pane(
+      readme_pane_id,
+      CenterSurface::from_tab(license.clone()),
+      CenterSplitDirection::Down,
+    ));
+
+    layout.set_active_surface(CenterSurface::from_tab(readme.clone()));
+    assert_eq!(
+      layout
+        .adjacent_pane_info(CenterSplitDirection::Right)
+        .map(|pane| pane.active_tab),
+      Some(lib.clone())
+    );
+    assert_eq!(
+      layout
+        .adjacent_pane_info(CenterSplitDirection::Down)
+        .map(|pane| pane.active_tab),
+      Some(license.clone())
+    );
+    assert_eq!(
+      layout
+        .adjacent_pane_info(CenterSplitDirection::Left)
+        .map(|pane| pane.active_tab),
+      None
+    );
+
+    layout.set_active_surface(CenterSurface::from_tab(lib.clone()));
+    assert_eq!(
+      layout
+        .adjacent_pane_info(CenterSplitDirection::Left)
+        .map(|pane| pane.active_tab),
+      Some(readme)
+    );
+    assert_eq!(
+      layout
+        .adjacent_pane_info(CenterSplitDirection::Down)
+        .map(|pane| pane.active_tab),
+      None
+    );
   }
 
   #[test]

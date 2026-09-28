@@ -18,8 +18,9 @@ use crate::config::ConfigStore;
 use crate::project_search_view::PROJECT_SEARCH_CONTEXT;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CloseCenterTab, CommentHunk,
-  CommitChanges, DeleteSelectedFileItem, ForcePushChanges, JumpToLatestMessage, MoveCenterPaneDown,
-  MoveCenterPaneLeft, MoveCenterPaneRight, MoveCenterPaneUp, NewAgentSession,
+  CommitChanges, DeleteSelectedFileItem, FocusCenterPaneDown, FocusCenterPaneLeft,
+  FocusCenterPaneRight, FocusCenterPaneUp, ForcePushChanges, JumpToLatestMessage,
+  MoveCenterPaneDown, MoveCenterPaneLeft, MoveCenterPaneRight, MoveCenterPaneUp, NewAgentSession,
   NewAgentWorktreeSession, NewFile, NewFileInFilesPanel, NextAnnotation, NextCenterTab,
   OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenProject,
   OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, OpenTerminalInSplitDown,
@@ -85,6 +86,10 @@ pub enum ShortcutId {
   MoveCenterPaneRight,
   MoveCenterPaneUp,
   MoveCenterPaneDown,
+  FocusCenterPaneLeft,
+  FocusCenterPaneRight,
+  FocusCenterPaneUp,
+  FocusCenterPaneDown,
   OpenTerminalInSplitRight,
   OpenTerminalInSplitDown,
   CloseCenterTab,
@@ -136,6 +141,10 @@ impl ShortcutId {
       ShortcutId::MoveCenterPaneRight => "move_center_pane_right",
       ShortcutId::MoveCenterPaneUp => "move_center_pane_up",
       ShortcutId::MoveCenterPaneDown => "move_center_pane_down",
+      ShortcutId::FocusCenterPaneLeft => "focus_center_pane_left",
+      ShortcutId::FocusCenterPaneRight => "focus_center_pane_right",
+      ShortcutId::FocusCenterPaneUp => "focus_center_pane_up",
+      ShortcutId::FocusCenterPaneDown => "focus_center_pane_down",
       ShortcutId::OpenTerminalInSplitRight => "open_terminal_in_split_right",
       ShortcutId::OpenTerminalInSplitDown => "open_terminal_in_split_down",
       ShortcutId::CloseCenterTab => "close_center_tab",
@@ -187,6 +196,10 @@ impl ShortcutId {
       "move_center_pane_right" => Some(ShortcutId::MoveCenterPaneRight),
       "move_center_pane_up" => Some(ShortcutId::MoveCenterPaneUp),
       "move_center_pane_down" => Some(ShortcutId::MoveCenterPaneDown),
+      "focus_center_pane_left" => Some(ShortcutId::FocusCenterPaneLeft),
+      "focus_center_pane_right" => Some(ShortcutId::FocusCenterPaneRight),
+      "focus_center_pane_up" => Some(ShortcutId::FocusCenterPaneUp),
+      "focus_center_pane_down" => Some(ShortcutId::FocusCenterPaneDown),
       "open_terminal_in_split_right" => Some(ShortcutId::OpenTerminalInSplitRight),
       "open_terminal_in_split_down" => Some(ShortcutId::OpenTerminalInSplitDown),
       "close_center_tab" => Some(ShortcutId::CloseCenterTab),
@@ -250,7 +263,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 46] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 50] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -302,6 +315,50 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 46] = [
     scope_label: "Workspace",
     category: ShortcutCategory::Core,
     keystroke: "ctrl-shift-pagedown",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::FocusCenterPaneLeft,
+    title: "Focus Pane Left",
+    description: "Focus the split pane to the left of the active pane.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-ctrl-alt-left",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::FocusCenterPaneRight,
+    title: "Focus Pane Right",
+    description: "Focus the split pane to the right of the active pane.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-ctrl-alt-right",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::FocusCenterPaneUp,
+    title: "Focus Pane Up",
+    description: "Focus the split pane above the active pane.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-ctrl-alt-up",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::FocusCenterPaneDown,
+    title: "Focus Pane Down",
+    description: "Focus the split pane below the active pane.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-ctrl-alt-down",
     context: CENTER_TAB_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -880,6 +937,18 @@ impl ShortcutDefinition {
       ShortcutId::MoveCenterPaneDown => {
         KeyBinding::new(keystroke, MoveCenterPaneDown, Some(&context))
       }
+      ShortcutId::FocusCenterPaneLeft => {
+        KeyBinding::new(keystroke, FocusCenterPaneLeft, Some(&context))
+      }
+      ShortcutId::FocusCenterPaneRight => {
+        KeyBinding::new(keystroke, FocusCenterPaneRight, Some(&context))
+      }
+      ShortcutId::FocusCenterPaneUp => {
+        KeyBinding::new(keystroke, FocusCenterPaneUp, Some(&context))
+      }
+      ShortcutId::FocusCenterPaneDown => {
+        KeyBinding::new(keystroke, FocusCenterPaneDown, Some(&context))
+      }
       ShortcutId::OpenTerminalInSplitRight => {
         KeyBinding::new(keystroke, OpenTerminalInSplitRight, Some(&context))
       }
@@ -962,6 +1031,10 @@ impl ShortcutDefinition {
         | ShortcutId::MoveCenterPaneRight
         | ShortcutId::MoveCenterPaneUp
         | ShortcutId::MoveCenterPaneDown
+        | ShortcutId::FocusCenterPaneLeft
+        | ShortcutId::FocusCenterPaneRight
+        | ShortcutId::FocusCenterPaneUp
+        | ShortcutId::FocusCenterPaneDown
         | ShortcutId::OpenTerminalInSplitRight
         | ShortcutId::OpenTerminalInSplitDown
         | ShortcutId::CloseCenterTab
@@ -1158,6 +1231,10 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::NewTerminal => None,
     Command::OpenTerminalInSplitRight => Some(ShortcutId::OpenTerminalInSplitRight),
     Command::OpenTerminalInSplitDown => Some(ShortcutId::OpenTerminalInSplitDown),
+    Command::FocusPaneLeft => Some(ShortcutId::FocusCenterPaneLeft),
+    Command::FocusPaneRight => Some(ShortcutId::FocusCenterPaneRight),
+    Command::FocusPaneUp => Some(ShortcutId::FocusCenterPaneUp),
+    Command::FocusPaneDown => Some(ShortcutId::FocusCenterPaneDown),
     Command::ShowChanges => Some(ShortcutId::OpenGitChangesSidebar),
     Command::ShowReview => Some(ShortcutId::OpenReviewSidebar),
     Command::ShowFiles => Some(ShortcutId::OpenFilesSidebar),
@@ -1582,6 +1659,10 @@ pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action
     ShortcutId::MoveCenterPaneRight => f(&MoveCenterPaneRight),
     ShortcutId::MoveCenterPaneUp => f(&MoveCenterPaneUp),
     ShortcutId::MoveCenterPaneDown => f(&MoveCenterPaneDown),
+    ShortcutId::FocusCenterPaneLeft => f(&FocusCenterPaneLeft),
+    ShortcutId::FocusCenterPaneRight => f(&FocusCenterPaneRight),
+    ShortcutId::FocusCenterPaneUp => f(&FocusCenterPaneUp),
+    ShortcutId::FocusCenterPaneDown => f(&FocusCenterPaneDown),
     ShortcutId::OpenTerminalInSplitRight => f(&OpenTerminalInSplitRight),
     ShortcutId::OpenTerminalInSplitDown => f(&OpenTerminalInSplitDown),
     ShortcutId::CloseCenterTab => f(&CloseCenterTab),
@@ -2037,6 +2118,14 @@ mod tests {
     assert!(has_binding("workspace", "cmd-alt-shift-right"));
     assert!(has_binding("workspace", "cmd-alt-shift-up"));
     assert!(has_binding("workspace", "cmd-alt-shift-down"));
+  }
+
+  #[test]
+  fn center_pane_focus_bindings_live_in_the_workspace() {
+    assert!(has_binding("workspace", "cmd-ctrl-alt-left"));
+    assert!(has_binding("workspace", "cmd-ctrl-alt-right"));
+    assert!(has_binding("workspace", "cmd-ctrl-alt-up"));
+    assert!(has_binding("workspace", "cmd-ctrl-alt-down"));
   }
 
   #[test]

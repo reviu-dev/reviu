@@ -431,6 +431,30 @@ fn moving_the_active_pane_uses_the_focused_split_surface(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn focusing_panes_uses_directional_neighbors(cx: &mut TestAppContext) {
+  let (_project, page, cx) = setup(cx);
+  let file = draft(&page, "right", cx);
+  let chat = CenterTab::chat();
+  group(&page, &chat, &file, cx);
+
+  page.update_in(cx, |page, window, cx| {
+    page.focus_center_pane_left_action(&crate::FocusCenterPaneLeft, window, cx);
+  });
+
+  page.read_with(cx, |page, _| {
+    assert_eq!(page.center_layout.active_tab(), &chat);
+  });
+
+  page.update_in(cx, |page, window, cx| {
+    page.focus_center_pane_right_action(&crate::FocusCenterPaneRight, window, cx);
+  });
+
+  page.read_with(cx, |page, _| {
+    assert_eq!(page.center_layout.active_tab(), &file);
+  });
+}
+
+#[gpui::test]
 fn a_group_can_be_closed_while_its_empty_chat_surface_is_focused(cx: &mut TestAppContext) {
   let (_project, page, cx) = setup(cx);
   let file = draft(&page, "", cx);
