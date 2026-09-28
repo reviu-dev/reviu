@@ -135,6 +135,72 @@ pub(super) struct CenterDropTarget {
   pub(super) direction: Option<CenterSplitDirection>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CenterPaneBounds {
+  pub(super) left: u16,
+  pub(super) top: u16,
+  pub(super) right: u16,
+  pub(super) bottom: u16,
+}
+
+impl CenterPaneBounds {
+  const FULL: Self = Self {
+    left: 0,
+    top: 0,
+    right: 10_000,
+    bottom: 10_000,
+  };
+
+  fn split(
+    self,
+    direction: CenterSplitDirection,
+    first_fraction: u16,
+  ) -> (CenterPaneBounds, CenterPaneBounds) {
+    match direction {
+      CenterSplitDirection::Left | CenterSplitDirection::Right => {
+        let split_x =
+          self.left + scaled_extent(self.right.saturating_sub(self.left), first_fraction);
+        (
+          CenterPaneBounds {
+            right: split_x,
+            ..self
+          },
+          CenterPaneBounds {
+            left: split_x,
+            ..self
+          },
+        )
+      }
+      CenterSplitDirection::Up | CenterSplitDirection::Down => {
+        let split_y =
+          self.top + scaled_extent(self.bottom.saturating_sub(self.top), first_fraction);
+        (
+          CenterPaneBounds {
+            bottom: split_y,
+            ..self
+          },
+          CenterPaneBounds {
+            top: split_y,
+            ..self
+          },
+        )
+      }
+    }
+  }
+}
+
+fn scaled_extent(extent: u16, fraction: u16) -> u16 {
+  ((u32::from(extent) * u32::from(fraction)) / 10_000) as u16
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CenterPaneInfo {
+  pub(super) id: CenterPaneId,
+  pub(super) active_tab: CenterTab,
+  pub(super) tabs: Vec<CenterTab>,
+  pub(super) bounds: CenterPaneBounds,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CenterPane {
   id: CenterPaneId,
@@ -223,6 +289,19 @@ impl CenterPane {
   fn surface_count(&self) -> usize {
     self.surfaces.len()
   }
+
+  fn info(&self, bounds: CenterPaneBounds) -> CenterPaneInfo {
+    CenterPaneInfo {
+      id: self.id,
+      active_tab: self.active_surface.tab().clone(),
+      tabs: self
+        .surfaces
+        .iter()
+        .map(|surface| surface.tab().clone())
+        .collect(),
+      bounds,
+    }
+  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,6 +350,15 @@ impl CenterSplit {
         let second = self.second.surface_count().max(1) as f32;
         first / (first + second)
       })
+  }
+
+  fn first_fraction_units(&self) -> u16 {
+    self.first_fraction.unwrap_or_else(|| {
+      let first = self.first.surface_count().max(1) as u32;
+      let second = self.second.surface_count().max(1) as u32;
+      let total = first + second;
+      ((first * 10_000 + total / 2) / total) as u16
+    })
   }
 
   pub(super) fn first(&self) -> &CenterNode {
@@ -369,13 +457,15 @@ impl CenterNode {
     }
   }
 
-  fn pane_id_for_tab(&self, tab: &CenterTab) -> Option<CenterPaneId> {
+  fn collect_pane_infos(&self, bounds: CenterPaneBounds, panes: &mut Vec<CenterPaneInfo>) {
     match self {
-      Self::Pane(pane) => pane.contains_tab(tab).then_some(pane.id),
-      Self::Split(split) => split
-        .first
-        .pane_id_for_tab(tab)
-        .or_else(|| split.second.pane_id_for_tab(tab)),
+      Self::Pane(pane) => panes.push(pane.info(bounds)),
+      Self::Split(split) => {
+        let (first_bounds, second_bounds) =
+          bounds.split(split.direction, split.first_fraction_units());
+        split.first.collect_pane_infos(first_bounds, panes);
+        split.second.collect_pane_infos(second_bounds, panes);
+      }
     }
   }
 
@@ -850,8 +940,23 @@ impl CenterLayout {
     self.active_surface().tab()
   }
 
+  pub(super) fn pane_infos(&self) -> Vec<CenterPaneInfo> {
+    let mut panes = Vec::new();
+    self
+      .root
+      .collect_pane_infos(CenterPaneBounds::FULL, &mut panes);
+    panes
+  }
+
+  pub(super) fn active_pane_info(&self) -> Option<CenterPaneInfo> {
+    self
+      .pane_infos()
+      .into_iter()
+      .find(|pane| pane.tabs.iter().any(|tab| tab == self.active_tab()))
+  }
+
   pub(super) fn active_pane_id(&self) -> Option<CenterPaneId> {
-    self.root.pane_id_for_tab(self.active_tab())
+    self.active_pane_info().map(|pane| pane.id)
   }
 
   pub(super) fn contains_tab(&self, tab: &CenterTab) -> bool {
@@ -1071,6 +1176,14 @@ mod tests {
     pane.id
   }
 
+  fn pane_info_for_tab(layout: &CenterLayout, tab: &CenterTab) -> CenterPaneInfo {
+    layout
+      .pane_infos()
+      .into_iter()
+      .find(|pane| pane.tabs.iter().any(|pane_tab| pane_tab == tab))
+      .expect("pane info for tab")
+  }
+
   #[test]
   fn center_layout_round_trips_mixed_surfaces_with_fresh_terminal_ids() {
     let terminal = CenterTab::terminal(1);
@@ -1161,8 +1274,46 @@ mod tests {
     let lib_pane_id = layout.active_pane_id().expect("split active pane id");
 
     assert_ne!(first_pane_id, lib_pane_id);
-    assert_eq!(layout.root.pane_id_for_tab(&readme), Some(first_pane_id));
-    assert_eq!(layout.root.pane_id_for_tab(&lib), Some(lib_pane_id));
+    assert_eq!(pane_info_for_tab(&layout, &readme).id, first_pane_id);
+    assert_eq!(pane_info_for_tab(&layout, &lib).id, lib_pane_id);
+  }
+
+  #[test]
+  fn pane_infos_describe_nested_split_positions() {
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+    let lib = CenterTab::file(PathBuf::from("src/lib.rs"));
+    let license = CenterTab::file(PathBuf::from("LICENSE"));
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(readme.clone()));
+    let root_pane_id = root_pane_id(&layout);
+    assert!(layout.split_pane(
+      root_pane_id,
+      CenterSurface::from_tab(lib.clone()),
+      CenterSplitDirection::Right,
+    ));
+    let readme_pane_id = pane_info_for_tab(&layout, &readme).id;
+    assert!(layout.split_pane(
+      readme_pane_id,
+      CenterSurface::from_tab(license.clone()),
+      CenterSplitDirection::Down,
+    ));
+
+    let readme_info = pane_info_for_tab(&layout, &readme);
+    let license_info = pane_info_for_tab(&layout, &license);
+    let lib_info = pane_info_for_tab(&layout, &lib);
+
+    assert_eq!(readme_info.active_tab, readme);
+    assert_eq!(readme_info.bounds.left, 0);
+    assert_eq!(readme_info.bounds.top, 0);
+    assert_eq!(readme_info.bounds.right, 6_667);
+    assert_eq!(readme_info.bounds.bottom, 5_000);
+    assert_eq!(license_info.bounds.left, 0);
+    assert_eq!(license_info.bounds.top, 5_000);
+    assert_eq!(license_info.bounds.right, 6_667);
+    assert_eq!(license_info.bounds.bottom, 10_000);
+    assert_eq!(lib_info.bounds.left, 6_667);
+    assert_eq!(lib_info.bounds.top, 0);
+    assert_eq!(lib_info.bounds.right, 10_000);
+    assert_eq!(lib_info.bounds.bottom, 10_000);
   }
 
   #[test]
