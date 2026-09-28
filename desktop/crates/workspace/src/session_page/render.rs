@@ -5271,6 +5271,50 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn global_search_focuses_visible_split_search(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-project-search-split-focus");
+    commit_text_file(&repo.path, Path::new("README.md"), "needle\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.show_global_search_action(&crate::ShowGlobalSearch, window, cx)
+    });
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      assert!(page.center_layout.split_active(
+        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(CenterTab::project_search());
+      page.activate_center_surface(&CenterTab::chat(), window, cx);
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.show_global_search_action(&crate::ShowGlobalSearch, window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center_layout.surface_count(), 2);
+      assert_eq!(
+        page.center_layout.active_tab(),
+        &CenterTab::project_search()
+      );
+      assert!(page.center_layout.contains_tab(&CenterTab::chat()));
+      assert!(
+        page
+          .center_layout
+          .contains_tab(&CenterTab::project_search())
+      );
+      assert_eq!(page.center, CenterView::ProjectSearch);
+      assert!(page.project_search_view.is_some());
+    });
+  }
+
+  #[gpui::test]
   async fn project_search_split_header_matches_pane_controls(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-render-project-search-split-header");
     commit_text_file(&repo.path, Path::new("README.md"), "needle\n", "initial");

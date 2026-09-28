@@ -3073,6 +3073,12 @@ impl SessionPage {
   }
 
   fn open_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let tab = CenterTab::project_search();
+    if self.center_layout.contains_tab(&tab) {
+      self.ensure_project_search_view_for_visible_layout(window, cx);
+      self.activate_center_surface(&tab, window, cx);
+      return;
+    }
     self.open_project_search_tab(window, cx);
   }
 

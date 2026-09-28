@@ -31,8 +31,10 @@ impl SessionPage {
     if matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
       self.editor_tab = Some(tab.clone());
     }
-    if tab.kind == CenterTabKind::Terminal {
-      self.focus_terminal_tab(tab, window, cx);
+    match tab.kind {
+      CenterTabKind::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
+      CenterTabKind::Terminal => self.focus_terminal_tab(tab, window, cx),
+      _ => {}
     }
     self.reveal_center_tab_in_files_panel(tab, cx);
     self.save_active_center_layout();
