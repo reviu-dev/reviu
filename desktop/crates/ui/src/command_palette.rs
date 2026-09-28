@@ -407,6 +407,8 @@ pub enum CommandPaletteAction {
   RevealLogs,
   SendFeedback,
   NewTerminal,
+  OpenTerminalInSplitRight,
+  OpenTerminalInSplitDown,
   ShowChanges,
   ShowReview,
   ShowFiles,
@@ -1038,6 +1040,8 @@ pub enum CommandPaletteCommandId {
   RevealLogs,
   SendFeedback,
   NewTerminal,
+  OpenTerminalInSplitRight,
+  OpenTerminalInSplitDown,
   ShowChanges,
   ShowReview,
   ShowFiles,
@@ -1118,6 +1122,8 @@ impl CommandPaletteCommandId {
       Self::RevealLogs => "reveal_logs",
       Self::SendFeedback => "send_feedback",
       Self::NewTerminal => "new_terminal",
+      Self::OpenTerminalInSplitRight => "open_terminal_in_split_right",
+      Self::OpenTerminalInSplitDown => "open_terminal_in_split_down",
       Self::ShowChanges => "show_changes",
       Self::ShowReview => "show_review",
       Self::ShowFiles => "show_files",
@@ -1194,6 +1200,8 @@ impl CommandPaletteCommandId {
       "reveal_logs" => Some(Self::RevealLogs),
       "send_feedback" => Some(Self::SendFeedback),
       "new_terminal" => Some(Self::NewTerminal),
+      "open_terminal_in_split_right" => Some(Self::OpenTerminalInSplitRight),
+      "open_terminal_in_split_down" => Some(Self::OpenTerminalInSplitDown),
       "show_changes" => Some(Self::ShowChanges),
       "show_review" => Some(Self::ShowReview),
       "show_files" => Some(Self::ShowFiles),
@@ -1765,6 +1773,22 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn open_terminal_in_split_right() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenTerminalInSplitRight,
+      "Terminal: Open in Split Right",
+      "Open a new terminal to the right of the active pane",
+    )
+  }
+
+  pub fn open_terminal_in_split_down() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenTerminalInSplitDown,
+      "Terminal: Open in Split Down",
+      "Open a new terminal below the active pane",
+    )
+  }
+
   pub fn show_changes() -> Self {
     Self::new(
       CommandPaletteCommandId::ShowChanges,
@@ -2055,6 +2079,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SendFeedback => CommandPaletteGroup::Navigation,
 
       CommandPaletteCommandId::NewTerminal
+      | CommandPaletteCommandId::OpenTerminalInSplitRight
+      | CommandPaletteCommandId::OpenTerminalInSplitDown
       | CommandPaletteCommandId::ShowChanges
       | CommandPaletteCommandId::ShowReview
       | CommandPaletteCommandId::ShowFiles
@@ -2119,7 +2145,9 @@ impl CommandPaletteCommand {
       Id::NewFile => &["untitled", "create", "editor"],
       Id::SaveFileAs => &["rename", "copy", "path"],
       Id::SwitchProject => &["recent"],
-      Id::NewTerminal => &["shell", "console", "terminal"],
+      Id::NewTerminal | Id::OpenTerminalInSplitRight | Id::OpenTerminalInSplitDown => {
+        &["shell", "console", "terminal", "pane", "split"]
+      }
       Id::ShowChanges => &["staged", "working", "show"],
       Id::ShowReview => &["comments", "show"],
       Id::ShowFiles => &["tree", "explorer", "show"],
@@ -2224,7 +2252,9 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::SendFeedback => Icon::new(UiIconName::MessageCircle),
 
-      CommandPaletteCommandId::NewTerminal => Icon::new(UiIconName::Terminal),
+      CommandPaletteCommandId::NewTerminal
+      | CommandPaletteCommandId::OpenTerminalInSplitRight
+      | CommandPaletteCommandId::OpenTerminalInSplitDown => Icon::new(UiIconName::Terminal),
       CommandPaletteCommandId::ShowChanges => Icon::new(UiIconName::FileDiff),
       CommandPaletteCommandId::ShowReview => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::ShowFiles => Icon::new(IconName::FolderOpen),
@@ -3451,6 +3481,22 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::NewTerminal => {
         self.trigger_action(command, CommandPaletteAction::NewTerminal, window, cx);
+      }
+      CommandPaletteCommandId::OpenTerminalInSplitRight => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenTerminalInSplitRight,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::OpenTerminalInSplitDown => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenTerminalInSplitDown,
+          window,
+          cx,
+        );
       }
       CommandPaletteCommandId::ShowChanges => {
         self.trigger_action(command, CommandPaletteAction::ShowChanges, window, cx);

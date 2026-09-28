@@ -3132,6 +3132,8 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::activate_previous_center_tab_action))
       .on_action(cx.listener(Self::move_center_tab_left_action))
       .on_action(cx.listener(Self::move_center_tab_right_action))
+      .on_action(cx.listener(Self::open_terminal_in_split_right_action))
+      .on_action(cx.listener(Self::open_terminal_in_split_down_action))
       .on_action(cx.listener(Self::close_file_view_action))
       .on_action(cx.listener(Self::find_action))
       .on_action(cx.listener(Self::add_selection_to_agent_action))
@@ -5420,6 +5422,71 @@ mod tests {
       terminal_bounds.size.width > gpui::px(0.0) && terminal_bounds.size.height > gpui::px(0.0),
       "the terminal should fill the center pane"
     );
+  }
+
+  #[gpui::test]
+  async fn terminal_can_open_in_a_split_right_of_the_active_pane(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-terminal-split-right");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_terminal_in_split(CenterSplitDirection::Right, window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Terminal);
+      assert_eq!(page.center_tabs, vec![CenterTab::terminal(1)]);
+      assert_eq!(page.center_layout.active_tab(), &CenterTab::terminal(1));
+      assert_eq!(page.terminal_views.len(), 1);
+      let CenterNode::Split(split) = page.center_layout.root() else {
+        panic!("layout should be split");
+      };
+      assert_eq!(split.direction(), CenterSplitDirection::Right);
+      let CenterNode::Pane(first) = split.first() else {
+        panic!("first side should be a pane");
+      };
+      let CenterNode::Pane(second) = split.second() else {
+        panic!("second side should be a pane");
+      };
+      assert_eq!(first.active_surface().tab(), &CenterTab::chat());
+      assert_eq!(second.active_surface().tab(), &CenterTab::terminal(1));
+    });
+  }
+
+  #[gpui::test]
+  async fn terminal_can_open_in_a_split_below_the_active_pane(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-terminal-split-down");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_terminal_in_split(CenterSplitDirection::Down, window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center_layout.active_tab(), &CenterTab::terminal(1));
+      let CenterNode::Split(split) = page.center_layout.root() else {
+        panic!("layout should be split");
+      };
+      assert_eq!(split.direction(), CenterSplitDirection::Down);
+      let CenterNode::Pane(first) = split.first() else {
+        panic!("first side should be a pane");
+      };
+      let CenterNode::Pane(second) = split.second() else {
+        panic!("second side should be a pane");
+      };
+      assert_eq!(first.active_surface().tab(), &CenterTab::chat());
+      assert_eq!(second.active_surface().tab(), &CenterTab::terminal(1));
+    });
   }
 
   #[gpui::test]

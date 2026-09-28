@@ -194,6 +194,8 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::show_history());
       commands.push(CommandPaletteCommand::show_pull_request());
       commands.push(CommandPaletteCommand::new_terminal());
+      commands.push(CommandPaletteCommand::open_terminal_in_split_right());
+      commands.push(CommandPaletteCommand::open_terminal_in_split_down());
       commands.push(CommandPaletteCommand::show_file_search());
       commands.push(CommandPaletteCommand::show_global_search());
 
@@ -489,6 +491,14 @@ impl SessionPage {
         self.new_terminal_tab(window, cx);
         Ok(())
       }
+      CommandPaletteAction::OpenTerminalInSplitRight => {
+        self.open_terminal_in_split(CenterSplitDirection::Right, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenTerminalInSplitDown => {
+        self.open_terminal_in_split(CenterSplitDirection::Down, window, cx);
+        Ok(())
+      }
       CommandPaletteAction::ShowChanges => {
         self.open_dock_tab(DockPanelTab::Changes, window, cx);
         Ok(())
@@ -588,6 +598,8 @@ mod tests {
         CommandPaletteCommandId::ShowHistory,
         CommandPaletteCommandId::ShowPullRequest,
         CommandPaletteCommandId::NewTerminal,
+        CommandPaletteCommandId::OpenTerminalInSplitRight,
+        CommandPaletteCommandId::OpenTerminalInSplitDown,
         CommandPaletteCommandId::ShowFileSearch,
         CommandPaletteCommandId::ShowGlobalSearch,
       ] {

@@ -21,11 +21,12 @@ use crate::{
   CommitChanges, DeleteSelectedFileItem, ForcePushChanges, JumpToLatestMessage, NewAgentSession,
   NewAgentWorktreeSession, NewFile, NewFileInFilesPanel, NextAnnotation, NextCenterTab,
   OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenProject,
-  OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, PreviousAnnotation,
-  PreviousCenterTab, PullChanges, PushChanges, RenameSelectedFileItem, RestoreFile, RestoreHunk,
-  ReturnFocusToEditor, SaveFileAs, SendReviewCommentsToAgent, ShowBranchSwitcher,
-  ShowCommandPalette, ShowFileSearch, ShowGlobalSearch, ToggleDiffView, ToggleFileDiff,
-  ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
+  OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, OpenTerminalInSplitDown,
+  OpenTerminalInSplitRight, PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges,
+  RenameSelectedFileItem, RestoreFile, RestoreHunk, ReturnFocusToEditor, SaveFileAs,
+  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
+  ShowGlobalSearch, ToggleDiffView, ToggleFileDiff, ToggleFileStage, ToggleHideWhitespace,
+  ToggleHunkStage,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-shift-p";
@@ -79,6 +80,8 @@ pub enum ShortcutId {
   PreviousCenterTab,
   MoveCenterTabLeft,
   MoveCenterTabRight,
+  OpenTerminalInSplitRight,
+  OpenTerminalInSplitDown,
   CloseCenterTab,
   NewFile,
   SaveFileAs,
@@ -124,6 +127,8 @@ impl ShortcutId {
       ShortcutId::PreviousCenterTab => "previous_center_tab",
       ShortcutId::MoveCenterTabLeft => "move_center_tab_left",
       ShortcutId::MoveCenterTabRight => "move_center_tab_right",
+      ShortcutId::OpenTerminalInSplitRight => "open_terminal_in_split_right",
+      ShortcutId::OpenTerminalInSplitDown => "open_terminal_in_split_down",
       ShortcutId::CloseCenterTab => "close_center_tab",
       ShortcutId::NewFile => "new_file",
       ShortcutId::SaveFileAs => "save_file_as",
@@ -169,6 +174,8 @@ impl ShortcutId {
       "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
       "move_center_tab_left" => Some(ShortcutId::MoveCenterTabLeft),
       "move_center_tab_right" => Some(ShortcutId::MoveCenterTabRight),
+      "open_terminal_in_split_right" => Some(ShortcutId::OpenTerminalInSplitRight),
+      "open_terminal_in_split_down" => Some(ShortcutId::OpenTerminalInSplitDown),
       "close_center_tab" => Some(ShortcutId::CloseCenterTab),
       "new_file" => Some(ShortcutId::NewFile),
       "save_file_as" => Some(ShortcutId::SaveFileAs),
@@ -230,7 +237,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 40] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 42] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -282,6 +289,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 40] = [
     scope_label: "Workspace",
     category: ShortcutCategory::Core,
     keystroke: "ctrl-shift-pagedown",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenTerminalInSplitRight,
+    title: "Terminal in Split Right",
+    description: "Open a new terminal in a split to the right of the active pane.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "ctrl-alt-t",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenTerminalInSplitDown,
+    title: "Terminal in Split Down",
+    description: "Open a new terminal in a split below the active pane.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "ctrl-alt-shift-t",
     context: CENTER_TAB_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -784,6 +813,12 @@ impl ShortcutDefinition {
       ShortcutId::MoveCenterTabRight => {
         KeyBinding::new(keystroke, crate::MoveCenterTabRight, Some(&context))
       }
+      ShortcutId::OpenTerminalInSplitRight => {
+        KeyBinding::new(keystroke, OpenTerminalInSplitRight, Some(&context))
+      }
+      ShortcutId::OpenTerminalInSplitDown => {
+        KeyBinding::new(keystroke, OpenTerminalInSplitDown, Some(&context))
+      }
       ShortcutId::CloseCenterTab => KeyBinding::new(keystroke, CloseCenterTab, Some(&context)),
       ShortcutId::NewFile => KeyBinding::new(keystroke, NewFile, Some(&context)),
       ShortcutId::SaveFileAs => KeyBinding::new(keystroke, SaveFileAs, Some(&context)),
@@ -856,6 +891,8 @@ impl ShortcutDefinition {
         | ShortcutId::PreviousCenterTab
         | ShortcutId::MoveCenterTabLeft
         | ShortcutId::MoveCenterTabRight
+        | ShortcutId::OpenTerminalInSplitRight
+        | ShortcutId::OpenTerminalInSplitDown
         | ShortcutId::CloseCenterTab
         | ShortcutId::NewFile
         | ShortcutId::SaveFileAs
@@ -1048,6 +1085,8 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     // One key toggles either way, so both rows show it.
     Command::StageSelectedFile | Command::UnstageSelectedFile => Some(ShortcutId::ToggleFileStage),
     Command::NewTerminal => None,
+    Command::OpenTerminalInSplitRight => Some(ShortcutId::OpenTerminalInSplitRight),
+    Command::OpenTerminalInSplitDown => Some(ShortcutId::OpenTerminalInSplitDown),
     Command::ShowChanges => Some(ShortcutId::OpenGitChangesSidebar),
     Command::ShowReview => Some(ShortcutId::OpenReviewSidebar),
     Command::ShowFiles => Some(ShortcutId::OpenFilesSidebar),
@@ -1468,6 +1507,8 @@ pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action
     ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
     ShortcutId::MoveCenterTabLeft => f(&crate::MoveCenterTabLeft),
     ShortcutId::MoveCenterTabRight => f(&crate::MoveCenterTabRight),
+    ShortcutId::OpenTerminalInSplitRight => f(&OpenTerminalInSplitRight),
+    ShortcutId::OpenTerminalInSplitDown => f(&OpenTerminalInSplitDown),
     ShortcutId::CloseCenterTab => f(&CloseCenterTab),
     ShortcutId::NewFile => f(&NewFile),
     ShortcutId::SaveFileAs => f(&SaveFileAs),

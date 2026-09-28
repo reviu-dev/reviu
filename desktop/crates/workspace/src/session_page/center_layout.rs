@@ -369,6 +369,16 @@ impl CenterNode {
     }
   }
 
+  fn pane_id_for_tab(&self, tab: &CenterTab) -> Option<CenterPaneId> {
+    match self {
+      Self::Pane(pane) => pane.contains_tab(tab).then_some(pane.id),
+      Self::Split(split) => split
+        .first
+        .pane_id_for_tab(tab)
+        .or_else(|| split.second.pane_id_for_tab(tab)),
+    }
+  }
+
   fn activate_surface(&mut self, surface: CenterSurface) -> bool {
     match self {
       Self::Pane(pane) => {
@@ -840,6 +850,10 @@ impl CenterLayout {
     self.active_surface().tab()
   }
 
+  pub(super) fn active_pane_id(&self) -> Option<CenterPaneId> {
+    self.root.pane_id_for_tab(self.active_tab())
+  }
+
   pub(super) fn contains_tab(&self, tab: &CenterTab) -> bool {
     self.root.contains_tab(tab)
   }
@@ -905,6 +919,17 @@ impl CenterLayout {
     } else {
       false
     }
+  }
+
+  pub(super) fn split_active_pane(
+    &mut self,
+    surface: CenterSurface,
+    direction: CenterSplitDirection,
+  ) -> bool {
+    let Some(pane_id) = self.active_pane_id() else {
+      return false;
+    };
+    self.split_pane(pane_id, surface, direction)
   }
 
   pub(super) fn split_pane_layout(
@@ -1120,6 +1145,24 @@ mod tests {
     let file = CenterTab::file(PathBuf::from("README.md"));
     layout.set_active_surface(CenterSurface::from_tab(file.clone()));
     assert_eq!(layout.active_tab(), &file);
+  }
+
+  #[test]
+  fn active_pane_id_tracks_the_focused_surface() {
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+    let lib = CenterTab::file(PathBuf::from("src/lib.rs"));
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(readme.clone()));
+    let first_pane_id = layout.active_pane_id().expect("single pane id");
+
+    assert!(layout.split_active_pane(
+      CenterSurface::from_tab(lib.clone()),
+      CenterSplitDirection::Right,
+    ));
+    let lib_pane_id = layout.active_pane_id().expect("split active pane id");
+
+    assert_ne!(first_pane_id, lib_pane_id);
+    assert_eq!(layout.root.pane_id_for_tab(&readme), Some(first_pane_id));
+    assert_eq!(layout.root.pane_id_for_tab(&lib), Some(lib_pane_id));
   }
 
   #[test]

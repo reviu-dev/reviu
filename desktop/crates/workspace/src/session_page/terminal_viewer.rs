@@ -10,14 +10,49 @@ fn terminal_relative_path(checkout_root: &Path, path: &Path) -> Option<PathBuf> 
 
 impl SessionPage {
   pub(super) fn new_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(working_directory) = self.checkout_root(cx).or_else(|| self.creation_root(cx)) else {
-      window.push_notification(
-        Notification::warning("Open a project before starting a terminal."),
-        cx,
-      );
+    let Some(working_directory) = self.terminal_working_directory(cx, window) else {
       return;
     };
     self.open_terminal_tab_at(working_directory, None, window, cx);
+  }
+
+  pub(super) fn open_terminal_in_split_right_action(
+    &mut self,
+    _: &crate::OpenTerminalInSplitRight,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_terminal_in_split(CenterSplitDirection::Right, window, cx);
+  }
+
+  pub(super) fn open_terminal_in_split_down_action(
+    &mut self,
+    _: &crate::OpenTerminalInSplitDown,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_terminal_in_split(CenterSplitDirection::Down, window, cx);
+  }
+
+  pub(super) fn open_terminal_in_split(
+    &mut self,
+    direction: CenterSplitDirection,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(working_directory) = self.terminal_working_directory(cx, window) else {
+      return;
+    };
+    let (project_root, checkout_root) = self.terminal_roots(&working_directory, cx);
+    let tab = self.create_terminal_tab(working_directory, project_root, checkout_root, window, cx);
+    if !self.open_center_surface_in_split(
+      CenterSurface::from_tab(tab.clone()),
+      direction,
+      window,
+      cx,
+    ) {
+      self.clear_terminal_tab(&tab);
+    }
   }
 
   pub(super) fn open_agent_auth_terminal(
@@ -39,6 +74,34 @@ impl SessionPage {
     self.watch_agent_auth_terminal(panel, terminal, success_patterns, cx);
   }
 
+  fn terminal_working_directory(
+    &self,
+    cx: &mut Context<Self>,
+    window: &mut Window,
+  ) -> Option<PathBuf> {
+    self
+      .checkout_root(cx)
+      .or_else(|| self.creation_root(cx))
+      .or_else(|| {
+        window.push_notification(
+          Notification::warning("Open a project before starting a terminal."),
+          cx,
+        );
+        None
+      })
+  }
+
+  fn terminal_roots(&self, working_directory: &Path, cx: &App) -> (PathBuf, PathBuf) {
+    let project_root = self
+      .project_root(cx)
+      .unwrap_or_else(|| working_directory.to_path_buf());
+    let project_root = project_root.canonicalize().unwrap_or(project_root);
+    let checkout_root = working_directory
+      .canonicalize()
+      .unwrap_or_else(|_| working_directory.to_path_buf());
+    (project_root, checkout_root)
+  }
+
   fn open_terminal_tab_at(
     &mut self,
     working_directory: PathBuf,
@@ -46,14 +109,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Option<Entity<TerminalView>> {
-    let project_root = self
-      .project_root(cx)
-      .unwrap_or_else(|| working_directory.clone());
-    let project_root = project_root.canonicalize().unwrap_or(project_root);
-    let checkout_root = working_directory
-      .canonicalize()
-      .unwrap_or_else(|_| working_directory.clone());
-
+    let (project_root, checkout_root) = self.terminal_roots(&working_directory, cx);
     let tab = self.create_terminal_tab(working_directory, project_root, checkout_root, window, cx);
     self.center = CenterView::Terminal;
     self.remember_center_tab(tab.clone(), cx);

@@ -9,6 +9,8 @@ actions!(
     PreviousCenterTab,
     MoveCenterTabLeft,
     MoveCenterTabRight,
+    OpenTerminalInSplitRight,
+    OpenTerminalInSplitDown,
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,

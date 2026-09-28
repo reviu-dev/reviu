@@ -65,6 +65,40 @@ impl SessionPage {
     }
   }
 
+  pub(super) fn open_center_surface_in_split(
+    &mut self,
+    surface: CenterSurface,
+    direction: CenterSplitDirection,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let tab = surface.tab().clone();
+    let representative = self
+      .active_center_tab
+      .clone()
+      .unwrap_or_else(|| self.center_layout.active_tab().clone());
+    if !self.center_layout.split_active_pane(surface, direction) {
+      cx.notify();
+      return false;
+    }
+
+    self.center = Self::center_view_for_tab(&tab);
+    if let Some(conversation_id) = tab.conversation_id() {
+      self.activate_session_panel(conversation_id, window, cx);
+    }
+    if tab.kind == CenterTabKind::Terminal {
+      self.focus_terminal_tab(&tab, window, cx);
+    }
+    self.ensure_center_layout_chat_panels(window, cx);
+    self.remember_center_layout_tab(representative);
+    self.reveal_center_tab_in_files_panel(&tab, cx);
+    self.sync_agent_chat_close_control(cx);
+    self.restore_visible_center_editors(cx);
+    self.persist_current_center_workspace(cx);
+    cx.notify();
+    true
+  }
+
   pub(super) fn scroll_center_tabs_during_drag(&self, window: &mut Window) {
     let bounds = self.center_tabs_scroll_handle.bounds();
     let pointer = window.mouse_position();
