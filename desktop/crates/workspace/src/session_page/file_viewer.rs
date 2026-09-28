@@ -2370,6 +2370,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
       CenterView::Terminal => self.focus_terminal_tab(&remaining_tab, window, cx),
+      CenterView::PaneLauncher => {}
     }
     self.persist_current_center_workspace(cx);
     cx.notify();
@@ -2404,6 +2405,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
       CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
+      CenterView::PaneLauncher => {}
     }
     self.persist_current_center_workspace(cx);
     cx.notify();
@@ -2451,6 +2453,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
       CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
+      CenterView::PaneLauncher => {}
     }
     self.persist_current_center_workspace(cx);
     cx.notify();

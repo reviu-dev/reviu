@@ -383,6 +383,62 @@ fn keyboard_reordering_keeps_focus_and_stops_at_the_edges(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn split_pane_action_creates_a_launcher_pane(cx: &mut TestAppContext) {
+  let (_project, page, cx) = setup(cx);
+
+  page.update_in(cx, |page, window, cx| {
+    page.split_pane_right_action(&crate::SplitPaneRight, window, cx);
+  });
+
+  page.read_with(cx, |page, _| {
+    assert_eq!(page.center, CenterView::PaneLauncher);
+    assert_eq!(
+      page.center_layout.active_tab().kind,
+      CenterTabKind::PaneLauncher
+    );
+    let CenterNode::Split(split) = page.center_layout.root() else {
+      panic!("layout should be split");
+    };
+    assert_eq!(split.direction(), CenterSplitDirection::Right);
+    let CenterNode::Pane(second) = split.second() else {
+      panic!("second side should be a pane");
+    };
+    assert_eq!(
+      second.active_surface().tab().kind,
+      CenterTabKind::PaneLauncher
+    );
+  });
+}
+
+#[gpui::test]
+fn launcher_pane_can_be_replaced_with_a_terminal(cx: &mut TestAppContext) {
+  let (_project, page, cx) = setup(cx);
+
+  let launcher = page.update_in(cx, |page, window, cx| {
+    page.split_pane_down_action(&crate::SplitPaneDown, window, cx);
+    page.center_layout.active_tab().clone()
+  });
+  page.update_in(cx, |page, window, cx| {
+    page.open_terminal_for_split_launcher(launcher, window, cx);
+  });
+
+  page.read_with(cx, |page, _| {
+    assert_eq!(page.center, CenterView::Terminal);
+    assert_eq!(
+      page.center_layout.active_tab().kind,
+      CenterTabKind::Terminal
+    );
+    assert!(
+      page
+        .center_layout
+        .tabs()
+        .iter()
+        .all(|tab| tab.kind != CenterTabKind::PaneLauncher)
+    );
+  });
+}
+
+#[gpui::test]
 fn moving_the_active_pane_uses_the_focused_split_surface(cx: &mut TestAppContext) {
   let (_project, page, cx) = setup(cx);
   let file = draft(&page, "move me", cx);

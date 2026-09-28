@@ -9,6 +9,8 @@ actions!(
     PreviousCenterTab,
     MoveCenterTabLeft,
     MoveCenterTabRight,
+    SplitPaneRight,
+    SplitPaneDown,
     MoveCenterPaneLeft,
     MoveCenterPaneRight,
     MoveCenterPaneUp,

@@ -8,6 +8,7 @@ pub(super) enum CenterTabKind {
   InteractiveRebase,
   ProjectSearch,
   Terminal,
+  PaneLauncher,
 }
 
 impl CenterTabKind {
@@ -19,6 +20,7 @@ impl CenterTabKind {
       Self::InteractiveRebase => "interactive_rebase",
       Self::ProjectSearch => "project_search",
       Self::Terminal => "terminal",
+      Self::PaneLauncher => "pane_launcher",
     }
   }
 }
@@ -46,6 +48,7 @@ pub(super) struct CenterTab {
   pub(super) snapshot: Option<CenterTabSnapshot>,
   pub(super) terminal_id: Option<u64>,
   pub(super) untitled_id: Option<u64>,
+  pub(super) pane_launcher_id: Option<u64>,
 }
 
 impl CenterTab {
@@ -68,6 +71,7 @@ impl CenterTab {
       snapshot: None,
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -79,6 +83,7 @@ impl CenterTab {
       snapshot: None,
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -90,6 +95,7 @@ impl CenterTab {
       snapshot: None,
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -101,6 +107,7 @@ impl CenterTab {
       snapshot: None,
       terminal_id: None,
       untitled_id: Some(id),
+      pane_launcher_id: None,
     }
   }
 
@@ -112,6 +119,7 @@ impl CenterTab {
       snapshot: None,
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -123,6 +131,7 @@ impl CenterTab {
       snapshot: Some(CenterTabSnapshot::AgentTool { old_text, new_text }),
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -134,6 +143,7 @@ impl CenterTab {
       snapshot: Some(CenterTabSnapshot::Commit { oid }),
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -145,6 +155,7 @@ impl CenterTab {
       snapshot: Some(CenterTabSnapshot::PullRequestRange { base, head }),
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -156,6 +167,7 @@ impl CenterTab {
       snapshot: None,
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -167,6 +179,7 @@ impl CenterTab {
       snapshot: None,
       terminal_id: None,
       untitled_id: None,
+      pane_launcher_id: None,
     }
   }
 
@@ -178,6 +191,19 @@ impl CenterTab {
       snapshot: None,
       terminal_id: Some(id),
       untitled_id: None,
+      pane_launcher_id: None,
+    }
+  }
+
+  pub(super) fn pane_launcher(id: u64) -> Self {
+    Self {
+      kind: CenterTabKind::PaneLauncher,
+      path: None,
+      conversation_id: None,
+      snapshot: None,
+      terminal_id: None,
+      untitled_id: None,
+      pane_launcher_id: Some(id),
     }
   }
 
@@ -201,6 +227,10 @@ impl CenterTab {
     self.untitled_id
   }
 
+  pub(super) fn pane_launcher_id(&self) -> Option<u64> {
+    self.pane_launcher_id
+  }
+
   pub(super) fn is_untitled(&self) -> bool {
     self.kind == CenterTabKind::File && self.path.is_none() && self.untitled_id.is_some()
   }
@@ -211,7 +241,8 @@ impl CenterTab {
       CenterTabKind::File
       | CenterTabKind::Diff
       | CenterTabKind::ProjectSearch
-      | CenterTabKind::Terminal => true,
+      | CenterTabKind::Terminal
+      | CenterTabKind::PaneLauncher => true,
       CenterTabKind::InteractiveRebase => false,
     }
   }

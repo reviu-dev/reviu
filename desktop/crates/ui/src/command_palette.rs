@@ -409,6 +409,8 @@ pub enum CommandPaletteAction {
   NewTerminal,
   OpenTerminalInSplitRight,
   OpenTerminalInSplitDown,
+  SplitPaneRight,
+  SplitPaneDown,
   FocusPaneLeft,
   FocusPaneRight,
   FocusPaneUp,
@@ -1046,6 +1048,8 @@ pub enum CommandPaletteCommandId {
   NewTerminal,
   OpenTerminalInSplitRight,
   OpenTerminalInSplitDown,
+  SplitPaneRight,
+  SplitPaneDown,
   FocusPaneLeft,
   FocusPaneRight,
   FocusPaneUp,
@@ -1132,6 +1136,8 @@ impl CommandPaletteCommandId {
       Self::NewTerminal => "new_terminal",
       Self::OpenTerminalInSplitRight => "open_terminal_in_split_right",
       Self::OpenTerminalInSplitDown => "open_terminal_in_split_down",
+      Self::SplitPaneRight => "split_pane_right",
+      Self::SplitPaneDown => "split_pane_down",
       Self::FocusPaneLeft => "focus_pane_left",
       Self::FocusPaneRight => "focus_pane_right",
       Self::FocusPaneUp => "focus_pane_up",
@@ -1214,6 +1220,8 @@ impl CommandPaletteCommandId {
       "new_terminal" => Some(Self::NewTerminal),
       "open_terminal_in_split_right" => Some(Self::OpenTerminalInSplitRight),
       "open_terminal_in_split_down" => Some(Self::OpenTerminalInSplitDown),
+      "split_pane_right" => Some(Self::SplitPaneRight),
+      "split_pane_down" => Some(Self::SplitPaneDown),
       "focus_pane_left" => Some(Self::FocusPaneLeft),
       "focus_pane_right" => Some(Self::FocusPaneRight),
       "focus_pane_up" => Some(Self::FocusPaneUp),
@@ -1805,6 +1813,22 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn split_pane_right() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SplitPaneRight,
+      "Split Pane Right",
+      "Create a new pane to the right and choose what to open there",
+    )
+  }
+
+  pub fn split_pane_down() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SplitPaneDown,
+      "Split Pane Down",
+      "Create a new pane below and choose what to open there",
+    )
+  }
+
   pub fn focus_pane_left() -> Self {
     Self::new(
       CommandPaletteCommandId::FocusPaneLeft,
@@ -2141,7 +2165,9 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::ShowGlobalSearch
       | CommandPaletteCommandId::JumpToLatestMessage => CommandPaletteGroup::Navigation,
 
-      CommandPaletteCommandId::FocusPaneLeft
+      CommandPaletteCommandId::SplitPaneRight
+      | CommandPaletteCommandId::SplitPaneDown
+      | CommandPaletteCommandId::FocusPaneLeft
       | CommandPaletteCommandId::FocusPaneRight
       | CommandPaletteCommandId::FocusPaneUp
       | CommandPaletteCommandId::FocusPaneDown
@@ -2200,6 +2226,9 @@ impl CommandPaletteCommand {
       Id::NewTerminal | Id::OpenTerminalInSplitRight | Id::OpenTerminalInSplitDown => {
         &["shell", "console", "terminal", "pane", "split"]
       }
+      Id::SplitPaneRight | Id::SplitPaneDown => &[
+        "split", "pane", "window", "layout", "open", "new", "right", "down",
+      ],
       Id::FocusPaneLeft | Id::FocusPaneRight | Id::FocusPaneUp | Id::FocusPaneDown => {
         &["split", "pane", "window", "navigate", "move"]
       }
@@ -2310,7 +2339,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::NewTerminal
       | CommandPaletteCommandId::OpenTerminalInSplitRight
       | CommandPaletteCommandId::OpenTerminalInSplitDown => Icon::new(UiIconName::Terminal),
-      CommandPaletteCommandId::FocusPaneLeft
+      CommandPaletteCommandId::SplitPaneRight
+      | CommandPaletteCommandId::SplitPaneDown
+      | CommandPaletteCommandId::FocusPaneLeft
       | CommandPaletteCommandId::FocusPaneRight
       | CommandPaletteCommandId::FocusPaneUp
       | CommandPaletteCommandId::FocusPaneDown => Icon::new(UiIconName::Maximize2),
@@ -3556,6 +3587,12 @@ impl CommandPalette {
           window,
           cx,
         );
+      }
+      CommandPaletteCommandId::SplitPaneRight => {
+        self.trigger_action(command, CommandPaletteAction::SplitPaneRight, window, cx);
+      }
+      CommandPaletteCommandId::SplitPaneDown => {
+        self.trigger_action(command, CommandPaletteAction::SplitPaneDown, window, cx);
       }
       CommandPaletteCommandId::FocusPaneLeft => {
         self.trigger_action(command, CommandPaletteAction::FocusPaneLeft, window, cx);

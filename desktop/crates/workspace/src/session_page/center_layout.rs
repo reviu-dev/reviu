@@ -79,6 +79,7 @@ pub(super) enum CenterSurface {
   InteractiveRebase(CenterTab),
   ProjectSearch(CenterTab),
   Terminal(CenterTab),
+  PaneLauncher(CenterTab),
 }
 
 impl CenterSurface {
@@ -89,6 +90,7 @@ impl CenterSurface {
       CenterTabKind::InteractiveRebase => Self::InteractiveRebase(tab),
       CenterTabKind::ProjectSearch => Self::ProjectSearch(tab),
       CenterTabKind::Terminal => Self::Terminal(tab),
+      CenterTabKind::PaneLauncher => Self::PaneLauncher(tab),
     }
   }
 
@@ -98,7 +100,8 @@ impl CenterSurface {
       | Self::Editor(tab)
       | Self::InteractiveRebase(tab)
       | Self::ProjectSearch(tab)
-      | Self::Terminal(tab) => tab,
+      | Self::Terminal(tab)
+      | Self::PaneLauncher(tab) => tab,
     }
   }
 }
@@ -777,7 +780,7 @@ pub(super) fn persisted_center_tab(
     CenterTabKind::Terminal => Some(PersistedCenterTab::Terminal {
       key: terminal_keys.get(&tab.terminal_id()?).copied()?,
     }),
-    CenterTabKind::InteractiveRebase => None,
+    CenterTabKind::InteractiveRebase | CenterTabKind::PaneLauncher => None,
   }
 }
 

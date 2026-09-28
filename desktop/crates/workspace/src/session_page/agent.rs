@@ -1413,6 +1413,58 @@ impl SessionPage {
     cx.notify();
   }
 
+  pub(super) fn open_new_chat_for_split_launcher(
+    &mut self,
+    launcher_tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(project_root) = self.creation_root(cx) else {
+      window.push_notification(
+        Notification::warning("Open a project before starting a chat."),
+        cx,
+      );
+      return;
+    };
+    if let Some(evicted_project) = self.ensure_chat_store(cx) {
+      self.push_project_hidden_notification(&evicted_project, window, cx);
+    }
+    let access = self.chat_store_for_project(&project_root, cx);
+    if let Some(evicted_project) = access
+      .as_ref()
+      .and_then(|access| access.evicted_project.as_ref())
+    {
+      self.push_project_hidden_notification(evicted_project, window, cx);
+    }
+    let store = access.map(|access| access.store);
+    if self.fallback_repo.is_none()
+      && self.project_root(cx).as_deref() == Some(project_root.as_path())
+    {
+      self.chat_store = store.clone();
+    }
+    let worktree = self.worktree_for_new_chat(&project_root, cx);
+    let target_agent = AgentSettings::load();
+    if self.agent_chat_view.is_some() {
+      self.park_visible_active_chat_panel(cx);
+    }
+    let view = self.build_fresh_chat_panel(
+      project_root,
+      store,
+      worktree,
+      Some(target_agent),
+      window,
+      cx,
+    );
+    view.update(cx, |panel, _| panel.set_active_conversation(true));
+    self.agent_chat_view = Some(view.clone());
+    let tab = Self::chat_tab_for_panel(&view, cx);
+    if self.replace_split_launcher_with_surface(&launcher_tab, tab, window, cx) {
+      self.evict_parked_chat_panels(cx);
+      self.refresh_session_list(cx);
+      self.sync_active_checkout(window, cx);
+    }
+  }
+
   fn new_session_in_chat_pane(
     &mut self,
     old_panel: Entity<AgentChatPanel>,

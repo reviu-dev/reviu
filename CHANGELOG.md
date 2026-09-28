@@ -12,6 +12,10 @@ Open a terminal directly beside or below your current chat, file, or diff from t
 
 Focus the pane beside, above, or below your current split from the command palette or the new configurable directional shortcuts.
 
+### Split Pane Launcher
+
+Create an empty split pane from the command palette or keyboard, then choose whether to fill it with a terminal, chat, file, diff, or project search.
+
 ### Agent Sign-In In Reviu
 
 When Claude or another ACP agent asks you to sign in again, Reviu now offers the login command directly in the chat and can open it in a Reviu terminal. Claude logins reconnect the chat automatically once the terminal reports success.

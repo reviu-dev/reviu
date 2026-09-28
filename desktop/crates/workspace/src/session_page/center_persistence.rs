@@ -117,6 +117,7 @@ impl SessionPage {
         snapshot: snapshot.clone(),
         terminal_id: None,
         untitled_id: None,
+        pane_launcher_id: None,
       }),
       PersistedCenterTab::Untitled { id } => {
         let tab = CenterTab::untitled(*id);

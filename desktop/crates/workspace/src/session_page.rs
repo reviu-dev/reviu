@@ -154,6 +154,7 @@ enum CenterView {
   InteractiveRebase,
   ProjectSearch,
   Terminal,
+  PaneLauncher,
 }
 
 #[derive(Clone)]
@@ -320,6 +321,7 @@ pub struct SessionPage {
   editor_states: HashMap<CenterTab, CenterEditorState>,
   terminal_views: HashMap<u64, TerminalPane>,
   next_terminal_id: u64,
+  next_pane_launcher_id: u64,
   untitled_buffers: HashMap<u64, untitled_persistence::UntitledBuffer>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   project_search_view: Option<Entity<ProjectSearchView>>,
@@ -699,6 +701,7 @@ impl SessionPage {
       editor_states: HashMap::new(),
       terminal_views: HashMap::new(),
       next_terminal_id: 1,
+      next_pane_launcher_id: 1,
       untitled_buffers: HashMap::new(),
       interactive_rebase_todo_view: None,
       project_search_view: None,
@@ -1609,7 +1612,7 @@ impl SessionPage {
         .and_then(|id| self.untitled_buffers.get(&id))
         .is_some_and(|buffer| buffer.checkout_root == Self::canonical_repo(checkout)),
       CenterTabKind::File | CenterTabKind::Diff | CenterTabKind::ProjectSearch => true,
-      CenterTabKind::InteractiveRebase => false,
+      CenterTabKind::InteractiveRebase | CenterTabKind::PaneLauncher => false,
       CenterTabKind::Terminal => tab
         .terminal_id()
         .and_then(|id| self.terminal_views.get(&id))
@@ -1895,6 +1898,7 @@ impl SessionPage {
           .find(|tab| tab.kind == CenterTabKind::Terminal)
           .cloned()
           .unwrap_or_else(CenterTab::chat),
+        CenterView::PaneLauncher => self.center_layout.active_tab().clone(),
       })
   }
 
@@ -2029,6 +2033,7 @@ impl SessionPage {
         CenterTabKind::InteractiveRebase => CenterView::InteractiveRebase,
         CenterTabKind::ProjectSearch => CenterView::ProjectSearch,
         CenterTabKind::Terminal => CenterView::Terminal,
+        CenterTabKind::PaneLauncher => CenterView::PaneLauncher,
       };
       if focused_tab.kind == CenterTabKind::ProjectSearch
         && let Some(repo_root) = self.checkout_root(cx)
@@ -2043,6 +2048,7 @@ impl SessionPage {
         CenterView::Diff | CenterView::InteractiveRebase => {}
         CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
         CenterView::Terminal => self.focus_terminal_tab(&focused_tab, window, cx),
+        CenterView::PaneLauncher => {}
       }
       self.restore_visible_center_editors(cx);
       self.persist_current_center_workspace(cx);
@@ -2097,6 +2103,13 @@ impl SessionPage {
         self.center = CenterView::Terminal;
         self.set_active_center_tab_and_reveal(tab.clone(), cx);
         self.focus_terminal_tab(&tab, window, cx);
+        cx.notify();
+      }
+      CenterTabKind::PaneLauncher => {
+        self.center = CenterView::PaneLauncher;
+        self
+          .center_layout
+          .set_active_surface(CenterSurface::from_tab(tab));
         cx.notify();
       }
     }
@@ -2274,6 +2287,7 @@ impl SessionPage {
       CenterView::InteractiveRebase => {}
       CenterView::ProjectSearch => self.focus_project_search_on_next_frame(window, cx),
       CenterView::Terminal => self.focus_terminal_tab(&active_tab, window, cx),
+      CenterView::PaneLauncher => {}
     }
     cx.notify();
     Ok(())
@@ -2319,6 +2333,7 @@ impl SessionPage {
         CenterTabKind::InteractiveRebase => "interactive_rebase",
         CenterTabKind::ProjectSearch => "project_search",
         CenterTabKind::Terminal => "terminal",
+        CenterTabKind::PaneLauncher => "pane_launcher",
       })
       .map(str::to_string)
       .collect();
@@ -3287,6 +3302,9 @@ impl Focusable for SessionPage {
       && let Some(view) = self.interactive_rebase_todo_view.as_ref()
     {
       return view.read(cx).focus_handle(cx);
+    }
+    if self.center == CenterView::PaneLauncher {
+      return self.focus_handle.clone();
     }
     if let Some(view) = self.agent_chat_view.as_ref() {
       return view.read(cx).input_focus_handle(cx);

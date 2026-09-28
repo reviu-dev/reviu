@@ -196,6 +196,8 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::new_terminal());
       commands.push(CommandPaletteCommand::open_terminal_in_split_right());
       commands.push(CommandPaletteCommand::open_terminal_in_split_down());
+      commands.push(CommandPaletteCommand::split_pane_right());
+      commands.push(CommandPaletteCommand::split_pane_down());
       if self
         .center_layout
         .adjacent_pane_info(CenterSplitDirection::Left)
@@ -527,6 +529,14 @@ impl SessionPage {
         self.open_terminal_in_split(CenterSplitDirection::Down, window, cx);
         Ok(())
       }
+      CommandPaletteAction::SplitPaneRight => {
+        self.split_pane_right_action(&crate::SplitPaneRight, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::SplitPaneDown => {
+        self.split_pane_down_action(&crate::SplitPaneDown, window, cx);
+        Ok(())
+      }
       CommandPaletteAction::FocusPaneLeft => {
         self.focus_center_pane_left_action(&crate::FocusCenterPaneLeft, window, cx);
         Ok(())
@@ -644,6 +654,8 @@ mod tests {
         CommandPaletteCommandId::NewTerminal,
         CommandPaletteCommandId::OpenTerminalInSplitRight,
         CommandPaletteCommandId::OpenTerminalInSplitDown,
+        CommandPaletteCommandId::SplitPaneRight,
+        CommandPaletteCommandId::SplitPaneDown,
         CommandPaletteCommandId::ShowFileSearch,
         CommandPaletteCommandId::ShowGlobalSearch,
       ] {

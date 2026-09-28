@@ -27,8 +27,8 @@ use crate::{
   OpenTerminalInSplitRight, PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges,
   RenameSelectedFileItem, RestoreFile, RestoreHunk, ReturnFocusToEditor, SaveFileAs,
   SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  ShowGlobalSearch, ToggleDiffView, ToggleFileDiff, ToggleFileStage, ToggleHideWhitespace,
-  ToggleHunkStage,
+  ShowGlobalSearch, SplitPaneDown, SplitPaneRight, ToggleDiffView, ToggleFileDiff, ToggleFileStage,
+  ToggleHideWhitespace, ToggleHunkStage,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-shift-p";
@@ -86,6 +86,8 @@ pub enum ShortcutId {
   MoveCenterPaneRight,
   MoveCenterPaneUp,
   MoveCenterPaneDown,
+  SplitPaneRight,
+  SplitPaneDown,
   FocusCenterPaneLeft,
   FocusCenterPaneRight,
   FocusCenterPaneUp,
@@ -141,6 +143,8 @@ impl ShortcutId {
       ShortcutId::MoveCenterPaneRight => "move_center_pane_right",
       ShortcutId::MoveCenterPaneUp => "move_center_pane_up",
       ShortcutId::MoveCenterPaneDown => "move_center_pane_down",
+      ShortcutId::SplitPaneRight => "split_pane_right",
+      ShortcutId::SplitPaneDown => "split_pane_down",
       ShortcutId::FocusCenterPaneLeft => "focus_center_pane_left",
       ShortcutId::FocusCenterPaneRight => "focus_center_pane_right",
       ShortcutId::FocusCenterPaneUp => "focus_center_pane_up",
@@ -196,6 +200,8 @@ impl ShortcutId {
       "move_center_pane_right" => Some(ShortcutId::MoveCenterPaneRight),
       "move_center_pane_up" => Some(ShortcutId::MoveCenterPaneUp),
       "move_center_pane_down" => Some(ShortcutId::MoveCenterPaneDown),
+      "split_pane_right" => Some(ShortcutId::SplitPaneRight),
+      "split_pane_down" => Some(ShortcutId::SplitPaneDown),
       "focus_center_pane_left" => Some(ShortcutId::FocusCenterPaneLeft),
       "focus_center_pane_right" => Some(ShortcutId::FocusCenterPaneRight),
       "focus_center_pane_up" => Some(ShortcutId::FocusCenterPaneUp),
@@ -263,7 +269,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 50] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 52] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -315,6 +321,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 50] = [
     scope_label: "Workspace",
     category: ShortcutCategory::Core,
     keystroke: "ctrl-shift-pagedown",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::SplitPaneRight,
+    title: "Split Pane Right",
+    description: "Create a new pane to the right and choose what to open there.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-alt-\\",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::SplitPaneDown,
+    title: "Split Pane Down",
+    description: "Create a new pane below and choose what to open there.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-alt-shift-\\",
     context: CENTER_TAB_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -937,6 +965,8 @@ impl ShortcutDefinition {
       ShortcutId::MoveCenterPaneDown => {
         KeyBinding::new(keystroke, MoveCenterPaneDown, Some(&context))
       }
+      ShortcutId::SplitPaneRight => KeyBinding::new(keystroke, SplitPaneRight, Some(&context)),
+      ShortcutId::SplitPaneDown => KeyBinding::new(keystroke, SplitPaneDown, Some(&context)),
       ShortcutId::FocusCenterPaneLeft => {
         KeyBinding::new(keystroke, FocusCenterPaneLeft, Some(&context))
       }
@@ -1031,6 +1061,8 @@ impl ShortcutDefinition {
         | ShortcutId::MoveCenterPaneRight
         | ShortcutId::MoveCenterPaneUp
         | ShortcutId::MoveCenterPaneDown
+        | ShortcutId::SplitPaneRight
+        | ShortcutId::SplitPaneDown
         | ShortcutId::FocusCenterPaneLeft
         | ShortcutId::FocusCenterPaneRight
         | ShortcutId::FocusCenterPaneUp
@@ -1231,6 +1263,8 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::NewTerminal => None,
     Command::OpenTerminalInSplitRight => Some(ShortcutId::OpenTerminalInSplitRight),
     Command::OpenTerminalInSplitDown => Some(ShortcutId::OpenTerminalInSplitDown),
+    Command::SplitPaneRight => Some(ShortcutId::SplitPaneRight),
+    Command::SplitPaneDown => Some(ShortcutId::SplitPaneDown),
     Command::FocusPaneLeft => Some(ShortcutId::FocusCenterPaneLeft),
     Command::FocusPaneRight => Some(ShortcutId::FocusCenterPaneRight),
     Command::FocusPaneUp => Some(ShortcutId::FocusCenterPaneUp),
@@ -1659,6 +1693,8 @@ pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action
     ShortcutId::MoveCenterPaneRight => f(&MoveCenterPaneRight),
     ShortcutId::MoveCenterPaneUp => f(&MoveCenterPaneUp),
     ShortcutId::MoveCenterPaneDown => f(&MoveCenterPaneDown),
+    ShortcutId::SplitPaneRight => f(&SplitPaneRight),
+    ShortcutId::SplitPaneDown => f(&SplitPaneDown),
     ShortcutId::FocusCenterPaneLeft => f(&FocusCenterPaneLeft),
     ShortcutId::FocusCenterPaneRight => f(&FocusCenterPaneRight),
     ShortcutId::FocusCenterPaneUp => f(&FocusCenterPaneUp),
@@ -2110,6 +2146,12 @@ mod tests {
   fn session_creation_bindings_live_in_the_workspace() {
     assert!(has_binding("workspace", "ctrl-alt-n"));
     assert!(has_binding("workspace", "ctrl-alt-shift-n"));
+  }
+
+  #[test]
+  fn split_pane_bindings_live_in_the_workspace() {
+    assert!(has_binding("workspace", "cmd-alt-\\"));
+    assert!(has_binding("workspace", "cmd-alt-shift-\\"));
   }
 
   #[test]

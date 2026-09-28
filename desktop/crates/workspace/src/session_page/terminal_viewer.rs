@@ -74,7 +74,7 @@ impl SessionPage {
     self.watch_agent_auth_terminal(panel, terminal, success_patterns, cx);
   }
 
-  fn terminal_working_directory(
+  pub(super) fn terminal_working_directory(
     &self,
     cx: &mut Context<Self>,
     window: &mut Window,
@@ -91,7 +91,7 @@ impl SessionPage {
       })
   }
 
-  fn terminal_roots(&self, working_directory: &Path, cx: &App) -> (PathBuf, PathBuf) {
+  pub(super) fn terminal_roots(&self, working_directory: &Path, cx: &App) -> (PathBuf, PathBuf) {
     let project_root = self
       .project_root(cx)
       .unwrap_or_else(|| working_directory.to_path_buf());

@@ -451,6 +451,10 @@ impl SessionPage {
         "session-center-tab-terminal-{}",
         tab.terminal_id().unwrap_or_default()
       ),
+      CenterTabKind::PaneLauncher => format!(
+        "session-center-tab-pane-launcher-{}",
+        tab.pane_launcher_id().unwrap_or_default()
+      ),
     }
   }
 
@@ -600,6 +604,7 @@ impl SessionPage {
       CenterTabKind::InteractiveRebase => Some("Interactive rebase".to_string()),
       CenterTabKind::ProjectSearch => Some("Project Search".to_string()),
       CenterTabKind::Terminal => Some(self.terminal_label(tab, cx)),
+      CenterTabKind::PaneLauncher => Some("New Pane".to_string()),
     }
   }
 
@@ -630,6 +635,10 @@ impl SessionPage {
         .size_3()
         .text_color(theme.muted_foreground)
         .into_any_element(),
+      CenterTabKind::PaneLauncher => gpui_component::Icon::new(UiIconName::Maximize2)
+        .size_3()
+        .text_color(theme.muted_foreground)
+        .into_any_element(),
     })
   }
 
@@ -640,6 +649,7 @@ impl SessionPage {
       CenterTabKind::InteractiveRebase => "session-center-tab-rebase-icon",
       CenterTabKind::ProjectSearch => "session-center-tab-project-search-icon",
       CenterTabKind::Terminal => "session-center-tab-terminal-icon",
+      CenterTabKind::PaneLauncher => "session-center-tab-pane-launcher-icon",
     }
   }
 
@@ -1532,6 +1542,10 @@ impl SessionPage {
         SharedString::from("session-center-interactive-rebase")
       }
       CenterSurface::ProjectSearch(_) => SharedString::from("session-center-project-search"),
+      CenterSurface::PaneLauncher(tab) => SharedString::from(format!(
+        "session-center-pane-launcher-{}",
+        tab.pane_launcher_id().unwrap_or_default()
+      )),
       CenterSurface::Terminal(tab) => SharedString::from(format!(
         "session-center-terminal-{}",
         tab.terminal_id().unwrap_or_default()
@@ -1800,6 +1814,7 @@ impl SessionPage {
       CenterSurface::InteractiveRebase(_) => self.render_interactive_rebase(cx),
       CenterSurface::ProjectSearch(_) => self.render_project_search(cx),
       CenterSurface::Terminal(tab) => self.render_terminal_surface(tab.clone(), cx),
+      CenterSurface::PaneLauncher(tab) => self.render_pane_launcher(tab.clone(), cx),
       CenterSurface::Editor(tab) => self.render_diff_view(tab, window, cx),
     }
   }
@@ -1810,6 +1825,133 @@ impl SessionPage {
       .as_ref()
       .map(|view| view.clone().into_any_element())
       .unwrap_or_else(|| self.render_center_empty_state(cx))
+  }
+
+  fn render_pane_launcher(&self, tab: CenterTab, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let has_project = self.project_root(cx).is_some();
+    let has_checkout = self.checkout_root(cx).is_some();
+    let has_creation_root = self.creation_root(cx).is_some();
+    let has_changes = !self.dock_panel.read(cx).status_entries().is_empty();
+
+    let mut actions = h_flex()
+      .debug_selector(|| "session-split-launcher-actions".to_string())
+      .max_w(px(760.0))
+      .w_full()
+      .gap_3()
+      .flex_wrap()
+      .justify_center();
+
+    if has_checkout || has_creation_root {
+      let launcher_tab = tab.clone();
+      actions = actions.child(self.render_center_empty_action(
+        "split-launcher-terminal",
+        gpui_component::Icon::new(UiIconName::Terminal),
+        "New Terminal",
+        "Start a shell in this pane",
+        cx.listener(move |this, _, window, cx| {
+          this.open_terminal_for_split_launcher(launcher_tab.clone(), window, cx)
+        }),
+        cx,
+      ));
+    }
+
+    if has_creation_root {
+      let launcher_tab = tab.clone();
+      actions = actions.child(self.render_center_empty_action(
+        "split-launcher-chat",
+        gpui_component::Icon::new(UiIconName::SquarePen),
+        "New Chat",
+        "Start a fresh agent conversation",
+        cx.listener(move |this, _, window, cx| {
+          this.open_new_chat_for_split_launcher(launcher_tab.clone(), window, cx)
+        }),
+        cx,
+      ));
+    }
+
+    if has_checkout {
+      let launcher_tab = tab.clone();
+      actions = actions.child(self.render_center_empty_action(
+        "split-launcher-file",
+        gpui_component::Icon::new(UiIconName::Search),
+        "Open File...",
+        "Search the current checkout",
+        cx.listener(move |this, _, window, cx| {
+          this.open_file_picker_for_split_launcher(launcher_tab.clone(), window, cx)
+        }),
+        cx,
+      ));
+    }
+
+    if has_checkout && has_changes {
+      let launcher_tab = tab.clone();
+      actions = actions.child(self.render_center_empty_action(
+        "split-launcher-diff",
+        gpui_component::Icon::new(UiIconName::FileDiff),
+        "Open Diff...",
+        "Pick a changed file diff",
+        cx.listener(move |this, _, window, cx| {
+          this.open_diff_picker_for_split_launcher(launcher_tab.clone(), window, cx)
+        }),
+        cx,
+      ));
+    }
+
+    if has_checkout {
+      let launcher_tab = tab.clone();
+      actions = actions.child(self.render_center_empty_action(
+        "split-launcher-search",
+        gpui_component::Icon::new(UiIconName::Search),
+        "Project Search",
+        "Search across the checkout",
+        cx.listener(move |this, _, window, cx| {
+          this.open_project_search_for_split_launcher(launcher_tab.clone(), window, cx)
+        }),
+        cx,
+      ));
+    }
+
+    if !has_project {
+      actions = actions.child(self.render_center_empty_action(
+        "split-launcher-open-project",
+        gpui_component::Icon::new(UiIconName::FolderPlus),
+        "Add project",
+        "Choose a repository or folder",
+        cx.listener(|this, _, window, cx| this.start_open_project(window, cx)),
+        cx,
+      ));
+    }
+
+    v_flex()
+      .debug_selector(|| "session-split-launcher".to_string())
+      .size_full()
+      .items_center()
+      .justify_center()
+      .gap_6()
+      .px_6()
+      .pb_12()
+      .bg(theme.background)
+      .child(
+        v_flex()
+          .items_center()
+          .gap_1()
+          .child(
+            div()
+              .text_size(px(30.0))
+              .font_weight(gpui::FontWeight::BOLD)
+              .text_color(theme.foreground)
+              .child("New Pane"),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("Choose what to open in this split"),
+          ),
+      )
+      .child(actions)
+      .into_any_element()
   }
 
   fn render_center_drop_overlay(
@@ -1881,6 +2023,7 @@ impl SessionPage {
       CenterTabKind::InteractiveRebase => CenterView::InteractiveRebase,
       CenterTabKind::ProjectSearch => CenterView::ProjectSearch,
       CenterTabKind::Terminal => CenterView::Terminal,
+      CenterTabKind::PaneLauncher => CenterView::PaneLauncher,
     }
   }
 
@@ -3132,6 +3275,8 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::activate_previous_center_tab_action))
       .on_action(cx.listener(Self::move_center_tab_left_action))
       .on_action(cx.listener(Self::move_center_tab_right_action))
+      .on_action(cx.listener(Self::split_pane_right_action))
+      .on_action(cx.listener(Self::split_pane_down_action))
       .on_action(cx.listener(Self::move_center_pane_left_action))
       .on_action(cx.listener(Self::move_center_pane_right_action))
       .on_action(cx.listener(Self::move_center_pane_up_action))
