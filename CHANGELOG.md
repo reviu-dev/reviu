@@ -20,6 +20,10 @@ Create an empty split pane from the command palette or keyboard, then choose whe
 
 Open File in Split and Open Diff in Split commands now create the target pane first, then let you choose the file or changed file to place there.
 
+### Main Checkout Sidebar Cleanup
+
+The project sidebar no longer shows a duplicate HEAD checkout when an old chat binding points at the main checkout instead of a real worktree. Detached worktrees now use their checkout folder name instead of the generic HEAD label.
+
 ### Agent Sign-In In Reviu
 
 When Claude or another ACP agent asks you to sign in again, Reviu now offers the login command directly in the chat and can open it in a Reviu terminal. Claude logins reconnect the chat automatically once the terminal reports success.

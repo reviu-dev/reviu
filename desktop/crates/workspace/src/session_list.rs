@@ -676,7 +676,7 @@ impl SessionList {
       let Some(binding) = self.worktree_checkouts.get(&row.meta.id) else {
         continue;
       };
-      if self.is_archived_worktree(&binding.path) {
+      if binding.path == repo_root || self.is_archived_worktree(&binding.path) {
         continue;
       }
       if !checkouts.iter().any(|(path, _)| *path == binding.path) {
@@ -685,10 +685,14 @@ impl SessionList {
     }
     rows.extend(checkouts.into_iter().map(|(path, branch)| {
       let summary = self.checkout_git_summaries.get(path.as_path());
+      let title = summary
+        .and_then(|summary| summary.branch_status.as_ref())
+        .map(|status| status.name.trim())
+        .filter(|name| !name.is_empty() && *name != "HEAD")
+        .map(|name| name.to_string().into())
+        .unwrap_or_else(|| branch.clone().into());
       CheckoutRow {
-        title: summary
-          .and_then(CheckoutGitSummary::branch_title)
-          .unwrap_or_else(|| branch.clone().into()),
+        title,
         kind: CheckoutKind::Worktree { branch },
         updated_at_secs: summary.and_then(|summary| summary.head_updated_at_secs),
         path,
@@ -2020,6 +2024,30 @@ mod tests {
   }
 
   #[test]
+  fn checkout_rows_ignore_main_checkout_worktree_bindings() {
+    let mut list = SessionList::new();
+    list.git_repositories.insert(PathBuf::from("/repo"));
+    list.conversations = vec![meta("main-chat", 1)];
+    list
+      .worktree_checkouts
+      .insert("main-chat".to_string(), worktree_binding("/repo", "HEAD"));
+
+    assert_eq!(
+      list.checkout_rows_for_project(Path::new("/repo")),
+      vec![CheckoutRow {
+        kind: CheckoutKind::Main,
+        path: PathBuf::from("/repo"),
+        title: "Main checkout".into(),
+        updated_at_secs: None,
+      }]
+    );
+    assert_eq!(
+      list.conversation_ids_for_checkout(Path::new("/repo"), Path::new("/repo")),
+      vec!["main-chat".to_string()]
+    );
+  }
+
+  #[test]
   fn checkout_rows_follow_known_worktree_branches() {
     let mut list = SessionList::new();
     list.git_repositories.insert(PathBuf::from("/repo"));
@@ -2057,6 +2085,39 @@ mod tests {
         Path::new("/repo/.worktrees/feature-sidebar")
       ),
       vec!["worktree-chat".to_string()]
+    );
+  }
+
+  #[test]
+  fn detached_worktree_rows_use_the_checkout_name() {
+    let mut list = SessionList::new();
+    let repo = PathBuf::from("/repo");
+    let worktree_path = PathBuf::from("/tmp/reviu-prev");
+    list.git_repositories.insert(repo.clone());
+    list.project_worktrees.insert(
+      repo.clone(),
+      vec![ListedWorktree {
+        path: worktree_path.clone(),
+        branch: None,
+      }],
+    );
+    list.checkout_git_summaries.insert(
+      worktree_path,
+      CheckoutGitSummary {
+        branch_status: Some(branch_status("HEAD", 0, 0)),
+        working_tree_stats: None,
+        head_updated_at_secs: None,
+      },
+    );
+
+    let rows = list.checkout_rows_for_project(&repo);
+
+    assert_eq!(rows[1].title, "reviu-prev");
+    assert_eq!(
+      rows[1].kind,
+      CheckoutKind::Worktree {
+        branch: "reviu-prev".to_string()
+      }
     );
   }
 

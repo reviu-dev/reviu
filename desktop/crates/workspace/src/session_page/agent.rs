@@ -91,7 +91,7 @@ impl SessionPage {
     let evicted_project = access.evicted_project.clone();
     self.chat_store = Some(access.store.clone());
     if self.fallback_repo.is_some() && self.swept_repos.insert(project.clone()) {
-      self.drop_dead_worktree_bindings(access.store, cx);
+      self.drop_dead_worktree_bindings(&project, access.store, cx);
     }
     evicted_project
   }
@@ -102,6 +102,7 @@ impl SessionPage {
   /// explicit, confirmed delete removes it.
   fn drop_dead_worktree_bindings(
     &mut self,
+    repo_root: &Path,
     store: Entity<ConversationStore>,
     cx: &mut Context<Self>,
   ) {
@@ -115,8 +116,10 @@ impl SessionPage {
       .map(|meta| meta.id)
       .collect();
     known_ids.extend(self.live_chat_panel_ids(cx));
-    for conversation_id in store.read(cx).worktree_bindings().into_keys() {
-      if !known_ids.contains(&conversation_id) {
+    let repo_root = Self::canonical_repo(repo_root);
+    for (conversation_id, binding) in store.read(cx).worktree_bindings() {
+      let binding_path = Self::canonical_repo(&binding.path);
+      if binding_path == repo_root || !known_ids.contains(&conversation_id) {
         Self::unbind_session_worktree(&store, &conversation_id, cx);
       }
     }
@@ -150,7 +153,12 @@ impl SessionPage {
     let Some(binding) = store.read(cx).worktree(conversation_id) else {
       return main;
     };
-    if binding.path.is_dir() {
+    if Self::canonical_repo(&binding.path) == Self::canonical_repo(repo_root) {
+      store.update(cx, |store, cx| {
+        store.set_worktree(conversation_id, None, cx)
+      });
+      main
+    } else if binding.path.is_dir() {
       binding.path
     } else {
       // An archived worktree comes back at this path: keep the binding. Read
@@ -6077,7 +6085,7 @@ mod tests {
     // The cleanup runs again, as it would if it raced the creation at boot.
     page.update(cx, |page, cx| {
       let store = page.chat_store.clone().expect("fallback store");
-      page.drop_dead_worktree_bindings(store, cx);
+      page.drop_dead_worktree_bindings(&repo.path.clone(), store, cx);
     });
     cx.run_until_parked();
 
@@ -6146,6 +6154,66 @@ mod tests {
 
     let _ = std::fs::remove_dir_all(&state_dir);
     cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn binding_cleanup_drops_main_checkout_worktree_bindings(cx: &mut TestAppContext) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init("session-page-sweep-main-binding");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    std::fs::write(
+      state_dir.join("index.json"),
+      serde_json::json!({
+        "version": 1,
+        "conversations": [{
+          "id": "main-bound-conversation",
+          "started_at_secs": 1,
+          "updated_at_secs": 1,
+          "title": "Main chat",
+          "message_count": 1,
+          "session_id": null,
+          "preview": "hello"
+        }]
+      })
+      .to_string(),
+    )
+    .expect("write index");
+    std::fs::write(
+      state_dir.join("worktrees.json"),
+      serde_json::json!({
+        "main-bound-conversation": {
+          "path": repo.path.to_string_lossy(),
+          "branch": "HEAD"
+        }
+      })
+      .to_string(),
+    )
+    .expect("write bindings");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree("main-bound-conversation"),
+        None,
+        "the main checkout is not a worktree"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
   }
 
   #[gpui::test]
