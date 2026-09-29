@@ -64,7 +64,7 @@ impl SessionPage {
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     if preserve_restored_center {
-      self.ensure_visible_center_surfaces(window, cx);
+      self.ensure_center_layout_chat_panels(window, cx);
       if let Some(conversation_id) = restored_active_tab.conversation_id()
         && self
           .agent_chat_view

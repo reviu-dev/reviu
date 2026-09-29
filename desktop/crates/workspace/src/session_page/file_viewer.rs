@@ -2396,7 +2396,7 @@ impl SessionPage {
     if let Some(conversation_id) = tab.conversation_id() {
       self.activate_session_panel(conversation_id, window, cx);
     }
-    self.ensure_visible_center_surfaces(window, cx);
+    self.ensure_center_layout_chat_panels(window, cx);
     self.remember_center_layout_tab(representative);
     self.sync_agent_chat_close_control(cx);
     match self.center {
@@ -2445,7 +2445,7 @@ impl SessionPage {
     if let Some(conversation_id) = tab.conversation_id() {
       self.activate_session_panel(conversation_id, window, cx);
     }
-    self.ensure_visible_center_surfaces(window, cx);
+    self.ensure_center_layout_chat_panels(window, cx);
     self.sync_agent_chat_close_control(cx);
     match self.center {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
