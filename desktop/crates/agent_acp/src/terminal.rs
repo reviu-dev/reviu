@@ -534,6 +534,7 @@ mod tests {
     assert!(env.contains(&("GIT_CONFIG_KEY_3".to_string(), "color.diff".to_string())));
   }
 
+  #[cfg(unix)]
   fn run_command(script: &str, env: Vec<(String, String)>) -> Arc<TerminalStore> {
     let (tx, _rx) = async_channel::unbounded();
     let store = TerminalStore::new(tx);
