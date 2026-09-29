@@ -16,6 +16,10 @@ Terminals in background tabs no longer slow Reviu down while their commands prin
 
 Opening or restoring terminals no longer blocks Reviu while the shell starts, and anything typed during that moment still reaches the shell. When Reviu is opened from the Finder or the Dock, terminals now get a UTF-8 locale, so accents and non-ASCII paths display correctly.
 
+### Running Commands In Terminal Tabs
+
+Terminal tabs now show the command running in them, such as `cargo test` or `npm run dev`, and fall back to the folder once the shell is back at its prompt. Closing a terminal that is still running a command asks first, so a dev server or a long build is never stopped by accident.
+
 ## 1.4.0
 
 ### Terminals In Split Panes

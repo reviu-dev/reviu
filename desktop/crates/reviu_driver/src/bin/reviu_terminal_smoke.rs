@@ -212,6 +212,20 @@ fn run_terminal_scenario(args: &TerminalSmokeArgs, run_dir: &Path) -> Result<()>
   })
   .context("waiting to return to the latest terminal output")?;
 
+  if !cfg!(windows) {
+    driver.command(json!({ "cmd": "type", "text": "sleep 30" }))?;
+    driver.command(json!({ "cmd": "key", "keystrokes": "enter" }))?;
+    wait_for_terminal_state(&mut driver, |state| {
+      state.get("running_command").and_then(Value::as_str) == Some("sleep 30")
+    })
+    .context("waiting for the terminal to report its running command")?;
+    driver.command(json!({ "cmd": "key", "keystrokes": "ctrl-c" }))?;
+    wait_for_terminal_state(&mut driver, |state| {
+      state.get("running_command").is_some_and(Value::is_null)
+    })
+    .context("waiting for the terminal to return to its prompt")?;
+  }
+
   driver.command(json!({ "cmd": "open_terminal_file_link" }))?;
   driver.command(json!({ "cmd": "wait", "ms": 100 }))?;
   let editor_state = driver.command(json!({ "cmd": "editor_stats" }))?;

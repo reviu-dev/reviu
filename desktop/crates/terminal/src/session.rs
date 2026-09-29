@@ -299,16 +299,22 @@ pub(crate) struct WorkingDirectoryTracker {
   tracked_process_id: Mutex<Option<Pid>>,
   system: Mutex<System>,
   current: RwLock<PathBuf>,
+  /// Our own duplicate of the PTY master, to ask which process group owns
+  /// the terminal; the event loop owns and closes the original.
+  pty_file: Option<std::fs::File>,
+  running_command: RwLock<Option<String>>,
   refresh_state: AtomicU8,
 }
 
 impl WorkingDirectoryTracker {
-  fn new(process_id: u32, working_directory: PathBuf) -> Self {
+  fn new(process_id: u32, working_directory: PathBuf, pty_file: Option<std::fs::File>) -> Self {
     Self {
       process_id: Pid::from_u32(process_id),
       tracked_process_id: Mutex::new(None),
       system: Mutex::new(System::new()),
       current: RwLock::new(working_directory),
+      pty_file,
+      running_command: RwLock::new(None),
       refresh_state: AtomicU8::new(0),
     }
   }
@@ -344,6 +350,8 @@ impl WorkingDirectoryTracker {
     let mut latest = None;
     loop {
       let next = self.refresh_working_directory();
+      let running_command = self.refresh_running_command();
+      *self.running_command.write() = running_command;
       if let Some(next) = next {
         *self.current.write() = next.clone();
         latest = Some(next);
@@ -409,6 +417,101 @@ impl WorkingDirectoryTracker {
   pub(crate) fn current(&self) -> PathBuf {
     self.current.read().clone()
   }
+
+  /// The command the user started from the shell, `None` while the shell
+  /// itself waits at its prompt.
+  pub(crate) fn running_command(&self) -> Option<String> {
+    self.running_command.read().clone()
+  }
+
+  fn refresh_running_command(&self) -> Option<String> {
+    let group = self.foreground_process_group()?;
+    let mut system = self.system.lock();
+    system.refresh_processes_specifics(
+      ProcessesToUpdate::Some(&[group, self.process_id]),
+      true,
+      ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+    );
+    let process = system.process(group)?;
+    // On macOS the PTY runs `login`, which starts the shell as its child.
+    let shell_is_child_of_login = process.parent() == Some(self.process_id)
+      && system
+        .process(self.process_id)
+        .is_some_and(|root| root.name() == "login");
+    if group == self.process_id || shell_is_child_of_login {
+      return None;
+    }
+    command_label(process.cmd(), process.name())
+  }
+
+  #[cfg(unix)]
+  fn foreground_process_group(&self) -> Option<Pid> {
+    use std::os::fd::AsRawFd as _;
+    let file = self.pty_file.as_ref()?;
+    // SAFETY: `tcgetpgrp` only reads the terminal's state, and the descriptor
+    // stays open as long as `file`, which this tracker owns.
+    let group = unsafe { libc::tcgetpgrp(file.as_raw_fd()) };
+    u32::try_from(group)
+      .ok()
+      .filter(|group| *group > 0)
+      .map(Pid::from_u32)
+  }
+
+  #[cfg(not(unix))]
+  fn foreground_process_group(&self) -> Option<Pid> {
+    None
+  }
+}
+
+const COMMAND_LABEL_MAX_CHARS: usize = 40;
+
+/// Script runners hide the tool behind them: `node /usr/local/bin/npm run
+/// dev` reads better as `npm run dev`.
+const SCRIPT_RUNNERS: &[&str] = &["node", "python", "python3", "ruby", "perl", "bun", "deno"];
+
+fn command_label(arguments: &[std::ffi::OsString], name: &std::ffi::OsStr) -> Option<String> {
+  let arguments = arguments
+    .iter()
+    .map(|argument| argument.to_string_lossy().into_owned())
+    .collect::<Vec<_>>();
+  let program_name = |argument: &str| {
+    Path::new(argument)
+      .file_name()
+      .map(|name| name.to_string_lossy().into_owned())
+      .unwrap_or_else(|| argument.to_string())
+  };
+  let mut words = match arguments.split_first() {
+    None => vec![name.to_string_lossy().into_owned()],
+    Some((program, rest)) => {
+      let program = program_name(program);
+      match rest.split_first() {
+        Some((script, rest))
+          if SCRIPT_RUNNERS.contains(&program.as_str()) && !script.starts_with('-') =>
+        {
+          std::iter::once(program_name(script))
+            .chain(rest.iter().cloned())
+            .collect()
+        }
+        _ => std::iter::once(program)
+          .chain(rest.iter().cloned())
+          .collect(),
+      }
+    }
+  };
+  words.retain(|word| !word.is_empty());
+  let label = words.join(" ");
+  if label.is_empty() {
+    return None;
+  }
+  if label.chars().count() <= COMMAND_LABEL_MAX_CHARS {
+    return Some(label);
+  }
+  let mut truncated = label
+    .chars()
+    .take(COMMAND_LABEL_MAX_CHARS - 1)
+    .collect::<String>();
+  truncated.push('…');
+  Some(truncated)
 }
 
 fn process_working_directory(system: &System, process_id: Pid) -> Option<PathBuf> {
@@ -470,6 +573,20 @@ fn shell_process_id(pty: &tty::Pty) -> u32 {
   pty.child().id()
 }
 
+#[cfg(not(windows))]
+fn pty_file_for_tracking(pty: &tty::Pty) -> Result<Option<std::fs::File>> {
+  let file = pty
+    .file()
+    .try_clone()
+    .context("Failed to duplicate the PTY descriptor")?;
+  Ok(Some(file))
+}
+
+#[cfg(windows)]
+fn pty_file_for_tracking(_pty: &tty::Pty) -> Result<Option<std::fs::File>> {
+  Ok(None)
+}
+
 #[cfg(windows)]
 fn shell_process_id(pty: &tty::Pty) -> u32 {
   pty
@@ -506,6 +623,7 @@ impl TerminalSession {
     let working_directory = Arc::new(WorkingDirectoryTracker::new(
       shell_process_id(&pty),
       working_directory,
+      pty_file_for_tracking(&pty)?,
     ));
 
     let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, false, false)
@@ -1054,7 +1172,7 @@ mod tests {
       .arg(&target)
       .spawn()
       .expect("tracker shell should spawn");
-    let tracker = WorkingDirectoryTracker::new(child.id(), root.clone());
+    let tracker = WorkingDirectoryTracker::new(child.id(), root.clone(), None);
     assert!(tracker.begin_refresh());
     assert!(!tracker.begin_refresh());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -1419,5 +1537,73 @@ mod tests {
       "Ctrl-C did not interrupt sleep, screen:\n{}",
       screen_text(&session)
     );
+  }
+
+  #[test]
+  fn command_labels_name_the_tool_the_user_ran() {
+    let label = |arguments: &[&str]| {
+      let arguments = arguments
+        .iter()
+        .map(std::ffi::OsString::from)
+        .collect::<Vec<_>>();
+      super::command_label(&arguments, std::ffi::OsStr::new("fallback"))
+    };
+
+    assert_eq!(
+      label(&["/usr/bin/cargo", "test"]).as_deref(),
+      Some("cargo test")
+    );
+    assert_eq!(
+      label(&["node", "/usr/local/bin/npm", "run", "dev"]).as_deref(),
+      Some("npm run dev")
+    );
+    assert_eq!(
+      label(&["python3", "-m", "http.server"]).as_deref(),
+      Some("python3 -m http.server"),
+      "a flag is not a script"
+    );
+    assert_eq!(label(&[]).as_deref(), Some("fallback"));
+
+    let long = label(&[
+      "cargo",
+      "test",
+      "--workspace",
+      "--all-features",
+      "--",
+      "--nocapture",
+    ])
+    .expect("a label");
+    assert_eq!(long.chars().count(), super::COMMAND_LABEL_MAX_CHARS);
+    assert!(long.ends_with('…'));
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn the_running_command_follows_the_foreground_process() {
+    let mut session = TerminalSession::spawn(std::env::temp_dir(), TerminalBounds::default())
+      .expect("the shell starts");
+    let tracker = session.working_directory_tracker();
+    let running_command_until = |expected: Option<&str>| {
+      let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+      while std::time::Instant::now() < deadline {
+        if tracker.begin_refresh() {
+          tracker.refresh();
+        }
+        if tracker.running_command().as_deref() == expected {
+          return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+      }
+      panic!(
+        "expected {expected:?}, the tracker saw {:?}",
+        tracker.running_command()
+      );
+    };
+
+    running_command_until(None);
+    session.input("sleep 30\r");
+    running_command_until(Some("sleep 30"));
+    session.input("\u{3}");
+    running_command_until(None);
   }
 }

@@ -151,6 +151,7 @@ pub enum TerminalViewEvent {
   WorkingDirectoryChanged {
     path: PathBuf,
   },
+  RunningCommandChanged,
 }
 
 gpui::actions!(
@@ -179,6 +180,7 @@ pub const TERMINAL_SEARCH_CONTEXT: &str = "TerminalSearch";
 pub struct TerminalView {
   focus_handle: FocusHandle,
   working_directory: Option<PathBuf>,
+  running_command: Option<String>,
   session: Option<TerminalSession>,
   screen: ScreenSnapshot,
   last_bounds: TerminalBounds,
@@ -221,6 +223,7 @@ impl TerminalView {
     let mut view = Self {
       focus_handle: cx.focus_handle(),
       working_directory: None,
+      running_command: None,
       session: None,
       screen: ScreenSnapshot::default(),
       last_bounds: TerminalBounds::default(),
@@ -259,6 +262,19 @@ impl TerminalView {
 
   pub fn working_directory(&self) -> Option<&std::path::Path> {
     self.working_directory.as_deref()
+  }
+
+  /// The command started from the shell, such as `cargo test`; `None` while
+  /// the shell waits at its prompt.
+  pub fn running_command(&self) -> Option<&str> {
+    self.running_command.as_deref()
+  }
+
+  #[doc(hidden)]
+  pub fn set_running_command_for_test(&mut self, command: Option<&str>, cx: &mut Context<Self>) {
+    self.running_command = command.map(str::to_string);
+    cx.emit(TerminalViewEvent::RunningCommandChanged);
+    cx.notify();
   }
 
   pub fn submit_command(&mut self, command: &str, cx: &mut Context<Self>) {
@@ -683,6 +699,7 @@ impl TerminalView {
     self._working_directory_task = Task::ready(());
     self._search_task = Task::ready(());
     self.session = None;
+    self.running_command = None;
     self.pending_input = None;
     self._spawn_task = Task::ready(());
     self.refresh_snapshot();
@@ -820,16 +837,24 @@ impl TerminalView {
     let refreshed_tracker = Arc::clone(&tracker);
     let refresh = cx.background_spawn(async move { refreshed_tracker.refresh() });
     self._working_directory_task = cx.spawn(async move |this, cx| {
-      let Some(working_directory) = refresh.await else {
-        return;
-      };
+      let working_directory = refresh.await;
       let _ = this.update(cx, |this, cx| {
         let belongs_to_current_session = this
           .session
           .as_ref()
           .map(TerminalSession::working_directory_tracker)
           .is_some_and(|current| Arc::ptr_eq(&current, &tracker));
-        if belongs_to_current_session && this.working_directory.as_ref() != Some(&working_directory)
+        if !belongs_to_current_session {
+          return;
+        }
+        let running_command = tracker.running_command();
+        if this.running_command != running_command {
+          this.running_command = running_command;
+          cx.emit(TerminalViewEvent::RunningCommandChanged);
+          cx.notify();
+        }
+        if let Some(working_directory) = working_directory
+          && this.working_directory.as_ref() != Some(&working_directory)
         {
           this.working_directory = Some(working_directory.clone());
           this.hovered_hyperlink = None;

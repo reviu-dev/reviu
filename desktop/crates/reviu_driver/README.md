@@ -198,7 +198,7 @@ CI runs the smoke suite on Unix runners. Windows is skipped because the existing
 
 ## `reviu-terminal-smoke`
 
-`reviu-terminal-smoke` runs a real shell in an isolated temporary profile and verifies Unicode output, full-history search, keyboard scrollback navigation, return-to-latest behavior, working-directory tracking, file-location output, and mixed terminal/file split restoration in a fresh driver process.
+`reviu-terminal-smoke` runs a real shell in an isolated temporary profile and verifies Unicode output, full-history search, keyboard scrollback navigation, return-to-latest behavior, working-directory tracking, running-command tracking, file-location output, and mixed terminal/file split restoration in a fresh driver process.
 
 Run the CI-compatible scenario from `desktop/`:
 

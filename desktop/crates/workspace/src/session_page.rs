@@ -134,6 +134,8 @@ const OPEN_PROJECT_ROW_DEBUG_SELECTOR: &str = "session-open-project";
 const UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR: &str = "session-unsaved-editor-save";
 const UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR: &str = "session-unsaved-editor-discard";
 const UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR: &str = "session-unsaved-editor-cancel";
+const RUNNING_TERMINAL_CLOSE_DEBUG_SELECTOR: &str = "session-running-terminal-close";
+const RUNNING_TERMINAL_CANCEL_DEBUG_SELECTOR: &str = "session-running-terminal-cancel";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
 const REPO_BEHIND_DEBUG_SELECTOR: &str = "session-repo-behind";
 const REPO_PUBLISH_DEBUG_SELECTOR: &str = "session-repo-publish";
@@ -2369,6 +2371,7 @@ impl SessionPage {
         .working_directory()
         .map(|path| path.to_string_lossy().into_owned()),
       title: terminal.title_for_driver().map(str::to_string),
+      running_command: terminal.running_command().map(str::to_string),
       visible_text: terminal.visible_text_for_driver(),
       display_offset,
       total_lines,

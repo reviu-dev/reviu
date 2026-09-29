@@ -279,3 +279,37 @@ pub(super) async fn await_branch_refresh(
 ) {
   cx.run_until_parked();
 }
+
+/// Clicks the control carrying `selector`, dialogs included.
+pub(crate) fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+  use gpui::InputEvent as _;
+
+  cx.run_until_parked();
+  cx.update(|window, cx| window.draw(cx).clear(cx));
+  let bounds = cx.debug_bounds(selector).expect("control bounds");
+  // Keep both events on the same frame while the dialog is animating.
+  cx.update(|window, cx| {
+    window.dispatch_event(
+      gpui::MouseDownEvent {
+        position: bounds.center(),
+        button: gpui::MouseButton::Left,
+        modifiers: gpui::Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+      }
+      .to_platform_input(),
+      cx,
+    );
+    window.dispatch_event(
+      gpui::MouseUpEvent {
+        position: bounds.center(),
+        button: gpui::MouseButton::Left,
+        modifiers: gpui::Modifiers::default(),
+        click_count: 1,
+      }
+      .to_platform_input(),
+      cx,
+    );
+  });
+  cx.run_until_parked();
+}

@@ -1,5 +1,18 @@
 use super::*;
 
+/// A close the user confirms after being told a command is still running.
+#[derive(Clone)]
+pub(super) enum RunningTerminalClose {
+  Groups {
+    groups: Vec<center_layout::CenterGroupId>,
+    discarded: Vec<gpui::EntityId>,
+    terminal_id: gpui::EntityId,
+  },
+  Surface {
+    tab: CenterTab,
+  },
+}
+
 fn terminal_relative_path(checkout_root: &Path, path: &Path) -> Option<PathBuf> {
   let path = path.canonicalize().ok()?;
   if !path.is_file() {
@@ -171,6 +184,7 @@ impl SessionPage {
           this.persist_center_workspace_for_terminal(terminal_id, cx);
           cx.notify();
         }
+        TerminalViewEvent::RunningCommandChanged => cx.notify(),
       },
     )
     .detach();
@@ -232,17 +246,93 @@ impl SessionPage {
       Some(1) | None => "Terminal".to_string(),
       Some(id) => format!("Terminal {id}"),
     };
-    let directory = self
-      .terminal_for_tab(tab)
-      .and_then(|terminal| terminal.read(cx).working_directory().map(Path::to_path_buf))
-      .map(|path| {
+    let Some(terminal) = self.terminal_for_tab(tab) else {
+      return name;
+    };
+    let terminal = terminal.read(cx);
+    let detail = terminal.running_command().map(str::to_string).or_else(|| {
+      terminal.working_directory().map(|path| {
         path
           .file_name()
           .unwrap_or(path.as_os_str())
           .to_string_lossy()
           .into_owned()
-      });
-    directory.map_or(name.clone(), |directory| format!("{name} - {directory}"))
+      })
+    });
+    detail.map_or(name.clone(), |detail| format!("{name} - {detail}"))
+  }
+
+  /// The terminal in `tab` and the command it is running, unless the user
+  /// already agreed to stop it.
+  pub(super) fn running_terminal(
+    &self,
+    tab: &CenterTab,
+    confirmed: &[gpui::EntityId],
+    cx: &App,
+  ) -> Option<(gpui::EntityId, String)> {
+    let terminal = self.terminal_for_tab(tab)?;
+    if confirmed.contains(&terminal.entity_id()) {
+      return None;
+    }
+    let command = terminal.read(cx).running_command()?.to_string();
+    Some((terminal.entity_id(), command))
+  }
+
+  pub(super) fn open_running_terminal_dialog(
+    &mut self,
+    command: String,
+    close: RunningTerminalClose,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let view = cx.entity();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let close = close.clone();
+      alert
+        .title("Stop the running command?")
+        .description(div().child(format!(
+          "{command} is still running in this terminal. Closing the terminal stops it."
+        )))
+        .close_button(true)
+        .footer(
+          DialogFooter::new()
+            .child(
+              Button::new(RUNNING_TERMINAL_CANCEL_DEBUG_SELECTOR)
+                .debug_selector(|| RUNNING_TERMINAL_CANCEL_DEBUG_SELECTOR.to_string())
+                .label("Cancel")
+                .ghost()
+                .small()
+                .on_click(|_, window, cx| {
+                  window.close_dialog(cx);
+                }),
+            )
+            .child(
+              Button::new(RUNNING_TERMINAL_CLOSE_DEBUG_SELECTOR)
+                .debug_selector(|| RUNNING_TERMINAL_CLOSE_DEBUG_SELECTOR.to_string())
+                .label("Close Terminal")
+                .danger()
+                .small()
+                .on_click(move |_, window, cx| {
+                  window.close_dialog(cx);
+                  let close = close.clone();
+                  view.update(cx, move |view, cx| match close {
+                    RunningTerminalClose::Groups {
+                      groups,
+                      mut discarded,
+                      terminal_id,
+                    } => {
+                      discarded.push(terminal_id);
+                      view.close_center_groups(groups, discarded, window, cx);
+                    }
+                    RunningTerminalClose::Surface { tab } => {
+                      view.close_center_surface_without_unsaved_prompt(tab, window, cx);
+                    }
+                  });
+                }),
+            ),
+        )
+    });
   }
 
   pub(super) fn focus_terminal_tab(

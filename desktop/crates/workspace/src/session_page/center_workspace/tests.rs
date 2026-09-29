@@ -1,10 +1,11 @@
 use super::*;
 use crate::session_page::center_layout::CenterNode;
 use crate::session_page::test_support::{
-  add_session_page_window, add_session_page_window_from_config, isolate_config_store_for_test,
+  add_session_page_window, add_session_page_window_from_config, click,
+  isolate_config_store_for_test,
 };
 use crate::test_support::{TempDir, TempRepo, commit_text_file};
-use gpui::{InputEvent, TestAppContext, VisualTestContext};
+use gpui::{TestAppContext, VisualTestContext};
 use std::path::Path;
 
 fn setup(cx: &mut TestAppContext) -> (TempDir, Entity<SessionPage>, &mut VisualTestContext) {
@@ -46,37 +47,6 @@ fn group(
     page.remember_center_layout_tab(first.clone());
     page.center_layout.id()
   })
-}
-
-fn click(cx: &mut VisualTestContext, selector: &'static str) {
-  cx.run_until_parked();
-  cx.update(|window, cx| window.draw(cx).clear(cx));
-  let bounds = cx.debug_bounds(selector).expect("control bounds");
-  // Keep both events on the same frame while the dialog is animating.
-  cx.update(|window, cx| {
-    window.dispatch_event(
-      gpui::MouseDownEvent {
-        position: bounds.center(),
-        button: gpui::MouseButton::Left,
-        modifiers: gpui::Modifiers::default(),
-        click_count: 1,
-        first_mouse: false,
-      }
-      .to_platform_input(),
-      cx,
-    );
-    window.dispatch_event(
-      gpui::MouseUpEvent {
-        position: bounds.center(),
-        button: gpui::MouseButton::Left,
-        modifiers: gpui::Modifiers::default(),
-        click_count: 1,
-      }
-      .to_platform_input(),
-      cx,
-    );
-  });
-  cx.run_until_parked();
 }
 
 #[gpui::test]

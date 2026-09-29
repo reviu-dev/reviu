@@ -1,6 +1,7 @@
 //! The open file at the centre: diff, commit snapshot, previews and the
 //! editor-side actions. The candidate surface for the PR-page merge (#542).
 
+use super::terminal_viewer::RunningTerminalClose;
 use super::*;
 
 /// Where a read-only snapshot in the centre comes from.
@@ -2316,10 +2317,14 @@ impl SessionPage {
       self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseCenterSurface { tab }, window, cx);
       return;
     }
+    if let Some((_, command)) = self.running_terminal(&tab, &[], cx) {
+      self.open_running_terminal_dialog(command, RunningTerminalClose::Surface { tab }, window, cx);
+      return;
+    }
     self.close_center_surface_without_unsaved_prompt(tab, window, cx);
   }
 
-  fn close_center_surface_without_unsaved_prompt(
+  pub(super) fn close_center_surface_without_unsaved_prompt(
     &mut self,
     tab: CenterTab,
     window: &mut Window,
@@ -2494,7 +2499,7 @@ impl SessionPage {
     self.close_center_groups(groups, Vec::new(), window, cx);
   }
 
-  fn close_center_groups(
+  pub(super) fn close_center_groups(
     &mut self,
     groups: Vec<center_layout::CenterGroupId>,
     discarded: Vec<gpui::EntityId>,
@@ -2524,6 +2529,24 @@ impl SessionPage {
           groups,
           discarded,
           tab,
+        },
+        window,
+        cx,
+      );
+      return;
+    }
+    let running_terminal = tabs
+      .iter()
+      .filter_map(|tab| self.center_group_layout(tab))
+      .flat_map(CenterLayout::tabs)
+      .find_map(|tab| self.running_terminal(&tab, &discarded, cx));
+    if let Some((terminal_id, command)) = running_terminal {
+      self.open_running_terminal_dialog(
+        command,
+        RunningTerminalClose::Groups {
+          groups,
+          discarded,
+          terminal_id,
         },
         window,
         cx,

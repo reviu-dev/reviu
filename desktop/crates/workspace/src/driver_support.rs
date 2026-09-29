@@ -7,6 +7,7 @@ pub struct DriverTerminalState {
   pub loaded_editor_count: usize,
   pub working_directory: Option<String>,
   pub title: Option<String>,
+  pub running_command: Option<String>,
   pub visible_text: String,
   pub display_offset: usize,
   pub total_lines: usize,

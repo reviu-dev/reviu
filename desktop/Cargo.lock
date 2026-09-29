@@ -9162,6 +9162,7 @@ dependencies = [
  "async-channel",
  "gpui",
  "gpui-component",
+ "libc",
  "parking_lot",
  "regex",
  "serde",

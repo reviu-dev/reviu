@@ -5706,6 +5706,102 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn closing_a_terminal_tab_that_runs_a_command_asks_first(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-terminal-running-close");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+    let tab = CenterTab::terminal(1);
+    let terminal = page.read_with(cx, |page, _| page.terminal_for_tab(&tab).expect("terminal"));
+    terminal.update(cx, |terminal, cx| {
+      terminal.set_running_command_for_test(Some("cargo test"), cx)
+    });
+    assert_eq!(
+      page.read_with(cx, |page, cx| page.terminal_label(&tab, cx)),
+      "Terminal - cargo test"
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(tab.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    click(cx, RUNNING_TERMINAL_CANCEL_DEBUG_SELECTOR);
+    assert!(
+      page.read_with(cx, |page, _| page.terminal_for_tab(&tab).is_some()),
+      "cancelling keeps the command running"
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(tab.clone(), window, cx)
+    });
+    click(cx, RUNNING_TERMINAL_CLOSE_DEBUG_SELECTOR);
+    assert!(
+      page.read_with(cx, |page, _| page.terminal_for_tab(&tab).is_none()),
+      "confirming closes the terminal"
+    );
+  }
+
+  #[gpui::test]
+  async fn closing_a_split_terminal_that_runs_a_command_asks_first(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-split-terminal-running-close");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.new_terminal_tab(window, cx);
+      page.open_terminal_in_split(CenterSplitDirection::Right, window, cx);
+    });
+    cx.run_until_parked();
+    let split = CenterTab::terminal(2);
+    let terminal = page.read_with(cx, |page, _| {
+      page.terminal_for_tab(&split).expect("terminal")
+    });
+    terminal.update(cx, |terminal, cx| {
+      terminal.set_running_command_for_test(Some("npm run dev"), cx)
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_surface(split.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      page.read_with(cx, |page, _| page.center_layout.contains_tab(&split)),
+      "the split stays until the user confirms"
+    );
+
+    click(cx, RUNNING_TERMINAL_CLOSE_DEBUG_SELECTOR);
+    assert!(!page.read_with(cx, |page, _| page.center_layout.contains_tab(&split)));
+  }
+
+  #[gpui::test]
+  async fn closing_an_idle_terminal_does_not_ask(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-terminal-idle-close");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+    let tab = CenterTab::terminal(1);
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(tab.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(page.read_with(cx, |page, _| page.terminal_for_tab(&tab).is_none()));
+  }
+
+  #[gpui::test]
   async fn split_terminal_header_matches_pane_header_height(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let repo = TempRepo::init("session-page-terminal-header-height");

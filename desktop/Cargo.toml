@@ -93,6 +93,7 @@ git2 = { version = "0.21.0", features = [
   "vendored-libgit2",
   "vendored-openssl",
 ] }
+libc = "0.2.185"
 parking_lot = "0.12.5"
 regex = "1.13.1"
 smol = "2.0.2"
