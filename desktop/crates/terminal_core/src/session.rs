@@ -10,20 +10,20 @@ use std::{
 use alacritty_terminal::{
   event::{Event, EventListener, WindowSize},
   event_loop::{EventLoop, EventLoopSender, Msg},
-  grid::{Dimensions, Scroll},
-  index::{Column, Direction, Point},
+  grid::{Dimensions, Grid, Scroll},
+  index::{Column, Direction, Line, Point},
   selection::{Selection, SelectionType},
   sync::FairMutex,
   term::{
     Config, Term, TermMode,
-    cell::Flags,
+    cell::{Cell, Flags},
     color::Colors,
     point_to_viewport,
     search::{RegexIter, RegexSearch},
     viewport_to_point,
   },
   tty,
-  vte::ansi::{Color, CursorShape},
+  vte::ansi::{Color, CursorShape, NamedColor},
 };
 use anyhow::{Context as _, Result};
 use async_channel::{Receiver, Sender, unbounded};
@@ -34,6 +34,8 @@ const MIN_COLUMNS: u16 = 12;
 const MIN_LINES: u16 = 4;
 const DEFAULT_CELL_WIDTH_PX: u16 = 8;
 const DEFAULT_CELL_HEIGHT_PX: u16 = 16;
+
+const DEFAULT_SCROLLBACK_LINES: usize = 20_000;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -226,6 +228,8 @@ pub struct ScreenSnapshot {
 pub struct SessionEventResult {
   pub changed: bool,
   pub wakeup: bool,
+  /// The process is gone and its last output is in the grid.
+  pub exited: bool,
   pub clipboard_store: Vec<String>,
   pub clipboard_load_requests: Vec<ClipboardLoadFormatter>,
 }
@@ -561,8 +565,33 @@ pub struct TerminalSession {
   pty_tx: EventLoopSender,
   listener: TerminalListener,
   working_directory: Arc<WorkingDirectoryTracker>,
+  child_process_id: u32,
+  scrollback_lines: usize,
   title: Option<String>,
   exit_status: Option<String>,
+  child_exit: Option<std::process::ExitStatus>,
+}
+
+/// A program to run in its own PTY instead of the user's login shell.
+pub struct ProgramOptions {
+  pub program: String,
+  pub args: Vec<String>,
+  pub env: std::collections::HashMap<String, String>,
+  pub scrollback_lines: usize,
+}
+
+/// How much of the output's end `tail_text` returns.
+#[derive(Clone, Copy, Debug)]
+pub enum TailBudget {
+  Lines(usize),
+  Bytes(usize),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TailText {
+  pub text: String,
+  /// Earlier output exists that `text` leaves out.
+  pub clipped: bool,
 }
 
 #[cfg(not(windows))]
@@ -595,6 +624,24 @@ fn shell_process_id(pty: &tty::Pty) -> u32 {
 
 impl TerminalSession {
   pub fn spawn(working_directory: PathBuf, bounds: TerminalBounds) -> Result<Self> {
+    Self::spawn_with(working_directory, bounds, None)
+  }
+
+  /// Runs `program` directly in a PTY: it sees a terminal, so tools keep
+  /// their colors and progress output, but nothing reads a login profile.
+  pub fn spawn_program(
+    working_directory: PathBuf,
+    bounds: TerminalBounds,
+    program: ProgramOptions,
+  ) -> Result<Self> {
+    Self::spawn_with(working_directory, bounds, Some(program))
+  }
+
+  fn spawn_with(
+    working_directory: PathBuf,
+    bounds: TerminalBounds,
+    program: Option<ProgramOptions>,
+  ) -> Result<Self> {
     if !working_directory.exists() {
       anyhow::bail!(
         "Working directory does not exist: {}",
@@ -602,8 +649,11 @@ impl TerminalSession {
       );
     }
 
+    let scrollback_lines = program
+      .as_ref()
+      .map_or(DEFAULT_SCROLLBACK_LINES, |program| program.scrollback_lines);
     let config = Config {
-      scrolling_history: 20_000,
+      scrolling_history: scrollback_lines,
       ..Config::default()
     };
     let window_size = bounds.window_size();
@@ -611,19 +661,23 @@ impl TerminalSession {
     let listener = TerminalListener::new(event_tx, window_size);
     let term = Arc::new(FairMutex::new(Term::new(config, &bounds, listener.clone())));
     let window_id = NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
-    let pty = tty::new(
-      &tty_options(&working_directory, std::env::var_os("LANG")),
-      window_size,
-      window_id,
-    )
-    .with_context(|| format!("Failed to create PTY in {}", working_directory.display()))?;
+    let mut options = tty_options(&working_directory, std::env::var_os("LANG"));
+    let drain_on_exit = program.is_some();
+    if let Some(program) = program {
+      options.shell = Some(tty::Shell::new(program.program, program.args));
+      options.env.extend(program.env);
+      options.drain_on_exit = true;
+    }
+    let pty = tty::new(&options, window_size, window_id)
+      .with_context(|| format!("Failed to create PTY in {}", working_directory.display()))?;
+    let child_process_id = shell_process_id(&pty);
     let working_directory = Arc::new(WorkingDirectoryTracker::new(
-      shell_process_id(&pty),
+      child_process_id,
       working_directory,
       pty_file_for_tracking(&pty)?,
     ));
 
-    let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, false, false)
+    let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, drain_on_exit, false)
       .context("Failed to create terminal event loop")?;
     let pty_tx = event_loop.channel();
     listener.attach_sender(pty_tx.clone());
@@ -636,9 +690,47 @@ impl TerminalSession {
       pty_tx,
       listener,
       working_directory,
+      child_process_id,
+      scrollback_lines,
       title: None,
       exit_status: None,
+      child_exit: None,
     })
+  }
+
+  /// How the process ended, once it has.
+  pub fn child_exit(&self) -> Option<std::process::ExitStatus> {
+    self.child_exit
+  }
+
+  /// Kills the process and everything it started: it leads its own group.
+  #[cfg(unix)]
+  pub fn kill(&self) -> bool {
+    let Ok(group) = i32::try_from(self.child_process_id) else {
+      return false;
+    };
+    if group <= 0 {
+      return false;
+    }
+    // SAFETY: `killpg` only sends a signal; the group is the child's own
+    // session, created by the PTY spawn, so it never reaches Reviu itself.
+    unsafe { libc::killpg(group, libc::SIGKILL) == 0 }
+  }
+
+  #[cfg(not(unix))]
+  pub fn kill(&self) -> bool {
+    self.pty_tx.send(Msg::Shutdown).is_ok()
+  }
+
+  /// The end of the output, oldest line first. Lines the terminal wrapped
+  /// come back whole, and `styled` keeps colors as SGR sequences.
+  pub fn tail_text(&self, budget: TailBudget, styled: bool) -> TailText {
+    let term = self.term.lock();
+    let mut tail = tail_text_for_term(&term, budget, styled);
+    if term.grid().history_size() >= self.scrollback_lines && self.scrollback_lines > 0 {
+      tail.clipped = true;
+    }
+    tail
   }
 
   /// Starts the shell off the calling thread. Call it from the main thread:
@@ -754,6 +846,7 @@ impl TerminalSession {
           self.send_text(formatter(self.bounds.window_size()));
         }
         Event::ChildExit(status) => {
+          self.child_exit = Some(status);
           self.exit_status = Some(match status.code() {
             Some(code) => format!("Shell exited with code {code}."),
             None => "Shell exited.".to_string(),
@@ -761,8 +854,12 @@ impl TerminalSession {
           result.changed = true;
         }
         Event::Exit => {
-          self.exit_status = Some("Terminal requested shutdown.".to_string());
+          // The PTY sends this after the child's exit, which says more.
+          if self.exit_status.is_none() {
+            self.exit_status = Some("Terminal requested shutdown.".to_string());
+          }
           result.changed = true;
+          result.exited = true;
         }
         Event::MouseCursorDirty
         | Event::CursorBlinkingChange
@@ -911,6 +1008,185 @@ fn tty_options(working_directory: &Path, inherited_lang: Option<OsString>) -> tt
     .env
     .insert("TERM_PROGRAM".to_string(), "Reviu".to_string());
   options
+}
+
+fn tail_text_for_term<T>(term: &Term<T>, budget: TailBudget, styled: bool) -> TailText {
+  let grid = term.grid();
+  let columns = grid.columns();
+  let top = grid.topmost_line();
+  let mut line = grid.bottommost_line();
+  let row_is_blank = |line: Line| {
+    (0..columns).all(|column| {
+      let cell = &grid[line][Column(column)];
+      cell.c == ' ' && cell.zerowidth().is_none()
+    })
+  };
+  while line > top && row_is_blank(line) {
+    line = Line(line.0 - 1);
+  }
+  if line == top && row_is_blank(line) {
+    return TailText::default();
+  }
+
+  // Walk up from the last written row, gathering whole logical lines: a row
+  // whose last cell carries WRAPLINE continues on the next one.
+  let mut logical_lines: Vec<String> = Vec::new();
+  let mut rows_of_current: Vec<Line> = Vec::new();
+  let mut bytes = 0;
+  let mut clipped = false;
+  loop {
+    rows_of_current.push(line);
+    let continues_previous = line > top
+      && grid[Line(line.0 - 1)][Column(columns.saturating_sub(1))]
+        .flags
+        .contains(Flags::WRAPLINE);
+    if !continues_previous {
+      rows_of_current.reverse();
+      let text = logical_line_text(grid, &rows_of_current, columns, styled);
+      bytes += text.len() + 1;
+      logical_lines.push(text);
+      rows_of_current.clear();
+      let full = match budget {
+        TailBudget::Lines(limit) => logical_lines.len() >= limit,
+        TailBudget::Bytes(limit) => bytes >= limit,
+      };
+      if full {
+        clipped = line > top;
+        break;
+      }
+    }
+    if line == top {
+      break;
+    }
+    line = Line(line.0 - 1);
+  }
+  logical_lines.reverse();
+  let mut text = logical_lines.join("\n");
+  text.push('\n');
+  if let TailBudget::Bytes(limit) = budget
+    && text.len() > limit
+  {
+    let mut cut = text.len() - limit;
+    while cut < text.len() && !text.is_char_boundary(cut) {
+      cut += 1;
+    }
+    text.drain(..cut);
+    clipped = true;
+  }
+  TailText { text, clipped }
+}
+
+fn logical_line_text(grid: &Grid<Cell>, rows: &[Line], columns: usize, styled: bool) -> String {
+  let mut text = String::new();
+  let mut style = SgrStyle::default();
+  for line in rows {
+    for column in 0..columns {
+      let cell = &grid[*line][Column(column)];
+      if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+      {
+        continue;
+      }
+      if styled {
+        let next = SgrStyle::of(cell);
+        if next != style {
+          next.write_transition(&mut text);
+          style = next;
+        }
+      }
+      text.push(cell.c);
+      if let Some(zerowidth) = cell.zerowidth() {
+        text.extend(zerowidth.iter());
+      }
+    }
+  }
+  let trimmed = text.trim_end_matches(' ').len();
+  text.truncate(trimmed);
+  if styled && style != SgrStyle::default() {
+    text.push_str("\u{1b}[0m");
+  }
+  text
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SgrStyle {
+  foreground: Option<Color>,
+  background: Option<Color>,
+  bold: bool,
+  dim: bool,
+  italic: bool,
+  underline: bool,
+}
+
+impl SgrStyle {
+  fn of(cell: &Cell) -> Self {
+    let color = |color: Color, default: NamedColor| match color {
+      Color::Named(named) if named == default => None,
+      color => Some(color),
+    };
+    Self {
+      foreground: color(cell.fg, NamedColor::Foreground),
+      background: color(cell.bg, NamedColor::Background),
+      bold: cell.flags.contains(Flags::BOLD),
+      dim: cell.flags.contains(Flags::DIM),
+      italic: cell.flags.contains(Flags::ITALIC),
+      underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
+    }
+  }
+
+  fn write_transition(&self, text: &mut String) {
+    let mut codes = vec!["0".to_string()];
+    if self.bold {
+      codes.push("1".to_string());
+    }
+    if self.dim {
+      codes.push("2".to_string());
+    }
+    if self.italic {
+      codes.push("3".to_string());
+    }
+    if self.underline {
+      codes.push("4".to_string());
+    }
+    if let Some(code) = self
+      .foreground
+      .and_then(|color| sgr_color(color, 30, 90, 38))
+    {
+      codes.push(code);
+    }
+    if let Some(code) = self
+      .background
+      .and_then(|color| sgr_color(color, 40, 100, 48))
+    {
+      codes.push(code);
+    }
+    text.push_str("\u{1b}[");
+    text.push_str(&codes.join(";"));
+    text.push('m');
+  }
+}
+
+fn sgr_color(color: Color, normal: u16, bright: u16, extended: u16) -> Option<String> {
+  match color {
+    Color::Spec(rgb) => Some(format!("{extended};2;{};{};{}", rgb.r, rgb.g, rgb.b)),
+    Color::Indexed(index) => Some(format!("{extended};5;{index}")),
+    Color::Named(named) => {
+      let index = named as usize;
+      // Dim variants follow the bright ones in `NamedColor`; fold them back.
+      let dim_black = NamedColor::DimBlack as usize;
+      let index = if (dim_black..dim_black + 8).contains(&index) {
+        index - dim_black
+      } else {
+        index
+      };
+      match index {
+        0..=7 => Some((normal + index as u16).to_string()),
+        8..=15 => Some((bright + index as u16 - 8).to_string()),
+        _ => None,
+      }
+    }
+  }
 }
 
 fn snapshot_from_term<T: EventListener>(
@@ -1535,5 +1811,108 @@ mod tests {
     running_command_until(Some("sleep 30"));
     session.input("\u{3}");
     running_command_until(None);
+  }
+
+  #[cfg(not(windows))]
+  fn run_program(script: &str) -> TerminalSession {
+    let mut session = TerminalSession::spawn_program(
+      std::env::temp_dir(),
+      TerminalBounds {
+        columns: 40,
+        ..TerminalBounds::default()
+      },
+      super::ProgramOptions {
+        program: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), script.to_string()],
+        env: Default::default(),
+        scrollback_lines: 1_000,
+      },
+    )
+    .expect("the program starts");
+    let events = session.event_receiver();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+      let Ok(event) = events.recv_blocking() else {
+        break;
+      };
+      if session.process_events([event]).exited {
+        return session;
+      }
+    }
+    panic!("the program never exited");
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn a_program_output_comes_back_whole_with_its_exit_code() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let long_line = "x".repeat(100);
+    let session = run_program(&format!(
+      "printf '\\033[31mred\\033[0m plain\\n{long_line}\\n'; [ -t 1 ] && echo tty; exit 3"
+    ));
+
+    let plain = session.tail_text(super::TailBudget::Bytes(10_000), false);
+    assert_eq!(plain.text, format!("red plain\n{long_line}\ntty\n"));
+    assert!(!plain.clipped);
+
+    let styled = session.tail_text(super::TailBudget::Lines(10), true);
+    assert!(
+      styled.text.starts_with("\u{1b}[0;31mred\u{1b}[0m plain\n"),
+      "colors survive as SGR: {:?}",
+      styled.text
+    );
+
+    let status = session.child_exit().expect("an exit status");
+    assert_eq!(status.code(), Some(3));
+    assert_eq!(status.signal(), None);
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn the_tail_keeps_the_last_lines_and_says_it_left_some_out() {
+    let session = run_program("seq 1 50");
+
+    let tail = session.tail_text(super::TailBudget::Lines(3), false);
+    assert_eq!(tail.text, "48\n49\n50\n");
+    assert!(tail.clipped);
+
+    let bytes = session.tail_text(super::TailBudget::Bytes(5), false);
+    assert_eq!(bytes.text, "9\n50\n", "the byte budget cuts inside a line");
+    assert!(bytes.clipped);
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn killing_a_program_stops_its_whole_group() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let mut session = TerminalSession::spawn_program(
+      std::env::temp_dir(),
+      TerminalBounds::default(),
+      super::ProgramOptions {
+        program: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), "sleep 30; echo late".to_string()],
+        env: Default::default(),
+        scrollback_lines: 1_000,
+      },
+    )
+    .expect("the program starts");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(session.kill());
+
+    let events = session.event_receiver();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+      let Ok(event) = events.recv_blocking() else {
+        break;
+      };
+      if session.process_events([event]).exited {
+        let status = session.child_exit().expect("an exit status");
+        assert_eq!(status.signal(), Some(9));
+        return;
+      }
+    }
+    panic!("the killed program never exited");
   }
 }

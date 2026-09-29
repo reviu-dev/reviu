@@ -24,6 +24,10 @@ Terminal tabs now show the command running in them, such as `cargo test` or `npm
 
 Agents now read their commands' output as plain text, without the color codes Reviu adds for the chat, and with progress lines already settled, so they spend fewer tokens and read errors more reliably.
 
+### Agent Commands Run In A Real Terminal
+
+Commands an agent runs now see a real terminal, so tools keep their own colors and progress output in the chat cards without Reviu forcing them, and wrapped long lines come back whole. Stopping an agent's command now also stops everything it started, such as the processes behind a dev server.
+
 ## 1.4.0
 
 ### Terminals In Split Panes

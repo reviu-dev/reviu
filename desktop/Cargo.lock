@@ -361,6 +361,7 @@ dependencies = [
  "serde_json",
  "shell-words",
  "smol",
+ "terminal_core",
  "thiserror 2.0.21",
  "which 8.0.6",
 ]

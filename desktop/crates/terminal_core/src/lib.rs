@@ -3,4 +3,5 @@
 
 mod session;
 
+pub use alacritty_terminal::event::Event as TerminalEvent;
 pub use session::*;

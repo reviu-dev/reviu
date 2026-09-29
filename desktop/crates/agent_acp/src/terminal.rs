@@ -1,18 +1,23 @@
-//! Client-side ACP terminals: the agent runs its commands in processes we own.
+//! Client-side ACP terminals: the agent runs its commands in PTYs we own.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result, anyhow};
-use futures::channel::oneshot;
+use terminal_core::{ProgramOptions, TailBudget, TerminalBounds, TerminalEvent, TerminalSession};
 
 /// Retained output when the agent sets no byte limit.
 const DEFAULT_OUTPUT_BYTE_LIMIT: usize = 128 * 1024;
+/// Lines of a command kept for its chat card, which shows their end.
+const DISPLAY_TAIL_LINES: usize = 200;
+/// History a command's PTY keeps; the agent reads at most its byte limit.
+const COMMAND_SCROLLBACK_LINES: usize = 100_000;
 
 #[derive(Clone, Debug, Default)]
 pub struct TerminalSnapshot {
   /// The command line as the agent asked for it, for display.
   pub command: String,
+  /// The end of the output, with its colors as SGR sequences.
   pub output: String,
   pub truncated: bool,
   pub exit_code: Option<u32>,
@@ -26,9 +31,25 @@ pub struct TerminalSnapshot {
 struct TerminalEntry {
   snapshot: TerminalSnapshot,
   byte_limit: usize,
-  kill_tx: Option<oneshot::Sender<()>>,
-  /// Bytes of a UTF-8 character split across read chunks, kept for the next.
-  pending_bytes: Vec<u8>,
+  source: TerminalSource,
+}
+
+enum TerminalSource {
+  /// A command running in a PTY this client owns.
+  Pty {
+    session: TerminalSession,
+    kill_requested: bool,
+  },
+  /// Output an agent streams for a command it runs itself (codex).
+  Streamed {
+    /// Bytes of a UTF-8 character split across chunks, kept for the next.
+    pending_bytes: Vec<u8>,
+  },
+  /// A PTY command that ended: its output is kept, its PTY is gone.
+  Finished {
+    agent_output: String,
+    agent_output_clipped: bool,
+  },
 }
 
 /// Live terminals of one agent session, shared between the ACP handlers and
@@ -48,18 +69,49 @@ impl TerminalStore {
 
   pub fn snapshot(&self, id: &str) -> Option<TerminalSnapshot> {
     let entries = self.entries.lock().ok()?;
-    entries.get(id).map(|e| e.snapshot.clone())
+    let entry = entries.get(id)?;
+    let mut snapshot = entry.snapshot.clone();
+    if let TerminalSource::Pty { session, .. } = &entry.source {
+      let tail = session.tail_text(TailBudget::Lines(DISPLAY_TAIL_LINES), true);
+      snapshot.output = tail.text;
+      snapshot.truncated = tail.clipped;
+    }
+    Some(snapshot)
   }
 
-  /// Ask the running process to die; the exit lands as a normal finish.
+  /// What the agent reads back: plain text, at most its byte limit, and
+  /// whether earlier output was left out.
+  pub(crate) fn agent_output(&self, id: &str) -> Option<(String, bool)> {
+    let entries = self.entries.lock().ok()?;
+    let entry = entries.get(id)?;
+    Some(match &entry.source {
+      TerminalSource::Pty { session, .. } => {
+        let tail = session.tail_text(TailBudget::Bytes(entry.byte_limit), false);
+        (tail.text, tail.clipped)
+      }
+      TerminalSource::Streamed { .. } => (
+        agent_visible_output(&entry.snapshot.output),
+        entry.snapshot.truncated,
+      ),
+      TerminalSource::Finished {
+        agent_output,
+        agent_output_clipped,
+      } => (agent_output.clone(), *agent_output_clipped),
+    })
+  }
+
+  /// Kills the command and whatever it started; the exit lands as a normal
+  /// finish, marked as killed.
   pub fn kill(&self, id: &str) {
-    let kill_tx = self
-      .entries
-      .lock()
-      .ok()
-      .and_then(|mut entries| entries.get_mut(id).and_then(|e| e.kill_tx.take()));
-    if let Some(tx) = kill_tx {
-      let _ = tx.send(());
+    if let Ok(mut entries) = self.entries.lock()
+      && let Some(entry) = entries.get_mut(id)
+      && let TerminalSource::Pty {
+        session,
+        kill_requested,
+      } = &mut entry.source
+      && session.kill()
+    {
+      *kill_requested = true;
     }
   }
 
@@ -73,18 +125,63 @@ impl TerminalStore {
     let _ = self.updates_tx.try_send(id.to_string());
   }
 
+  /// Applies the PTY's events; returns true once the command has ended and
+  /// its output is frozen.
+  fn process_pty_events(&self, id: &str, events: Vec<TerminalEvent>) -> bool {
+    let Ok(mut entries) = self.entries.lock() else {
+      return true;
+    };
+    let Some(entry) = entries.get_mut(id) else {
+      return true;
+    };
+    let TerminalSource::Pty {
+      session,
+      kill_requested,
+    } = &mut entry.source
+    else {
+      return true;
+    };
+    let result = session.process_events(events);
+    if !result.exited {
+      drop(entries);
+      if result.changed {
+        self.notify(id);
+      }
+      return false;
+    }
+
+    let (exit_code, signal) = session.child_exit().map(exit_parts).unwrap_or((None, None));
+    let display = session.tail_text(TailBudget::Lines(DISPLAY_TAIL_LINES), true);
+    let agent_output = session.tail_text(TailBudget::Bytes(entry.byte_limit), false);
+    entry.snapshot.output = display.text;
+    entry.snapshot.truncated = display.clipped;
+    entry.snapshot.exit_code = exit_code;
+    entry.snapshot.signal = signal;
+    entry.snapshot.finished = true;
+    entry.snapshot.killed = *kill_requested;
+    entry.snapshot.can_kill = false;
+    entry.source = TerminalSource::Finished {
+      agent_output: agent_output.text,
+      agent_output_clipped: agent_output.clipped,
+    };
+    drop(entries);
+    self.notify(id);
+    true
+  }
+
   fn append_output(&self, id: &str, chunk: &[u8]) {
     if let Ok(mut entries) = self.entries.lock()
       && let Some(entry) = entries.get_mut(id)
+      && let TerminalSource::Streamed { pending_bytes } = &mut entry.source
     {
       // A multi-byte character split across two reads must not turn into
       // replacement glyphs: hold the incomplete tail for the next chunk.
-      entry.pending_bytes.extend_from_slice(chunk);
+      pending_bytes.extend_from_slice(chunk);
       loop {
-        match std::str::from_utf8(&entry.pending_bytes) {
+        match std::str::from_utf8(pending_bytes) {
           Ok(valid) => {
             entry.snapshot.output.push_str(valid);
-            entry.pending_bytes.clear();
+            pending_bytes.clear();
             break;
           }
           Err(e) => {
@@ -92,14 +189,14 @@ impl TerminalStore {
             entry
               .snapshot
               .output
-              .push_str(std::str::from_utf8(&entry.pending_bytes[..valid]).unwrap_or(""));
+              .push_str(std::str::from_utf8(&pending_bytes[..valid]).unwrap_or(""));
             match e.error_len() {
               Some(len) => {
                 entry.snapshot.output.push('\u{FFFD}');
-                entry.pending_bytes.drain(..valid + len);
+                pending_bytes.drain(..valid + len);
               }
               None => {
-                entry.pending_bytes.drain(..valid);
+                pending_bytes.drain(..valid);
                 break;
               }
             }
@@ -124,8 +221,10 @@ impl TerminalStore {
       && let Some(entry) = entries.get_mut(id)
     {
       // A process dying mid-character leaves a stub tail: flush it lossily.
-      if !entry.pending_bytes.is_empty() {
-        let tail = std::mem::take(&mut entry.pending_bytes);
+      if let TerminalSource::Streamed { pending_bytes } = &mut entry.source
+        && !pending_bytes.is_empty()
+      {
+        let tail = std::mem::take(pending_bytes);
         entry
           .snapshot
           .output
@@ -136,7 +235,6 @@ impl TerminalStore {
       entry.snapshot.finished = true;
       entry.snapshot.killed = killed;
       entry.snapshot.can_kill = false;
-      entry.kill_tx = None;
     }
     self.notify(id);
   }
@@ -150,8 +248,9 @@ impl TerminalStore {
         .or_insert_with(|| TerminalEntry {
           snapshot: TerminalSnapshot::default(),
           byte_limit: DEFAULT_OUTPUT_BYTE_LIMIT,
-          kill_tx: None,
-          pending_bytes: Vec::new(),
+          source: TerminalSource::Streamed {
+            pending_bytes: Vec::new(),
+          },
         });
     }
     self.notify(id);
@@ -263,10 +362,7 @@ pub(crate) fn apply_color_env(cmd: &mut async_process::Command) {
 
 /// A pager waits for keys the agent can never send: `git log` or `gh` would
 /// hang its turn. Git reads its own variable before `PAGER` and `core.pager`.
-fn disable_pagers(cmd: &mut async_process::Command) {
-  cmd.env("PAGER", "cat");
-  cmd.env("GIT_PAGER", "cat");
-}
+const PAGER_ENV: [(&str, &str); 2] = [("PAGER", "cat"), ("GIT_PAGER", "cat")];
 
 /// What the agent reads back: the colors forced for the chat cards are
 /// noise to a model, and progress lines keep only what a terminal would show.
@@ -278,8 +374,8 @@ pub(crate) fn agent_visible_output(output: &str) -> String {
   text
 }
 
-/// Spawn the requested command and stream its output into the store. The
-/// readers and the exit waiter run as detached tasks; `kill` interrupts.
+/// Runs the requested command in its own PTY and keeps the store fed from
+/// its events until it ends; `kill` interrupts it.
 pub(crate) fn spawn_terminal(
   store: &Arc<TerminalStore>,
   id: String,
@@ -289,28 +385,31 @@ pub(crate) fn spawn_terminal(
   cwd: std::path::PathBuf,
   output_byte_limit: Option<u64>,
 ) -> Result<()> {
-  let mut cmd = async_process::Command::from(gpui_util::new_std_command(&command));
-  cmd.args(&args);
-  apply_color_env(&mut cmd);
-  disable_pagers(&mut cmd);
-  cmd.envs(env);
-  cmd.current_dir(&cwd);
-  cmd.stdin(std::process::Stdio::null());
-  cmd.stdout(std::process::Stdio::piped());
-  cmd.stderr(std::process::Stdio::piped());
-  let mut child = cmd
-    .spawn()
-    .with_context(|| format!("spawn {command} {args:?}"))?;
-
-  let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
-  let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
-  let (kill_tx, kill_rx) = oneshot::channel::<()>();
-
   let display = if args.is_empty() {
     command.clone()
   } else {
     format!("{command} {}", args.join(" "))
   };
+  let agent_sets_no_color = env.iter().any(|(name, _)| name == "NO_COLOR");
+  let mut program_env = PAGER_ENV
+    .iter()
+    .map(|(name, value)| (name.to_string(), value.to_string()))
+    .collect::<HashMap<_, _>>();
+  program_env.extend(env);
+  let (program, program_args) = program_reading_no_input(command, args, !agent_sets_no_color);
+  let session = TerminalSession::spawn_program(
+    cwd,
+    TerminalBounds::default(),
+    ProgramOptions {
+      program,
+      args: program_args,
+      env: program_env,
+      scrollback_lines: COMMAND_SCROLLBACK_LINES,
+    },
+  )
+  .with_context(|| format!("run {display}"))?;
+  let events = session.event_receiver();
+
   {
     let mut entries = store
       .entries
@@ -325,67 +424,64 @@ pub(crate) fn spawn_terminal(
           ..Default::default()
         },
         byte_limit: output_byte_limit
-          .map(|l| l as usize)
+          .map(|limit| limit as usize)
           .unwrap_or(DEFAULT_OUTPUT_BYTE_LIMIT),
-        kill_tx: Some(kill_tx),
-        pending_bytes: Vec::new(),
+        source: TerminalSource::Pty {
+          session,
+          kill_requested: false,
+        },
       },
     );
   }
   store.notify(&id);
 
-  for reader in [
-    Box::new(stdout) as Box<dyn futures::AsyncRead + Unpin + Send>,
-    Box::new(stderr) as Box<dyn futures::AsyncRead + Unpin + Send>,
-  ] {
-    let store = store.clone();
-    let id = id.clone();
-    let mut reader = reader;
-    smol::spawn(async move {
-      use futures::AsyncReadExt as _;
-      let mut buf = [0u8; 8192];
-      loop {
-        match reader.read(&mut buf).await {
-          Ok(0) | Err(_) => break,
-          Ok(n) => store.append_output(&id, &buf[..n]),
-        }
-      }
-    })
-    .detach();
-  }
-
   let store = store.clone();
   smol::spawn(async move {
-    use futures::FutureExt as _;
-    let mut kill_rx = kill_rx.fuse();
-    let mut status_fut = Box::pin(child.status()).fuse();
-    futures::select_biased! {
-      _ = kill_rx => {
-        drop(status_fut);
-        let _ = child.kill();
-        let status = child.status().await;
-        match status {
-          Ok(status) => {
-            let (code, signal) = exit_parts(status);
-            store.finish(&id, code, signal, true);
-          }
-          Err(_) => store.finish(&id, None, None, true),
-        }
+    while let Ok(first) = events.recv().await {
+      let mut batch = vec![first];
+      while let Ok(event) = events.try_recv() {
+        batch.push(event);
       }
-      status = status_fut => {
-        match status {
-          Ok(status) => {
-            let (code, signal) = exit_parts(status);
-            store.finish(&id, code, signal, false);
-          }
-          Err(_) => store.finish(&id, None, None, false),
-        }
+      if store.process_pty_events(&id, batch) {
+        return;
       }
     }
   })
   .detach();
 
   Ok(())
+}
+
+/// Agent commands must never wait on a question nobody will answer, so the
+/// program reads `/dev/null` like it did with pipes, while its output still
+/// goes to the PTY.
+#[cfg(unix)]
+fn program_reading_no_input(
+  command: String,
+  args: Vec<String>,
+  scrub_no_color: bool,
+) -> (String, Vec<String>) {
+  // A NO_COLOR inherited from Reviu's own launch would gray the chat cards
+  // out; the PTY can only add variables, so the wrapper drops it.
+  let script = if scrub_no_color {
+    "unset NO_COLOR; exec \"$0\" \"$@\" </dev/null"
+  } else {
+    "exec \"$0\" \"$@\" </dev/null"
+  };
+  let args = ["-c".to_string(), script.to_string(), command]
+    .into_iter()
+    .chain(args)
+    .collect();
+  ("/bin/sh".to_string(), args)
+}
+
+#[cfg(not(unix))]
+fn program_reading_no_input(
+  command: String,
+  args: Vec<String>,
+  _scrub_no_color: bool,
+) -> (String, Vec<String>) {
+  (command, args)
 }
 
 #[cfg(test)]
@@ -407,8 +503,9 @@ mod tests {
       TerminalEntry {
         snapshot: TerminalSnapshot::default(),
         byte_limit,
-        kill_tx: None,
-        pending_bytes: Vec::new(),
+        source: TerminalSource::Streamed {
+          pending_bytes: Vec::new(),
+        },
       },
     );
   }
@@ -437,35 +534,54 @@ mod tests {
     assert!(env.contains(&("GIT_CONFIG_KEY_3".to_string(), "color.diff".to_string())));
   }
 
-  #[cfg(unix)]
-  #[test]
-  fn spawned_commands_get_the_color_forcing_env() {
+  fn run_command(script: &str, env: Vec<(String, String)>) -> Arc<TerminalStore> {
     let (tx, _rx) = async_channel::unbounded();
-    let store = Arc::new(TerminalStore::new(tx));
+    let store = TerminalStore::new(tx);
     spawn_terminal(
       &store,
       "t".to_string(),
       "sh".to_string(),
-      vec![
-        "-c".to_string(),
-        "printf \"$CARGO_TERM_COLOR:$PY_COLORS:$RUST_LOG_STYLE:$CLICOLOR_FORCE:$FORCE_COLOR:$TERM:$COLORTERM:$CLICOLOR:${NO_COLOR-unset}\"".to_string(),
-      ],
-      Vec::new(),
+      vec!["-c".to_string(), script.to_string()],
+      env,
       std::env::current_dir().expect("cwd"),
       None,
     )
     .expect("spawns");
-    for _ in 0..250 {
-      if store.snapshot("t").is_some_and(|s| s.finished) {
-        break;
+    for _ in 0..500 {
+      if store
+        .snapshot("t")
+        .is_some_and(|snapshot| snapshot.finished)
+      {
+        return store;
       }
       std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let snap = store.snapshot("t").expect("entry");
-    assert!(snap.finished, "the probe command finished");
+    panic!("the command never finished");
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn commands_write_to_a_terminal_but_read_no_input() {
+    let store = run_command(
+      "[ -t 1 ] && echo output-is-a-terminal; [ -t 0 ] || echo no-input; printf \"$TERM:$PAGER:$GIT_PAGER\"",
+      Vec::new(),
+    );
     assert_eq!(
-      snap.output,
-      "always:1:always:1:1:xterm-256color:truecolor:1:unset"
+      store.agent_output("t").expect("entry").0,
+      "output-is-a-terminal\nno-input\nxterm-256color:cat:cat\n"
+    );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn the_card_keeps_colors_and_the_agent_reads_plain_text() {
+    let store = run_command("printf '\\033[32mok\\033[0m done\\n'; exit 3", Vec::new());
+    let snapshot = store.snapshot("t").expect("entry");
+    assert_eq!(snapshot.output, "\u{1b}[0;32mok\u{1b}[0m done\n");
+    assert_eq!(snapshot.exit_code, Some(3));
+    assert_eq!(
+      store.agent_output("t").expect("entry"),
+      ("ok done\n".to_string(), false)
     );
   }
 
@@ -479,99 +595,16 @@ mod tests {
     );
   }
 
-  #[test]
-  fn spawned_commands_never_open_a_pager() {
-    let (tx, _rx) = async_channel::unbounded();
-    let store = Arc::new(TerminalStore::new(tx));
-    spawn_terminal(
-      &store,
-      "t".to_string(),
-      "sh".to_string(),
-      vec!["-c".to_string(), "printf \"$PAGER:$GIT_PAGER\"".to_string()],
-      Vec::new(),
-      std::env::current_dir().expect("cwd"),
-      None,
-    )
-    .expect("spawns");
-    for _ in 0..250 {
-      if store.snapshot("t").is_some_and(|s| s.finished) {
-        break;
-      }
-      std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert_eq!(store.snapshot("t").expect("entry").output, "cat:cat");
-  }
-
   #[cfg(unix)]
   #[test]
-  fn git_commands_get_color_config_always() {
-    let git_exists = std::process::Command::new("git")
-      .arg("--version")
-      .stdout(std::process::Stdio::null())
-      .stderr(std::process::Stdio::null())
-      .status()
-      .is_ok_and(|status| status.success());
-    if !git_exists {
-      return;
-    }
-
-    let (tx, _rx) = async_channel::unbounded();
-    let store = Arc::new(TerminalStore::new(tx));
-    spawn_terminal(
-      &store,
-      "t".to_string(),
-      "sh".to_string(),
-      vec![
-        "-c".to_string(),
-        "git config --get color.ui && git config --get color.diff".to_string(),
-      ],
-      Vec::new(),
-      std::env::current_dir().expect("cwd"),
-      None,
-    )
-    .expect("spawns");
-    for _ in 0..250 {
-      if store.snapshot("t").is_some_and(|s| s.finished) {
-        break;
-      }
-      std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    let snap = store.snapshot("t").expect("entry");
-    assert!(snap.finished, "the probe command finished");
-    assert_eq!(snap.output, "always\nalways\n");
-  }
-
-  #[cfg(unix)]
-  #[test]
-  fn the_agents_env_overrides_the_color_forcing_defaults() {
-    let (tx, _rx) = async_channel::unbounded();
-    let store = Arc::new(TerminalStore::new(tx));
-    spawn_terminal(
-      &store,
-      "t".to_string(),
-      "sh".to_string(),
-      vec![
-        "-c".to_string(),
-        "printf \"$CARGO_TERM_COLOR:$PY_COLORS:$RUST_LOG_STYLE\"".to_string(),
-      ],
-      vec![
-        ("CARGO_TERM_COLOR".to_string(), "never".to_string()),
-        ("PY_COLORS".to_string(), "0".to_string()),
-        ("RUST_LOG_STYLE".to_string(), "never".to_string()),
-      ],
-      std::env::current_dir().expect("cwd"),
-      None,
-    )
-    .expect("spawns");
-    for _ in 0..250 {
-      if store.snapshot("t").is_some_and(|s| s.finished) {
-        break;
-      }
-      std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+  fn the_agents_env_overrides_our_defaults() {
+    let store = run_command(
+      "printf \"$PAGER\"",
+      vec![("PAGER".to_string(), "less".to_string())],
+    );
     assert_eq!(
-      store.snapshot("t").expect("entry").output,
-      "never:0:never",
+      store.agent_output("t").expect("entry").0,
+      "less\n",
       "an explicit agent env must win over our defaults"
     );
   }
@@ -579,33 +612,47 @@ mod tests {
   #[cfg(unix)]
   #[test]
   fn an_inherited_no_color_is_scrubbed_from_spawned_commands() {
-    // Process-global, but harmless to parallel tests: apply_color_env strips
-    // NO_COLOR from every child this module spawns.
+    // Process-global, but harmless to parallel tests: every command this
+    // module spawns drops NO_COLOR unless the agent sets it.
     unsafe { std::env::set_var("NO_COLOR", "1") };
+    let store = run_command("printf \"${NO_COLOR-unset}\"", Vec::new());
+    unsafe { std::env::remove_var("NO_COLOR") };
+    assert_eq!(
+      store.agent_output("t").expect("entry").0,
+      "unset\n",
+      "a user's NO_COLOR must not silence the terminal cards"
+    );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn killing_a_command_stops_what_it_started() {
     let (tx, _rx) = async_channel::unbounded();
-    let store = Arc::new(TerminalStore::new(tx));
+    let store = TerminalStore::new(tx);
     spawn_terminal(
       &store,
       "t".to_string(),
       "sh".to_string(),
-      vec!["-c".to_string(), "printf \"${NO_COLOR-unset}\"".to_string()],
+      vec!["-c".to_string(), "sleep 30 & wait".to_string()],
       Vec::new(),
       std::env::current_dir().expect("cwd"),
       None,
     )
     .expect("spawns");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    store.kill("t");
     for _ in 0..250 {
-      if store.snapshot("t").is_some_and(|s| s.finished) {
+      if store
+        .snapshot("t")
+        .is_some_and(|snapshot| snapshot.finished)
+      {
         break;
       }
       std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    unsafe { std::env::remove_var("NO_COLOR") };
-    assert_eq!(
-      store.snapshot("t").expect("entry").output,
-      "unset",
-      "a user's NO_COLOR must not silence the terminal cards"
-    );
+    let snapshot = store.snapshot("t").expect("entry");
+    assert!(snapshot.finished && snapshot.killed);
+    assert_eq!(snapshot.signal.as_deref(), Some("9"));
   }
 
   #[test]

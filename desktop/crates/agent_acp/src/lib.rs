@@ -1142,12 +1142,11 @@ async fn run_driver(
       async move |request: agent_client_protocol::schema::TerminalOutputRequest,
                   responder,
                   _connection| {
-        match term_output.snapshot(request.terminal_id.0.as_ref()) {
-          Some(snap) => {
-            let mut response = agent_client_protocol::schema::TerminalOutputResponse::new(
-              crate::terminal::agent_visible_output(&snap.output),
-              snap.truncated,
-            );
+        let id = request.terminal_id.0.as_ref();
+        match term_output.snapshot(id).zip(term_output.agent_output(id)) {
+          Some((snap, (output, truncated))) => {
+            let mut response =
+              agent_client_protocol::schema::TerminalOutputResponse::new(output, truncated);
             if snap.finished {
               response = response.exit_status(
                 agent_client_protocol::schema::TerminalExitStatus::new()
