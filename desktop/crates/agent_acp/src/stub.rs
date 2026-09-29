@@ -300,6 +300,71 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             finish_turn(&cx, session_id);
             return responder.respond(PromptResponse::new(StopReason::EndTurn));
           }
+          // "terminal overlap" keeps a long command waited on while a second
+          // one runs to completion, then reads and kills the first: the
+          // client must serve other terminal requests during a wait.
+          if prompt_contains("terminal overlap") {
+            let cx = cx.clone();
+            let session_id = session_id.clone();
+            smol::spawn(async move {
+              let create = |script: &str| {
+                cx.send_request(
+                  agent_client_protocol::schema::CreateTerminalRequest::new(
+                    session_id.clone(),
+                    "/bin/sh",
+                  )
+                  .args(vec!["-c".to_string(), script.to_string()]),
+                )
+                .block_task()
+              };
+              let wait_for_exit = |terminal_id: &agent_client_protocol::schema::TerminalId| {
+                cx.send_request(
+                  agent_client_protocol::schema::WaitForTerminalExitRequest::new(
+                    session_id.clone(),
+                    terminal_id.clone(),
+                  ),
+                )
+                .block_task()
+              };
+              let Ok(long) = create("echo long; sleep 30").await else {
+                let _ =
+                  responder.respond_with_error(agent_client_protocol::Error::internal_error());
+                return;
+              };
+              let long_exit = smol::spawn(wait_for_exit(&long.terminal_id));
+              let short_ok = match create("echo second").await {
+                Ok(short) => wait_for_exit(&short.terminal_id)
+                  .await
+                  .is_ok_and(|response| response.exit_status.exit_code == Some(0)),
+                Err(_) => false,
+              };
+              let output_ok = cx
+                .send_request(agent_client_protocol::schema::TerminalOutputRequest::new(
+                  session_id.clone(),
+                  long.terminal_id.clone(),
+                ))
+                .block_task()
+                .await
+                .is_ok();
+              let _ = cx
+                .send_request(agent_client_protocol::schema::KillTerminalRequest::new(
+                  session_id.clone(),
+                  long.terminal_id.clone(),
+                ))
+                .block_task()
+                .await;
+              let _ = long_exit.await;
+              if short_ok && output_ok {
+                finish_turn(&cx, session_id);
+                let _ = responder.respond(PromptResponse::new(StopReason::EndTurn));
+              } else {
+                let _ =
+                  responder.respond_with_error(agent_client_protocol::Error::internal_error());
+              }
+            })
+            .detach();
+            return Ok(());
+          }
           // "terminal" runs a real command through the client's terminal
           // capability; "sleep" makes it long-lived so kill can be exercised.
           if prompt_contains("terminal") {

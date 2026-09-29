@@ -168,6 +168,29 @@ fn a_terminal_command_streams_output_and_exit_code_into_the_store() {
 }
 
 #[test]
+fn waiting_on_a_terminal_leaves_the_agent_free_to_run_another() {
+  use futures::FutureExt;
+
+  smol::block_on(async {
+    let mut session = spawn_stub_session().await;
+    if let Some(events) = session.take_events() {
+      smol::spawn(async move { while events.recv().await.is_ok() {} }).detach();
+    }
+
+    // The long command sleeps 30s: a client that serves the wait on its
+    // dispatch loop cannot create the second terminal before then.
+    let turn = session.send_prompt("terminal overlap").fuse();
+    let timeout = smol::Timer::after(std::time::Duration::from_secs(10)).fuse();
+    futures::pin_mut!(turn, timeout);
+    let stop = futures::select_biased! {
+      stop = turn => stop.expect("the overlapping terminals round-trip"),
+      _ = timeout => panic!("the second terminal waited for the first one to exit"),
+    };
+    assert!(matches!(stop, StopReason::EndTurn));
+  });
+}
+
+#[test]
 fn killing_a_terminal_finishes_its_turn() {
   smol::block_on(async {
     let mut session = spawn_stub_session().await;

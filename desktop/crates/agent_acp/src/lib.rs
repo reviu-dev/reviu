@@ -899,6 +899,17 @@ async fn forward_stderr(stderr: async_process::ChildStderr, buffer: StderrBuffer
   }
 }
 
+/// A task spawned on the connection shuts the whole connection down when it
+/// returns an error, so a failed reply is only logged: it means the agent is gone.
+fn respond_from_task<T: agent_client_protocol::JsonRpcResponse>(
+  responder: agent_client_protocol::Responder<T>,
+  result: agent_client_protocol::Result<T>,
+) {
+  if let Err(error) = responder.respond_with_result(result) {
+    log::warn!("[acp] could not answer the agent: {error}");
+  }
+}
+
 async fn run_driver(
   transport: agent_client_protocol::ByteStreams<
     async_process::ChildStdin,
@@ -976,7 +987,7 @@ async fn run_driver(
         let permission_tx = permission_tx.clone();
         let permission_replies = permission_replies.clone();
         let permission_counter = permission_counter.clone();
-        async move |request: RequestPermissionRequest, responder, _connection| {
+        async move |request: RequestPermissionRequest, responder, connection: ConnectionTo<Agent>| {
           use futures::FutureExt;
           let id = permission_counter.fetch_add(1, Ordering::Relaxed);
           let title = request
@@ -1003,19 +1014,23 @@ async fn run_driver(
           if let Ok(mut map) = permission_replies.lock() {
             map.insert(id, reply_tx);
           }
-          let send_result = permission_tx.send(prompt).await;
-
-          let outcome = if send_result.is_err() {
+          if permission_tx.send(prompt).await.is_err() {
             // No listener: fall back to safe default.
             permission_replies.lock().ok().map(|mut m| m.remove(&id));
-            match pick_default_permission_option(&request.options) {
+            let outcome = match pick_default_permission_option(&request.options) {
               Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
               None => RequestPermissionOutcome::Cancelled,
-            }
-          } else {
+            };
+            return responder.respond(RequestPermissionResponse::new(outcome));
+          }
+
+          // Handlers run on the connection's only dispatch loop: waiting for
+          // the user here would stall every other message from the agent.
+          let permission_replies = permission_replies.clone();
+          connection.spawn(async move {
             let timeout = smol::Timer::after(Duration::from_secs(300)).fuse();
             futures::pin_mut!(timeout);
-            futures::select_biased! {
+            let outcome = futures::select_biased! {
               answer = reply_rx.fuse() => {
                 match answer.ok().flatten() {
                   Some(option_id) => RequestPermissionOutcome::Selected(
@@ -1028,9 +1043,10 @@ async fn run_driver(
                 permission_replies.lock().ok().map(|mut m| m.remove(&id));
                 RequestPermissionOutcome::Cancelled
               }
-            }
-          };
-          responder.respond(RequestPermissionResponse::new(outcome))
+            };
+            respond_from_task(responder, Ok(RequestPermissionResponse::new(outcome)));
+            Ok(())
+          })
         }
       },
       agent_client_protocol::on_receive_request!(),
@@ -1149,23 +1165,30 @@ async fn run_driver(
     .on_receive_request(
       async move |request: agent_client_protocol::schema::WaitForTerminalExitRequest,
                   responder,
-                  _connection| {
+                  connection: ConnectionTo<Agent>| {
         let id = request.terminal_id.0.to_string();
-        loop {
-          match term_wait.snapshot(&id) {
-            Some(snap) if snap.finished => {
-              return responder.respond(
-                agent_client_protocol::schema::WaitForTerminalExitResponse::new(
-                  agent_client_protocol::schema::TerminalExitStatus::new()
-                    .exit_code(snap.exit_code)
-                    .signal(snap.signal),
-                ),
-              );
-            }
-            Some(_) => smol::Timer::after(Duration::from_millis(30)).await,
-            None => return Err(agent_client_protocol::Error::invalid_params()),
+        let store = term_wait.clone();
+        // A command can outlive the turn (a dev server): waiting for it on the
+        // dispatch loop would block the agent's other terminals and updates.
+        connection.spawn(async move {
+          let result = loop {
+            match store.snapshot(&id) {
+              Some(snap) if snap.finished => {
+                break Ok(
+                  agent_client_protocol::schema::WaitForTerminalExitResponse::new(
+                    agent_client_protocol::schema::TerminalExitStatus::new()
+                      .exit_code(snap.exit_code)
+                      .signal(snap.signal),
+                  ),
+                );
+              }
+              Some(_) => smol::Timer::after(Duration::from_millis(30)).await,
+              None => break Err(agent_client_protocol::Error::invalid_params()),
+            };
           };
-        }
+          respond_from_task(responder, result);
+          Ok(())
+        })
       },
       agent_client_protocol::on_receive_request!(),
     )

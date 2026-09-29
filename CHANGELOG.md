@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.5.0
+
+### Agents Run Commands In Parallel
+
+While an agent waits for a long command such as a dev server, it can now start and read other commands, keep streaming its reply, and stop the long command itself. Waiting on a permission prompt no longer freezes the rest of the session either.
+
 ## 1.4.0
 
 ### Terminals In Split Panes
