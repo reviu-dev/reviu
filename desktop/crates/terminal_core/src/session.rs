@@ -302,6 +302,7 @@ pub struct WorkingDirectoryTracker {
   current: RwLock<PathBuf>,
   /// Our own duplicate of the PTY master, to ask which process group owns
   /// the terminal; the event loop owns and closes the original.
+  #[cfg(unix)]
   pty_file: Option<std::fs::File>,
   running_command: RwLock<Option<String>>,
   refresh_state: AtomicU8,
@@ -309,11 +310,15 @@ pub struct WorkingDirectoryTracker {
 
 impl WorkingDirectoryTracker {
   fn new(process_id: u32, working_directory: PathBuf, pty_file: Option<std::fs::File>) -> Self {
+    #[cfg(not(unix))]
+    let _ = pty_file;
+
     Self {
       process_id: Pid::from_u32(process_id),
       tracked_process_id: Mutex::new(None),
       system: Mutex::new(System::new()),
       current: RwLock::new(working_directory),
+      #[cfg(unix)]
       pty_file,
       running_command: RwLock::new(None),
       refresh_state: AtomicU8::new(0),
@@ -565,6 +570,7 @@ pub struct TerminalSession {
   pty_tx: EventLoopSender,
   listener: TerminalListener,
   working_directory: Arc<WorkingDirectoryTracker>,
+  #[cfg(unix)]
   child_process_id: u32,
   scrollback_lines: usize,
   title: Option<String>,
@@ -599,18 +605,13 @@ fn shell_process_id(pty: &tty::Pty) -> u32 {
   pty.child().id()
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn pty_file_for_tracking(pty: &tty::Pty) -> Result<Option<std::fs::File>> {
   let file = pty
     .file()
     .try_clone()
     .context("Failed to duplicate the PTY descriptor")?;
   Ok(Some(file))
-}
-
-#[cfg(windows)]
-fn pty_file_for_tracking(_pty: &tty::Pty) -> Result<Option<std::fs::File>> {
-  Ok(None)
 }
 
 #[cfg(windows)]
@@ -671,10 +672,17 @@ impl TerminalSession {
     let pty = tty::new(&options, window_size, window_id)
       .with_context(|| format!("Failed to create PTY in {}", working_directory.display()))?;
     let child_process_id = shell_process_id(&pty);
+    #[cfg(unix)]
     let working_directory = Arc::new(WorkingDirectoryTracker::new(
       child_process_id,
       working_directory,
       pty_file_for_tracking(&pty)?,
+    ));
+    #[cfg(not(unix))]
+    let working_directory = Arc::new(WorkingDirectoryTracker::new(
+      child_process_id,
+      working_directory,
+      None,
     ));
 
     let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, drain_on_exit, false)
@@ -690,6 +698,7 @@ impl TerminalSession {
       pty_tx,
       listener,
       working_directory,
+      #[cfg(unix)]
       child_process_id,
       scrollback_lines,
       title: None,
