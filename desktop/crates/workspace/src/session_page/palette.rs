@@ -196,6 +196,14 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::new_terminal());
       commands.push(CommandPaletteCommand::open_terminal_in_split_right());
       commands.push(CommandPaletteCommand::open_terminal_in_split_down());
+      if self.checkout_root(cx).is_some() {
+        commands.push(CommandPaletteCommand::open_file_in_split_right());
+        commands.push(CommandPaletteCommand::open_file_in_split_down());
+        if !self.dock_panel.read(cx).status_entries().is_empty() {
+          commands.push(CommandPaletteCommand::open_diff_in_split_right());
+          commands.push(CommandPaletteCommand::open_diff_in_split_down());
+        }
+      }
       commands.push(CommandPaletteCommand::split_pane_right());
       commands.push(CommandPaletteCommand::split_pane_down());
       if self
@@ -529,6 +537,22 @@ impl SessionPage {
         self.open_terminal_in_split(CenterSplitDirection::Down, window, cx);
         Ok(())
       }
+      CommandPaletteAction::OpenFileInSplitRight => {
+        self.open_file_picker_in_split(CenterSplitDirection::Right, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenFileInSplitDown => {
+        self.open_file_picker_in_split(CenterSplitDirection::Down, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenDiffInSplitRight => {
+        self.open_diff_picker_in_split(CenterSplitDirection::Right, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenDiffInSplitDown => {
+        self.open_diff_picker_in_split(CenterSplitDirection::Down, window, cx);
+        Ok(())
+      }
       CommandPaletteAction::SplitPaneRight => {
         self.split_pane_right_action(&crate::SplitPaneRight, window, cx);
         Ok(())
@@ -654,6 +678,8 @@ mod tests {
         CommandPaletteCommandId::NewTerminal,
         CommandPaletteCommandId::OpenTerminalInSplitRight,
         CommandPaletteCommandId::OpenTerminalInSplitDown,
+        CommandPaletteCommandId::OpenFileInSplitRight,
+        CommandPaletteCommandId::OpenFileInSplitDown,
         CommandPaletteCommandId::SplitPaneRight,
         CommandPaletteCommandId::SplitPaneDown,
         CommandPaletteCommandId::ShowFileSearch,
@@ -663,10 +689,40 @@ mod tests {
       }
 
       // Nothing is open, so the two diff toggles have nothing to act on.
+      assert!(!ids.contains(&CommandPaletteCommandId::OpenDiffInSplitRight));
+      assert!(!ids.contains(&CommandPaletteCommandId::OpenDiffInSplitDown));
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleDiffView));
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleHideWhitespace));
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleSoftWrap));
       assert!(!ids.contains(&CommandPaletteCommandId::SendSelectionToAgent));
+    });
+  }
+
+  #[gpui::test]
+  async fn diff_split_commands_reach_the_palette_when_files_changed(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-diff-split-commands");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+
+      assert!(ids.contains(&CommandPaletteCommandId::OpenDiffInSplitRight));
+      assert!(ids.contains(&CommandPaletteCommandId::OpenDiffInSplitDown));
     });
   }
 

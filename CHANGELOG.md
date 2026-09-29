@@ -16,6 +16,10 @@ Focus the pane beside, above, or below your current split from the command palet
 
 Create an empty split pane from the command palette or keyboard, then choose whether to fill it with a terminal, chat, file, diff, or project search.
 
+### Open Files And Diffs In Splits
+
+Open File in Split and Open Diff in Split commands now create the target pane first, then let you choose the file or changed file to place there.
+
 ### Agent Sign-In In Reviu
 
 When Claude or another ACP agent asks you to sign in again, Reviu now offers the login command directly in the chat and can open it in a Reviu terminal. Claude logins reconnect the chat automatically once the terminal reports success.

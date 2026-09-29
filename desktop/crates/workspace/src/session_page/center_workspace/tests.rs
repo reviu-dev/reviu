@@ -1,10 +1,11 @@
 use super::*;
 use crate::session_page::center_layout::CenterNode;
 use crate::session_page::test_support::{
-  add_session_page_window_from_config, isolate_config_store_for_test,
+  add_session_page_window, add_session_page_window_from_config, isolate_config_store_for_test,
 };
-use crate::test_support::TempDir;
+use crate::test_support::{TempDir, TempRepo, commit_text_file};
 use gpui::{InputEvent, TestAppContext, VisualTestContext};
+use std::path::Path;
 
 fn setup(cx: &mut TestAppContext) -> (TempDir, Entity<SessionPage>, &mut VisualTestContext) {
   isolate_config_store_for_test();
@@ -407,6 +408,32 @@ fn split_pane_action_creates_a_launcher_pane(cx: &mut TestAppContext) {
       second.active_surface().tab().kind,
       CenterTabKind::PaneLauncher
     );
+  });
+}
+
+#[gpui::test]
+fn open_file_in_split_creates_target_pane_before_showing_picker(cx: &mut TestAppContext) {
+  let repo = TempRepo::init("center-workspace-file-in-split");
+  commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+  let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+  cx.run_until_parked();
+
+  page.update_in(cx, |page, window, cx| {
+    page.open_file_picker_in_split(CenterSplitDirection::Right, window, cx);
+  });
+  cx.run_until_parked();
+
+  assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+  page.read_with(cx, |page, _| {
+    assert_eq!(page.center, CenterView::PaneLauncher);
+    assert_eq!(
+      page.center_layout.active_tab().kind,
+      CenterTabKind::PaneLauncher
+    );
+    let CenterNode::Split(split) = page.center_layout.root() else {
+      panic!("layout should be split");
+    };
+    assert_eq!(split.direction(), CenterSplitDirection::Right);
   });
 }
 

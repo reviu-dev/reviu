@@ -183,7 +183,8 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.split_pane_with_launcher(CenterSplitDirection::Right, window, cx);
+    let _ = self.split_pane_with_launcher(CenterSplitDirection::Right, window, cx);
+    cx.stop_propagation();
   }
 
   pub(super) fn split_pane_down_action(
@@ -192,7 +193,44 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.split_pane_with_launcher(CenterSplitDirection::Down, window, cx);
+    let _ = self.split_pane_with_launcher(CenterSplitDirection::Down, window, cx);
+    cx.stop_propagation();
+  }
+
+  pub(super) fn open_file_in_split_right_action(
+    &mut self,
+    _: &crate::OpenFileInSplitRight,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_file_picker_in_split(CenterSplitDirection::Right, window, cx);
+  }
+
+  pub(super) fn open_file_in_split_down_action(
+    &mut self,
+    _: &crate::OpenFileInSplitDown,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_file_picker_in_split(CenterSplitDirection::Down, window, cx);
+  }
+
+  pub(super) fn open_diff_in_split_right_action(
+    &mut self,
+    _: &crate::OpenDiffInSplitRight,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_diff_picker_in_split(CenterSplitDirection::Right, window, cx);
+  }
+
+  pub(super) fn open_diff_in_split_down_action(
+    &mut self,
+    _: &crate::OpenDiffInSplitDown,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_diff_picker_in_split(CenterSplitDirection::Down, window, cx);
   }
 
   pub(super) fn move_center_pane_left_action(
@@ -272,16 +310,62 @@ impl SessionPage {
     direction: CenterSplitDirection,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) {
+  ) -> Option<CenterTab> {
     let tab = self.next_pane_launcher_tab();
-    self.open_center_surface_in_split(CenterSurface::from_tab(tab), direction, window, cx);
-    cx.stop_propagation();
+    self
+      .open_center_surface_in_split(CenterSurface::from_tab(tab.clone()), direction, window, cx)
+      .then_some(tab)
   }
 
   fn next_pane_launcher_tab(&mut self) -> CenterTab {
     let id = self.next_pane_launcher_id;
     self.next_pane_launcher_id = self.next_pane_launcher_id.saturating_add(1);
     CenterTab::pane_launcher(id)
+  }
+
+  pub(super) fn open_file_picker_in_split(
+    &mut self,
+    direction: CenterSplitDirection,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.checkout_root(cx).is_none() {
+      window.push_notification(
+        Notification::warning("Open a project before opening a file."),
+        cx,
+      );
+      cx.stop_propagation();
+      return;
+    }
+    if let Some(tab) = self.split_pane_with_launcher(direction, window, cx) {
+      self.open_file_picker_for_split_launcher(tab, window, cx);
+    }
+    cx.stop_propagation();
+  }
+
+  pub(super) fn open_diff_picker_in_split(
+    &mut self,
+    direction: CenterSplitDirection,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.checkout_root(cx).is_none() {
+      window.push_notification(
+        Notification::warning("Open a Git project before opening a diff."),
+        cx,
+      );
+      cx.stop_propagation();
+      return;
+    }
+    if self.dock_panel.read(cx).status_entries().is_empty() {
+      window.push_notification(Notification::info("No changed files to diff."), cx);
+      cx.stop_propagation();
+      return;
+    }
+    if let Some(tab) = self.split_pane_with_launcher(direction, window, cx) {
+      self.open_diff_picker_for_split_launcher(tab, window, cx);
+    }
+    cx.stop_propagation();
   }
 
   fn move_active_center_pane_to_edge(

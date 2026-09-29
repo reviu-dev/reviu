@@ -1263,6 +1263,10 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::NewTerminal => None,
     Command::OpenTerminalInSplitRight => Some(ShortcutId::OpenTerminalInSplitRight),
     Command::OpenTerminalInSplitDown => Some(ShortcutId::OpenTerminalInSplitDown),
+    Command::OpenFileInSplitRight
+    | Command::OpenFileInSplitDown
+    | Command::OpenDiffInSplitRight
+    | Command::OpenDiffInSplitDown => None,
     Command::SplitPaneRight => Some(ShortcutId::SplitPaneRight),
     Command::SplitPaneDown => Some(ShortcutId::SplitPaneDown),
     Command::FocusPaneLeft => Some(ShortcutId::FocusCenterPaneLeft),

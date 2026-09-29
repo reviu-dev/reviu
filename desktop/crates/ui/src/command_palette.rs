@@ -409,6 +409,10 @@ pub enum CommandPaletteAction {
   NewTerminal,
   OpenTerminalInSplitRight,
   OpenTerminalInSplitDown,
+  OpenFileInSplitRight,
+  OpenFileInSplitDown,
+  OpenDiffInSplitRight,
+  OpenDiffInSplitDown,
   SplitPaneRight,
   SplitPaneDown,
   FocusPaneLeft,
@@ -1048,6 +1052,10 @@ pub enum CommandPaletteCommandId {
   NewTerminal,
   OpenTerminalInSplitRight,
   OpenTerminalInSplitDown,
+  OpenFileInSplitRight,
+  OpenFileInSplitDown,
+  OpenDiffInSplitRight,
+  OpenDiffInSplitDown,
   SplitPaneRight,
   SplitPaneDown,
   FocusPaneLeft,
@@ -1136,6 +1144,10 @@ impl CommandPaletteCommandId {
       Self::NewTerminal => "new_terminal",
       Self::OpenTerminalInSplitRight => "open_terminal_in_split_right",
       Self::OpenTerminalInSplitDown => "open_terminal_in_split_down",
+      Self::OpenFileInSplitRight => "open_file_in_split_right",
+      Self::OpenFileInSplitDown => "open_file_in_split_down",
+      Self::OpenDiffInSplitRight => "open_diff_in_split_right",
+      Self::OpenDiffInSplitDown => "open_diff_in_split_down",
       Self::SplitPaneRight => "split_pane_right",
       Self::SplitPaneDown => "split_pane_down",
       Self::FocusPaneLeft => "focus_pane_left",
@@ -1220,6 +1232,10 @@ impl CommandPaletteCommandId {
       "new_terminal" => Some(Self::NewTerminal),
       "open_terminal_in_split_right" => Some(Self::OpenTerminalInSplitRight),
       "open_terminal_in_split_down" => Some(Self::OpenTerminalInSplitDown),
+      "open_file_in_split_right" => Some(Self::OpenFileInSplitRight),
+      "open_file_in_split_down" => Some(Self::OpenFileInSplitDown),
+      "open_diff_in_split_right" => Some(Self::OpenDiffInSplitRight),
+      "open_diff_in_split_down" => Some(Self::OpenDiffInSplitDown),
       "split_pane_right" => Some(Self::SplitPaneRight),
       "split_pane_down" => Some(Self::SplitPaneDown),
       "focus_pane_left" => Some(Self::FocusPaneLeft),
@@ -1813,6 +1829,38 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn open_file_in_split_right() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenFileInSplitRight,
+      "File: Open in Split Right",
+      "Choose a file to open to the right of the active pane",
+    )
+  }
+
+  pub fn open_file_in_split_down() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenFileInSplitDown,
+      "File: Open in Split Down",
+      "Choose a file to open below the active pane",
+    )
+  }
+
+  pub fn open_diff_in_split_right() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenDiffInSplitRight,
+      "Diff: Open in Split Right",
+      "Choose a changed file to diff to the right of the active pane",
+    )
+  }
+
+  pub fn open_diff_in_split_down() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenDiffInSplitDown,
+      "Diff: Open in Split Down",
+      "Choose a changed file to diff below the active pane",
+    )
+  }
+
   pub fn split_pane_right() -> Self {
     Self::new(
       CommandPaletteCommandId::SplitPaneRight,
@@ -2165,7 +2213,11 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::ShowGlobalSearch
       | CommandPaletteCommandId::JumpToLatestMessage => CommandPaletteGroup::Navigation,
 
-      CommandPaletteCommandId::SplitPaneRight
+      CommandPaletteCommandId::OpenFileInSplitRight
+      | CommandPaletteCommandId::OpenFileInSplitDown
+      | CommandPaletteCommandId::OpenDiffInSplitRight
+      | CommandPaletteCommandId::OpenDiffInSplitDown
+      | CommandPaletteCommandId::SplitPaneRight
       | CommandPaletteCommandId::SplitPaneDown
       | CommandPaletteCommandId::FocusPaneLeft
       | CommandPaletteCommandId::FocusPaneRight
@@ -2225,6 +2277,12 @@ impl CommandPaletteCommand {
       Id::SwitchProject => &["recent"],
       Id::NewTerminal | Id::OpenTerminalInSplitRight | Id::OpenTerminalInSplitDown => {
         &["shell", "console", "terminal", "pane", "split"]
+      }
+      Id::OpenFileInSplitRight | Id::OpenFileInSplitDown => {
+        &["file", "open", "goto", "pane", "split"]
+      }
+      Id::OpenDiffInSplitRight | Id::OpenDiffInSplitDown => {
+        &["diff", "changes", "file", "pane", "split"]
       }
       Id::SplitPaneRight | Id::SplitPaneDown => &[
         "split", "pane", "window", "layout", "open", "new", "right", "down",
@@ -2339,6 +2397,10 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::NewTerminal
       | CommandPaletteCommandId::OpenTerminalInSplitRight
       | CommandPaletteCommandId::OpenTerminalInSplitDown => Icon::new(UiIconName::Terminal),
+      CommandPaletteCommandId::OpenFileInSplitRight
+      | CommandPaletteCommandId::OpenFileInSplitDown => Icon::new(IconName::File),
+      CommandPaletteCommandId::OpenDiffInSplitRight
+      | CommandPaletteCommandId::OpenDiffInSplitDown => Icon::new(UiIconName::FileDiff),
       CommandPaletteCommandId::SplitPaneRight
       | CommandPaletteCommandId::SplitPaneDown
       | CommandPaletteCommandId::FocusPaneLeft
@@ -3588,6 +3650,38 @@ impl CommandPalette {
           cx,
         );
       }
+      CommandPaletteCommandId::OpenFileInSplitRight => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenFileInSplitRight,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::OpenFileInSplitDown => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenFileInSplitDown,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::OpenDiffInSplitRight => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenDiffInSplitRight,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::OpenDiffInSplitDown => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenDiffInSplitDown,
+          window,
+          cx,
+        );
+      }
       CommandPaletteCommandId::SplitPaneRight => {
         self.trigger_action(command, CommandPaletteAction::SplitPaneRight, window, cx);
       }
@@ -4679,6 +4773,19 @@ mod tests {
       CommandPaletteCommandId::OpenLogs,
       CommandPaletteCommandId::RevealLogs,
       CommandPaletteCommandId::SendFeedback,
+      CommandPaletteCommandId::NewTerminal,
+      CommandPaletteCommandId::OpenTerminalInSplitRight,
+      CommandPaletteCommandId::OpenTerminalInSplitDown,
+      CommandPaletteCommandId::OpenFileInSplitRight,
+      CommandPaletteCommandId::OpenFileInSplitDown,
+      CommandPaletteCommandId::OpenDiffInSplitRight,
+      CommandPaletteCommandId::OpenDiffInSplitDown,
+      CommandPaletteCommandId::SplitPaneRight,
+      CommandPaletteCommandId::SplitPaneDown,
+      CommandPaletteCommandId::FocusPaneLeft,
+      CommandPaletteCommandId::FocusPaneRight,
+      CommandPaletteCommandId::FocusPaneUp,
+      CommandPaletteCommandId::FocusPaneDown,
     ];
 
     for id in all_ids {
