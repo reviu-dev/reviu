@@ -1,12 +1,11 @@
 mod colors;
 mod input;
 mod links;
-mod session;
 mod terminal_element;
 mod terminal_scrollbar;
 mod terminal_view;
 
-pub use session::{
+pub use terminal_core::{
   ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalCursorSnapshot,
   TerminalSelectionMode, TerminalSession, ViewportPoint, ViewportSelectionRange,
 };

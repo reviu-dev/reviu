@@ -27,11 +27,8 @@ use alacritty_terminal::{
 };
 use anyhow::{Context as _, Result};
 use async_channel::{Receiver, Sender, unbounded};
-use gpui::{Modifiers, MouseButton};
 use parking_lot::{Mutex, RwLock};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-
-use crate::input;
 
 const MIN_COLUMNS: u16 = 12;
 const MIN_LINES: u16 = 4;
@@ -176,17 +173,17 @@ pub enum TerminalSelectionMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TerminalSearchMatch {
+pub struct TerminalSearchMatch {
   start: Point,
   end: Point,
 }
 
-pub(crate) struct TerminalSearchHandle {
+pub struct TerminalSearchHandle {
   term: Arc<FairMutex<Term<TerminalListener>>>,
 }
 
 impl TerminalSearchHandle {
-  pub(crate) fn find_matches(&self, query: &str) -> Vec<TerminalSearchMatch> {
+  pub fn find_matches(&self, query: &str) -> Vec<TerminalSearchMatch> {
     let term = self.term.lock();
     search_matches_for_term(&term, query)
   }
@@ -294,7 +291,7 @@ impl EventListener for TerminalListener {
   }
 }
 
-pub(crate) struct WorkingDirectoryTracker {
+pub struct WorkingDirectoryTracker {
   process_id: Pid,
   tracked_process_id: Mutex<Option<Pid>>,
   system: Mutex<System>,
@@ -319,7 +316,7 @@ impl WorkingDirectoryTracker {
     }
   }
 
-  pub(crate) fn begin_refresh(&self) -> bool {
+  pub fn begin_refresh(&self) -> bool {
     loop {
       match self.refresh_state.load(Ordering::Acquire) {
         0 => {
@@ -346,7 +343,7 @@ impl WorkingDirectoryTracker {
     }
   }
 
-  pub(crate) fn refresh(&self) -> Option<PathBuf> {
+  pub fn refresh(&self) -> Option<PathBuf> {
     let mut latest = None;
     loop {
       let next = self.refresh_working_directory();
@@ -414,13 +411,13 @@ impl WorkingDirectoryTracker {
     None
   }
 
-  pub(crate) fn current(&self) -> PathBuf {
+  pub fn current(&self) -> PathBuf {
     self.current.read().clone()
   }
 
   /// The command the user started from the shell, `None` while the shell
   /// itself waits at its prompt.
-  pub(crate) fn running_command(&self) -> Option<String> {
+  pub fn running_command(&self) -> Option<String> {
     self.running_command.read().clone()
   }
 
@@ -669,7 +666,7 @@ impl TerminalSession {
     self.working_directory.current()
   }
 
-  pub(crate) fn working_directory_tracker(&self) -> Arc<WorkingDirectoryTracker> {
+  pub fn working_directory_tracker(&self) -> Arc<WorkingDirectoryTracker> {
     Arc::clone(&self.working_directory)
   }
 
@@ -701,21 +698,21 @@ impl TerminalSession {
     *self.term.lock().mode()
   }
 
-  pub(crate) fn event_receiver(&self) -> Receiver<Event> {
+  pub fn event_receiver(&self) -> Receiver<Event> {
     self.event_rx.clone()
   }
 
-  pub(crate) fn search_handle(&self) -> TerminalSearchHandle {
+  pub fn search_handle(&self) -> TerminalSearchHandle {
     TerminalSearchHandle {
       term: Arc::clone(&self.term),
     }
   }
 
-  pub(crate) fn scroll_to_search_match(&mut self, found: TerminalSearchMatch) {
+  pub fn scroll_to_search_match(&mut self, found: TerminalSearchMatch) {
     self.term.lock().scroll_to_point(found.start);
   }
 
-  pub(crate) fn visible_search_ranges(
+  pub fn visible_search_ranges(
     &self,
     matches: &[TerminalSearchMatch],
   ) -> Vec<ViewportSelectionRange> {
@@ -726,10 +723,7 @@ impl TerminalSession {
       .collect()
   }
 
-  pub(crate) fn process_events(
-    &mut self,
-    events: impl IntoIterator<Item = Event>,
-  ) -> SessionEventResult {
+  pub fn process_events(&mut self, events: impl IntoIterator<Item = Event>) -> SessionEventResult {
     let mut result = SessionEventResult::default();
 
     for event in events {
@@ -780,11 +774,7 @@ impl TerminalSession {
     result
   }
 
-  pub fn paste(&mut self, text: &str) {
-    self.send_text(input::encode_paste(text, self.mode()));
-  }
-
-  pub(crate) fn input(&mut self, text: &str) {
+  pub fn input(&mut self, text: &str) {
     self.send_text(text.to_string());
   }
 
@@ -805,66 +795,6 @@ impl TerminalSession {
     if delta != 0 {
       term.scroll_display(Scroll::Delta(delta));
     }
-  }
-
-  pub fn send_mouse_press(
-    &mut self,
-    button: MouseButton,
-    point: ViewportPoint,
-    modifiers: Modifiers,
-  ) -> bool {
-    let Some(sequence) =
-      input::encode_mouse_press(button, point.row, point.col, modifiers, self.mode())
-    else {
-      return false;
-    };
-    self.send_text(sequence);
-    true
-  }
-
-  pub fn send_mouse_release(
-    &mut self,
-    button: MouseButton,
-    point: ViewportPoint,
-    modifiers: Modifiers,
-  ) -> bool {
-    let Some(sequence) =
-      input::encode_mouse_release(button, point.row, point.col, modifiers, self.mode())
-    else {
-      return false;
-    };
-    self.send_text(sequence);
-    true
-  }
-
-  pub fn send_mouse_move(
-    &mut self,
-    point: ViewportPoint,
-    pressed_button: Option<MouseButton>,
-    modifiers: Modifiers,
-  ) -> bool {
-    let Some(sequence) =
-      input::encode_mouse_move(point.row, point.col, pressed_button, modifiers, self.mode())
-    else {
-      return false;
-    };
-    self.send_text(sequence);
-    true
-  }
-
-  pub fn send_scroll(
-    &mut self,
-    delta_lines: i32,
-    point: ViewportPoint,
-    modifiers: Modifiers,
-  ) -> bool {
-    let Some(sequence) =
-      input::encode_scroll(delta_lines, point.row, point.col, modifiers, self.mode())
-    else {
-      return false;
-    };
-    self.send_text(sequence);
-    true
   }
 
   pub fn selection_text(&self, range: ViewportSelectionRange) -> Option<String> {

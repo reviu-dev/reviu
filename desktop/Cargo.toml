@@ -10,6 +10,7 @@ members = [
   "crates/git",
   "crates/gfm_markdown_viewer",
   "crates/terminal",
+  "crates/terminal_core",
   "crates/ui",
   "crates/workspace",
   "crates/reviu",
@@ -93,6 +94,7 @@ git2 = { version = "0.21.0", features = [
   "vendored-libgit2",
   "vendored-openssl",
 ] }
+alacritty_terminal = "0.26.0"
 libc = "0.2.185"
 parking_lot = "0.12.5"
 regex = "1.13.1"
@@ -159,6 +161,7 @@ diff_core = { path = "crates/diff_core" }
 git = { path = "crates/git" }
 gfm_markdown_viewer = { path = "crates/gfm_markdown_viewer" }
 terminal = { path = "crates/terminal" }
+terminal_core = { path = "crates/terminal_core" }
 ui = { path = "crates/ui" }
 workspace = { path = "crates/workspace" }
 agent_acp = { path = "crates/agent_acp" }

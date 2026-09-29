@@ -1,5 +1,5 @@
 [package]
-name = "terminal"
+name = "terminal_core"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -8,17 +8,10 @@ publish.workspace = true
 alacritty_terminal = { workspace = true }
 anyhow = { workspace = true }
 async-channel = { workspace = true }
-gpui = { workspace = true }
-gpui-component = { workspace = true }
 libc = { workspace = true }
 parking_lot = { workspace = true }
 regex = { workspace = true }
-serde = { workspace = true }
-shell-words = { workspace = true }
-terminal_core = { workspace = true }
-
-[dev-dependencies]
-gpui = { workspace = true, features = ["test-support"] }
+sysinfo = { workspace = true }
 
 [lints]
 workspace = true

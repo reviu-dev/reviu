@@ -9167,6 +9167,19 @@ dependencies = [
  "regex",
  "serde",
  "shell-words",
+ "terminal_core",
+]
+
+[[package]]
+name = "terminal_core"
+version = "1.4.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "async-channel",
+ "libc",
+ "parking_lot",
+ "regex",
  "sysinfo 0.39.6",
 ]
 

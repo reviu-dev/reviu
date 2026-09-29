@@ -17,13 +17,14 @@ use gpui_component::tooltip::Tooltip;
 use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
+use terminal_core::TerminalSearchMatch;
+
 use crate::{
   ScreenSnapshot, TerminalBounds, TerminalSelectionMode, TerminalSession, ViewportPoint,
   ViewportSelectionRange,
   colors::TerminalPalette,
-  input,
+  input::{self, SessionInput as _},
   links::{TerminalLink, TerminalLinkTarget, link_at},
-  session::TerminalSearchMatch,
   terminal_element::TerminalElement,
   terminal_scrollbar::TerminalScrollHandle,
 };

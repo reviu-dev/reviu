@@ -3,6 +3,7 @@ use alacritty_terminal::{
   term::TermMode,
 };
 use gpui::{KeyDownEvent, Modifiers, MouseButton};
+use terminal_core::{TerminalSession, ViewportPoint};
 
 pub fn encode_key_down(event: &KeyDownEvent, mode: TermMode) -> Option<String> {
   let keystroke = &event.keystroke;
@@ -390,6 +391,80 @@ fn encode_mouse_modifiers(modifiers: Modifiers) -> u8 {
     encoded |= 16;
   }
   encoded
+}
+
+/// Input the view encodes for the shell, in the terminal's current mode.
+pub(crate) trait SessionInput {
+  fn paste(&mut self, text: &str);
+  fn send_mouse_press(
+    &mut self,
+    button: MouseButton,
+    point: ViewportPoint,
+    modifiers: Modifiers,
+  ) -> bool;
+  fn send_mouse_release(
+    &mut self,
+    button: MouseButton,
+    point: ViewportPoint,
+    modifiers: Modifiers,
+  ) -> bool;
+  fn send_mouse_move(
+    &mut self,
+    point: ViewportPoint,
+    pressed_button: Option<MouseButton>,
+    modifiers: Modifiers,
+  ) -> bool;
+  fn send_scroll(&mut self, delta_lines: i32, point: ViewportPoint, modifiers: Modifiers) -> bool;
+}
+
+impl SessionInput for TerminalSession {
+  fn paste(&mut self, text: &str) {
+    let sequence = encode_paste(text, self.mode());
+    self.input(&sequence);
+  }
+
+  fn send_mouse_press(
+    &mut self,
+    button: MouseButton,
+    point: ViewportPoint,
+    modifiers: Modifiers,
+  ) -> bool {
+    let sequence = encode_mouse_press(button, point.row, point.col, modifiers, self.mode());
+    send_sequence(self, sequence)
+  }
+
+  fn send_mouse_release(
+    &mut self,
+    button: MouseButton,
+    point: ViewportPoint,
+    modifiers: Modifiers,
+  ) -> bool {
+    let sequence = encode_mouse_release(button, point.row, point.col, modifiers, self.mode());
+    send_sequence(self, sequence)
+  }
+
+  fn send_mouse_move(
+    &mut self,
+    point: ViewportPoint,
+    pressed_button: Option<MouseButton>,
+    modifiers: Modifiers,
+  ) -> bool {
+    let sequence = encode_mouse_move(point.row, point.col, pressed_button, modifiers, self.mode());
+    send_sequence(self, sequence)
+  }
+
+  fn send_scroll(&mut self, delta_lines: i32, point: ViewportPoint, modifiers: Modifiers) -> bool {
+    let sequence = encode_scroll(delta_lines, point.row, point.col, modifiers, self.mode());
+    send_sequence(self, sequence)
+  }
+}
+
+fn send_sequence(session: &mut TerminalSession, sequence: Option<String>) -> bool {
+  let Some(sequence) = sequence else {
+    return false;
+  };
+  session.input(&sequence);
+  true
 }
 
 #[cfg(test)]
