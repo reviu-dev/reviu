@@ -21,6 +21,7 @@ use crate::{
   ScreenSnapshot, TerminalBounds, TerminalSelectionMode, TerminalSession, ViewportPoint,
   ViewportSelectionRange,
   colors::TerminalPalette,
+  input,
   links::{TerminalLink, TerminalLinkTarget, link_at},
   session::TerminalSearchMatch,
   terminal_element::TerminalElement,
@@ -185,6 +186,9 @@ pub struct TerminalView {
   scroll_remainder: Pixels,
   scroll_handle: TerminalScrollHandle,
   unseen_output_lines: usize,
+  /// Output arrived since `screen` was taken. The copy is rebuilt when the
+  /// view renders, so terminals off screen never pay for their output.
+  screen_stale: bool,
   marked_text: Option<String>,
   search_open: bool,
   search_input: Option<Entity<InputState>>,
@@ -220,6 +224,7 @@ impl TerminalView {
       scroll_remainder: px(0.0),
       scroll_handle: TerminalScrollHandle::new(),
       unseen_output_lines: 0,
+      screen_stale: false,
       marked_text: None,
       search_open: false,
       search_input: None,
@@ -437,20 +442,16 @@ impl TerminalView {
     }
 
     if hovered {
-      return self
-        .session
-        .as_ref()
-        .is_some_and(|session| session.can_report_mouse_move(pressed_button));
+      return self.session.is_some()
+        && input::can_report_mouse_move(self.screen.mode, pressed_button);
     }
 
     pressed_button.is_some()
       && self
         .last_reported_mouse_state
         .is_some_and(|(_, tracked_button)| tracked_button == pressed_button)
-      && self
-        .session
-        .as_ref()
-        .is_some_and(|session| session.can_report_mouse_move(pressed_button))
+      && self.session.is_some()
+      && input::can_report_mouse_move(self.screen.mode, pressed_button)
   }
 
   pub(crate) fn should_handle_mouse_up(&self, button: MouseButton, modifiers: Modifiers) -> bool {
@@ -467,12 +468,10 @@ impl TerminalView {
       .is_some_and(|(_, tracked_button)| tracked_button == Some(button))
   }
 
+  /// Reads the mode from the screen copy: this runs on every mouse move over
+  /// the window, and the live terminal is locked while output is parsed.
   pub(crate) fn local_mouse_selection_enabled(&self, modifiers: Modifiers) -> bool {
-    modifiers.shift
-      || self
-        .session
-        .as_ref()
-        .is_some_and(|session| !session.mouse_mode_enabled())
+    modifiers.shift || (self.session.is_some() && !input::mouse_mode_enabled(self.screen.mode))
   }
 
   pub(crate) fn handle_mouse_down(
@@ -645,6 +644,7 @@ impl TerminalView {
   }
 
   fn finish_scrollback_change(&mut self, cx: &mut Context<Self>) {
+    self.sync_screen(cx);
     self.reset_selection();
     self.hovered_hyperlink = None;
     self.pending_link_activation = None;
@@ -679,6 +679,7 @@ impl TerminalView {
     });
 
     self.refresh_snapshot();
+    self.screen_stale = false;
     self.subscribe_to_session_events(cx);
     if self.search_open && !self.search_query.is_empty() {
       self.refresh_search_matches(cx);
@@ -1080,26 +1081,34 @@ impl TerminalView {
     }
 
     if result.changed {
-      self.hovered_hyperlink = None;
-      self.pending_link_activation = None;
-      self.last_reported_mouse_state = None;
-      let previous_total_lines = self.screen.total_lines;
-      let previous_display_offset = self.screen.display_offset;
-      self.refresh_snapshot_preserving_selection();
-      self.unseen_output_lines = updated_unseen_output_lines(
-        self.unseen_output_lines,
-        previous_total_lines,
-        previous_display_offset,
-        self.screen.total_lines,
-        self.screen.display_offset,
-      );
-      if self.search_open && !self.search_query.is_empty() {
-        self.refresh_search_matches(cx);
-      }
+      self.screen_stale = true;
       cx.notify();
     }
     if result.wakeup {
       self.refresh_working_directory(cx);
+    }
+  }
+
+  fn sync_screen(&mut self, cx: &mut Context<Self>) {
+    if !self.screen_stale {
+      return;
+    }
+    self.screen_stale = false;
+    self.hovered_hyperlink = None;
+    self.pending_link_activation = None;
+    self.last_reported_mouse_state = None;
+    let previous_total_lines = self.screen.total_lines;
+    let previous_display_offset = self.screen.display_offset;
+    self.refresh_snapshot_preserving_selection();
+    self.unseen_output_lines = updated_unseen_output_lines(
+      self.unseen_output_lines,
+      previous_total_lines,
+      previous_display_offset,
+      self.screen.total_lines,
+      self.screen.display_offset,
+    );
+    if self.search_open && !self.search_query.is_empty() {
+      self.refresh_search_matches(cx);
     }
   }
 
@@ -1108,6 +1117,7 @@ impl TerminalView {
       return;
     }
 
+    self.sync_screen(cx);
     self.last_bounds = bounds;
     self.hovered_hyperlink = None;
     self.pending_link_activation = None;
@@ -1559,6 +1569,7 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    self.sync_screen(cx);
     let line_height = px(f32::from(self.last_bounds.cell_height.max(1)));
     self.scroll_handle.update(&self.screen, line_height);
     if let Some(display_offset) = self.scroll_handle.take_pending_display_offset() {
@@ -1820,7 +1831,7 @@ mod tests {
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
     ViewportPoint, ViewportSelectionRange,
   };
-  use alacritty_terminal::term::cell::Flags;
+  use alacritty_terminal::term::{TermMode, cell::Flags};
   use alacritty_terminal::vte::ansi::{Color, NamedColor};
   use gpui::{
     AppContext, ClipboardItem, Context, Focusable, InteractiveElement, KeyDownEvent, Keystroke,
@@ -2900,6 +2911,43 @@ mod tests {
 
       assert!(view.error.is_none(), "restart should clear error");
       assert!(view.session.is_some(), "restart should respawn session");
+    });
+  }
+
+  #[gpui::test]
+  fn output_waits_for_a_render_before_rebuilding_the_screen(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(None, cx));
+    let cx: &mut VisualTestContext = cx;
+    view.update(cx, |view, cx| {
+      view.session = Some(test_session());
+      view.process_session_events([TerminalEvent::Title("cargo build".to_string())], cx);
+      assert_eq!(
+        view.screen.title, None,
+        "a terminal that is not drawn must not copy its screen on output"
+      );
+    });
+
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+      assert_eq!(view.screen.title.as_deref(), Some("cargo build"));
+    });
+  }
+
+  #[gpui::test]
+  fn mouse_reporting_follows_the_screen_copy(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let view = cx.new(|cx| TerminalView::new(None, cx));
+    view.update(cx, |view, _| {
+      view.session = Some(test_session());
+      view.screen.mode = TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG;
+      assert!(!view.local_mouse_selection_enabled(Modifiers::default()));
+      assert!(view.should_handle_mouse_move(true, Some(MouseButton::Left), Modifiers::default()));
+
+      view.screen.mode = TermMode::empty();
+      assert!(view.local_mouse_selection_enabled(Modifiers::default()));
     });
   }
 }

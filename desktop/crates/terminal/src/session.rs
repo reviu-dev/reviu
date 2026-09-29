@@ -557,14 +557,6 @@ impl TerminalSession {
     *self.term.lock().mode()
   }
 
-  pub fn mouse_mode_enabled(&self) -> bool {
-    input::mouse_mode_enabled(self.mode())
-  }
-
-  pub fn can_report_mouse_move(&self, pressed_button: Option<MouseButton>) -> bool {
-    input::can_report_mouse_move(self.mode(), pressed_button)
-  }
-
   pub(crate) fn event_receiver(&self) -> Receiver<Event> {
     self.event_rx.clone()
   }

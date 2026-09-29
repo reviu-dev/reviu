@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 While an agent waits for a long command such as a dev server, it can now start and read other commands, keep streaming its reply, and stop the long command itself. Waiting on a permission prompt no longer freezes the rest of the session either.
 
+### Smoother Busy Terminals
+
+Terminals in background tabs no longer slow Reviu down while their commands print a lot of output, and moving the mouse stays smooth while a visible terminal is flooded with output.
+
 ## 1.4.0
 
 ### Terminals In Split Panes

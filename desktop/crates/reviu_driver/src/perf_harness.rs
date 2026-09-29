@@ -31,7 +31,11 @@ const AVAILABLE_SCENARIOS: &[&str] = &[
   "visible_chat_turn_settle",
   "parallel_chat_stream",
   "editor_scroll_large_diff",
+  "parallel_terminal_output",
 ];
+const PARALLEL_TERMINAL_COUNT: usize = 3;
+const PARALLEL_TERMINAL_COMMAND: &str =
+  "yes 'compiling crate 0123456789 abcdefghijklmnopqrstuvwxyz'";
 const LONG_STREAM_MS: u64 = 160 * 45;
 const EDITOR_SCROLL_FILE: &str = "src/large-diff.rs";
 
@@ -354,7 +358,7 @@ fn scenario_requested(scenarios: &[String], scenario: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-  "usage: cargo run -p reviu_driver --bin reviu-perf -- [--backend visual|test] [--files 300] [--sample-seconds 5] [--parallel-sessions 3] [--scenario name[,name]] [--output target/perf/reviu-driver] [--skip-sample]\navailable scenarios: idle, chat_stream, chat_stream_changes, visible_chat_stream_long, visible_chat_stream_long_changes, visible_chat_turn_settle, parallel_chat_stream, editor_scroll_large_diff"
+  "usage: cargo run -p reviu_driver --bin reviu-perf -- [--backend visual|test] [--files 300] [--sample-seconds 5] [--parallel-sessions 3] [--scenario name[,name]] [--output target/perf/reviu-driver] [--skip-sample]\navailable scenarios: idle, chat_stream, chat_stream_changes, visible_chat_stream_long, visible_chat_stream_long_changes, visible_chat_turn_settle, parallel_chat_stream, editor_scroll_large_diff, parallel_terminal_output"
 }
 
 pub(crate) fn run(args: PerfArgs) -> Result<()> {
@@ -507,6 +511,29 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
             "cmd": "submit_prompt",
             "text": format!("perf-stream long markdown tools parallel {index}")
           }))?;
+        }
+        Ok(())
+      },
+    )?);
+  }
+  if scenario_requested(&args.scenarios, "parallel_terminal_output") {
+    scenarios.push(run_isolated_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
+      &artifacts,
+      "parallel_terminal_output",
+      true,
+      |driver, _repo| {
+        driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
+        // Tabs share one pane, so only the last terminal is on screen.
+        for _ in 0..PARALLEL_TERMINAL_COUNT {
+          driver.command(serde_json::json!({ "cmd": "open_terminal" }))?;
+          driver.command(serde_json::json!({ "cmd": "wait", "ms": 1_500 }))?;
+          driver
+            .command(serde_json::json!({ "cmd": "type", "text": PARALLEL_TERMINAL_COMMAND }))?;
+          driver.command(serde_json::json!({ "cmd": "key", "keystrokes": "enter" }))?;
         }
         Ok(())
       },
