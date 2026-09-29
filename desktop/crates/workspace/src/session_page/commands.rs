@@ -2158,12 +2158,21 @@ mod tests {
   async fn a_failed_command_is_reported_under_its_own_key(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-telemetry");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    // A missing remote is the user's setup, reported as expected: a remote
+    // that does not exist makes the push fail for real.
+    let missing_remote = repo.path.join("missing-remote.git");
+    let status = std::process::Command::new("git")
+      .current_dir(&repo.path)
+      .args(["remote", "add", "origin"])
+      .arg(&missing_remote)
+      .status()
+      .expect("run git remote add");
+    assert!(status.success(), "add the unreachable remote");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
     let sink = crate::git_telemetry::test_support::RecordingSink::install();
 
-    // No remote: the push cannot succeed.
     page.update_in(cx, |page, window, cx| {
       page
         .run_repo_command(RepoCommand::Push, window, cx)
