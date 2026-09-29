@@ -93,6 +93,14 @@ fn collect_pending_session_events(
   events
 }
 
+fn is_test_scheduler(cx: &App) -> bool {
+  cx.background_executor()
+    .scheduler_executor()
+    .scheduler()
+    .as_test()
+    .is_some()
+}
+
 fn should_defer_to_ime(event: &KeyDownEvent) -> bool {
   event.prefer_character_input
     && !event.keystroke.modifiers.control
@@ -189,6 +197,9 @@ pub struct TerminalView {
   /// Output arrived since `screen` was taken. The copy is rebuilt when the
   /// view renders, so terminals off screen never pay for their output.
   screen_stale: bool,
+  /// Input typed or submitted while the shell starts, sent once it is ready.
+  /// `Some` exactly while a session is starting.
+  pending_input: Option<String>,
   marked_text: Option<String>,
   search_open: bool,
   search_input: Option<Entity<InputState>>,
@@ -199,6 +210,7 @@ pub struct TerminalView {
   visible_search_matches: Vec<ViewportSelectionRange>,
   visible_active_search_match: Option<ViewportSelectionRange>,
   search_generation: u64,
+  _spawn_task: Task<()>,
   _event_task: Task<()>,
   _working_directory_task: Task<()>,
   _search_task: Task<()>,
@@ -225,6 +237,7 @@ impl TerminalView {
       scroll_handle: TerminalScrollHandle::new(),
       unseen_output_lines: 0,
       screen_stale: false,
+      pending_input: None,
       marked_text: None,
       search_open: false,
       search_input: None,
@@ -235,6 +248,7 @@ impl TerminalView {
       visible_search_matches: Vec::new(),
       visible_active_search_match: None,
       search_generation: 0,
+      _spawn_task: Task::ready(()),
       _event_task: Task::ready(()),
       _working_directory_task: Task::ready(()),
       _search_task: Task::ready(()),
@@ -668,22 +682,83 @@ impl TerminalView {
     self.search_generation = self.search_generation.wrapping_add(1);
     self._working_directory_task = Task::ready(());
     self._search_task = Task::ready(());
-    self.session = self.working_directory.clone().and_then(|cwd| {
-      match TerminalSession::spawn(cwd, self.last_bounds) {
-        Ok(session) => Some(session),
-        Err(error) => {
-          self.error = Some(error.to_string());
-          None
-        }
-      }
-    });
-
+    self.session = None;
+    self.pending_input = None;
+    self._spawn_task = Task::ready(());
     self.refresh_snapshot();
     self.screen_stale = false;
     self.subscribe_to_session_events(cx);
-    if self.search_open && !self.search_query.is_empty() {
-      self.refresh_search_matches(cx);
+
+    let Some(working_directory) = self.working_directory.clone() else {
+      return;
+    };
+    let receiver = match TerminalSession::spawn_on_thread(working_directory, self.last_bounds) {
+      Ok(receiver) => receiver,
+      Err(error) => {
+        self.error = Some(error.to_string());
+        return;
+      }
+    };
+    self.pending_input = Some(String::new());
+    let is_test = is_test_scheduler(cx);
+    self._spawn_task = cx.spawn(async move |this, cx| {
+      let result = if is_test {
+        loop {
+          cx.background_executor()
+            .timer(TEST_SESSION_POLL_INTERVAL)
+            .await;
+          match receiver.try_recv() {
+            Ok(result) => break result,
+            Err(async_channel::TryRecvError::Empty) => continue,
+            Err(async_channel::TryRecvError::Closed) => return,
+          }
+        }
+      } else {
+        let Ok(result) = receiver.recv().await else {
+          return;
+        };
+        result
+      };
+      let _ = this.update(cx, |this, cx| this.finish_session_start(result, cx));
+    });
+  }
+
+  fn finish_session_start(
+    &mut self,
+    result: anyhow::Result<TerminalSession>,
+    cx: &mut Context<Self>,
+  ) {
+    let pending_input = self.pending_input.take().unwrap_or_default();
+    match result {
+      Ok(mut session) => {
+        session.resize(self.last_bounds);
+        if !pending_input.is_empty() {
+          session.input(&pending_input);
+        }
+        self.session = Some(session);
+        self.refresh_snapshot();
+        self.subscribe_to_session_events(cx);
+        if self.search_open && !self.search_query.is_empty() {
+          self.refresh_search_matches(cx);
+        }
+      }
+      Err(error) => self.error = Some(error.to_string()),
     }
+    cx.notify();
+  }
+
+  /// Sends text the shell reads as typed. While the shell starts it waits in
+  /// line, so a command submitted right after opening the terminal still runs.
+  fn send_input(&mut self, text: &str, cx: &mut Context<Self>) {
+    if let Some(session) = self.session.as_mut() {
+      session.input(text);
+    } else if let Some(pending_input) = self.pending_input.as_mut() {
+      pending_input.push_str(text);
+    } else {
+      return;
+    }
+    self.screen_stale = true;
+    cx.notify();
   }
 
   fn subscribe_to_session_events(&mut self, cx: &mut Context<Self>) {
@@ -692,13 +767,7 @@ impl TerminalView {
       return;
     };
 
-    if cx
-      .background_executor()
-      .scheduler_executor()
-      .scheduler()
-      .as_test()
-      .is_some()
-    {
+    if is_test_scheduler(cx) {
       self._event_task = cx.spawn(async move |this, cx| {
         loop {
           cx.background_executor()
@@ -1169,11 +1238,7 @@ impl TerminalView {
     }
 
     self.reset_selection();
-    if let Some(session) = self.session.as_mut() {
-      session.input(text);
-      self.refresh_snapshot();
-      cx.notify();
-    }
+    self.send_input(text, cx);
   }
 
   fn open_search_action(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
@@ -1312,25 +1377,20 @@ impl TerminalView {
           self.paste_paths(paths.paths(), window, cx);
         } else if let Some(text) = item.text() {
           self.reset_selection();
-          if let Some(session) = self.session.as_mut() {
-            session.paste(&text);
-            self.refresh_snapshot();
-            cx.notify();
-          }
+          self.paste_text(&text, cx);
         }
       }
       cx.stop_propagation();
       return;
     }
 
-    let Some(session) = self.session.as_mut() else {
-      return;
-    };
-
-    if session.send_key_down(event) {
+    let mode = self
+      .session
+      .as_ref()
+      .map_or(self.screen.mode, TerminalSession::mode);
+    if let Some(text) = input::encode_key_down(event, mode) {
       self.reset_selection();
-      self.refresh_snapshot();
-      cx.notify();
+      self.send_input(&text, cx);
       cx.stop_propagation();
     }
   }
@@ -1368,14 +1428,16 @@ impl TerminalView {
 
     self.focus_terminal(window, cx);
     self.reset_selection();
-    let Some(session) = self.session.as_mut() else {
-      return false;
-    };
-
-    session.paste(&text);
-    self.refresh_snapshot();
-    cx.notify();
+    self.paste_text(&text, cx);
     true
+  }
+
+  fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+    let mode = self
+      .session
+      .as_ref()
+      .map_or(self.screen.mode, TerminalSession::mode);
+    self.send_input(&input::encode_paste(text, mode), cx);
   }
 
   fn matches_copy_shortcut(&self, event: &KeyDownEvent) -> bool {
@@ -1881,6 +1943,29 @@ mod tests {
   fn test_session() -> TerminalSession {
     TerminalSession::spawn(std::env::temp_dir(), TerminalBounds::default())
       .expect("test terminal session should spawn")
+  }
+
+  /// The shell starts on its own thread, which the test scheduler cannot see:
+  /// give it real time, then let the view's polling task pick the result up.
+  fn run_until(
+    view: &gpui::Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    condition: impl Fn(&TerminalView) -> bool,
+  ) {
+    for _ in 0..1_000 {
+      if view.read_with(cx, |view, _| condition(view)) {
+        return;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(5));
+      cx.executor()
+        .advance_clock(super::TEST_SESSION_POLL_INTERVAL);
+      cx.run_until_parked();
+    }
+    panic!("the terminal never reached the expected state");
+  }
+
+  fn run_until_started(view: &gpui::Entity<TerminalView>, cx: &mut TestAppContext) {
+    run_until(view, cx, |view| view.pending_input.is_none());
   }
 
   fn screen_with_hyperlink(line: &str, hyperlink_range: std::ops::Range<usize>) -> ScreenSnapshot {
@@ -2882,6 +2967,7 @@ mod tests {
 
     let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(Some(missing.clone()), cx));
     let cx: &mut VisualTestContext = cx;
+    run_until_started(&view, cx);
 
     let banner_bounds = cx.debug_bounds(TERMINAL_BANNER_DEBUG_SELECTOR);
     assert!(
@@ -2903,6 +2989,7 @@ mod tests {
     init_gpui_test(cx);
 
     let view = cx.new(|cx| TerminalView::new(Some(std::env::temp_dir()), cx));
+    run_until_started(&view, cx);
 
     view.update(cx, |view, cx| {
       assert!(view.session.is_some(), "initial spawn should succeed");
@@ -2910,7 +2997,34 @@ mod tests {
       view.restart_session(cx);
 
       assert!(view.error.is_none(), "restart should clear error");
-      assert!(view.session.is_some(), "restart should respawn session");
+      assert!(
+        view.pending_input.is_some(),
+        "restart should start a new shell"
+      );
+    });
+    run_until_started(&view, cx);
+    assert!(view.read_with(cx, |view, _| view.session.is_some()));
+  }
+
+  #[gpui::test]
+  fn a_command_submitted_while_the_shell_starts_runs_once_it_is_ready(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let view = cx.new(|cx| TerminalView::new(Some(std::env::temp_dir()), cx));
+    view.update(cx, |view, cx| {
+      assert!(
+        view.session.is_none(),
+        "the shell starts off the main thread"
+      );
+      view.submit_command("echo queued-$((40 + 2))", cx);
+    });
+
+    run_until(&view, cx, |view| {
+      view.session.as_ref().is_some_and(|session| {
+        let screen = session.snapshot();
+        let text: String = screen.cells.iter().map(|cell| cell.c).collect();
+        text.contains("queued-42")
+      })
     });
   }
 

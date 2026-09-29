@@ -12,6 +12,10 @@ While an agent waits for a long command such as a dev server, it can now start a
 
 Terminals in background tabs no longer slow Reviu down while their commands print a lot of output, and moving the mouse stays smooth while a visible terminal is flooded with output.
 
+### Terminal Startup And Locale
+
+Opening or restoring terminals no longer blocks Reviu while the shell starts, and anything typed during that moment still reaches the shell. When Reviu is opened from the Finder or the Dock, terminals now get a UTF-8 locale, so accents and non-ASCII paths display correctly.
+
 ## 1.4.0
 
 ### Terminals In Split Panes

@@ -1,4 +1,5 @@
 use std::{
+  ffi::OsString,
   path::{Path, PathBuf},
   sync::{
     Arc,
@@ -496,8 +497,12 @@ impl TerminalSession {
     let listener = TerminalListener::new(event_tx, window_size);
     let term = Arc::new(FairMutex::new(Term::new(config, &bounds, listener.clone())));
     let window_id = NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
-    let pty = tty::new(&tty_options(&working_directory), window_size, window_id)
-      .with_context(|| format!("Failed to create PTY in {}", working_directory.display()))?;
+    let pty = tty::new(
+      &tty_options(&working_directory, std::env::var_os("LANG")),
+      window_size,
+      window_id,
+    )
+    .with_context(|| format!("Failed to create PTY in {}", working_directory.display()))?;
     let working_directory = Arc::new(WorkingDirectoryTracker::new(
       shell_process_id(&pty),
       working_directory,
@@ -519,6 +524,27 @@ impl TerminalSession {
       title: None,
       exit_status: None,
     })
+  }
+
+  /// Starts the shell off the calling thread. Call it from the main thread:
+  /// the shell inherits the signal mask of the thread that forks it, and the
+  /// executor's pool threads block signals, which would leave Ctrl-C dead.
+  pub fn spawn_on_thread(
+    working_directory: PathBuf,
+    bounds: TerminalBounds,
+  ) -> Result<Receiver<Result<Self>>> {
+    let (sender, receiver) = async_channel::bounded(1);
+    std::thread::Builder::new()
+      .name("terminal-spawn".to_string())
+      .spawn(move || {
+        // A closed channel means the view went away before the shell was
+        // ready; dropping the session shuts the shell down.
+        sender
+          .send_blocking(Self::spawn(working_directory, bounds))
+          .ok();
+      })
+      .context("Failed to start the terminal")?;
+    Ok(receiver)
   }
 
   pub fn working_directory(&self) -> PathBuf {
@@ -634,15 +660,6 @@ impl TerminalSession {
     }
 
     result
-  }
-
-  pub fn send_key_down(&mut self, event: &gpui::KeyDownEvent) -> bool {
-    let Some(text) = input::encode_key_down(event, self.mode()) else {
-      return false;
-    };
-
-    self.send_text(text);
-    true
   }
 
   pub fn paste(&mut self, text: &str) {
@@ -821,11 +838,21 @@ fn search_match_to_viewport<T>(
   })
 }
 
-fn tty_options(working_directory: &Path) -> tty::Options {
+fn tty_options(working_directory: &Path, inherited_lang: Option<OsString>) -> tty::Options {
   let mut options = tty::Options {
     working_directory: Some(working_directory.to_path_buf()),
     ..tty::Options::default()
   };
+  // An app opened from the Finder or the Dock gets no locale, and the shell
+  // would fall back to ASCII: accents and non-ASCII paths come out garbled.
+  if inherited_lang.is_none() {
+    options
+      .env
+      .insert("LANG".to_string(), "en_US.UTF-8".to_string());
+  }
+  // Launched from another shell, Reviu inherits its level; the shell adds one
+  // on start, so this puts it back at 1 like a standalone terminal.
+  options.env.insert("SHLVL".to_string(), "0".to_string());
   options
     .env
     .insert("TERM".to_string(), "xterm-256color".to_string());
@@ -1336,6 +1363,61 @@ mod tests {
         start: ViewportPoint { row: 0, col: 0 },
         end: ViewportPoint { row: 0, col: 15 },
       })
+    );
+  }
+
+  #[test]
+  fn the_shell_gets_a_utf8_locale_only_when_none_is_inherited() {
+    let directory = std::env::temp_dir();
+
+    let options = super::tty_options(&directory, None);
+    assert_eq!(
+      options.env.get("LANG").map(String::as_str),
+      Some("en_US.UTF-8")
+    );
+
+    let options = super::tty_options(&directory, Some("fr_FR.UTF-8".into()));
+    assert_eq!(
+      options.env.get("LANG"),
+      None,
+      "the user's locale is inherited untouched"
+    );
+    assert_eq!(options.env.get("SHLVL").map(String::as_str), Some("0"));
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn ctrl_c_interrupts_a_command_in_a_shell_started_off_thread() {
+    let receiver =
+      TerminalSession::spawn_on_thread(std::env::temp_dir(), TerminalBounds::default())
+        .expect("the spawn thread starts");
+    let mut session = receiver
+      .recv_blocking()
+      .expect("the spawn thread answers")
+      .expect("the shell starts");
+    let events = session.event_receiver();
+    let screen_text = |session: &TerminalSession| -> String {
+      session.snapshot().cells.iter().map(|cell| cell.c).collect()
+    };
+
+    session.input("sleep 30\r");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    session.input("\u{3}");
+    session.input("echo interrupted-$((40 + 2))\r");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+      while let Ok(event) = events.try_recv() {
+        session.process_events([event]);
+      }
+      if screen_text(&session).contains("interrupted-42") {
+        return;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!(
+      "Ctrl-C did not interrupt sleep, screen:\n{}",
+      screen_text(&session)
     );
   }
 }
