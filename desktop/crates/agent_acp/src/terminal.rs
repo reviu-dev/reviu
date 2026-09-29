@@ -261,6 +261,23 @@ pub(crate) fn apply_color_env(cmd: &mut async_process::Command) {
   cmd.envs(git_color_env);
 }
 
+/// A pager waits for keys the agent can never send: `git log` or `gh` would
+/// hang its turn. Git reads its own variable before `PAGER` and `core.pager`.
+fn disable_pagers(cmd: &mut async_process::Command) {
+  cmd.env("PAGER", "cat");
+  cmd.env("GIT_PAGER", "cat");
+}
+
+/// What the agent reads back: the colors forced for the chat cards are
+/// noise to a model, and progress lines keep only what a terminal would show.
+pub(crate) fn agent_visible_output(output: &str) -> String {
+  let mut text = ansi_text::strip_ansi_escapes(output);
+  if output.ends_with('\n') && !text.ends_with('\n') {
+    text.push('\n');
+  }
+  text
+}
+
 /// Spawn the requested command and stream its output into the store. The
 /// readers and the exit waiter run as detached tasks; `kill` interrupts.
 pub(crate) fn spawn_terminal(
@@ -275,6 +292,7 @@ pub(crate) fn spawn_terminal(
   let mut cmd = async_process::Command::from(gpui_util::new_std_command(&command));
   cmd.args(&args);
   apply_color_env(&mut cmd);
+  disable_pagers(&mut cmd);
   cmd.envs(env);
   cmd.current_dir(&cwd);
   cmd.stdin(std::process::Stdio::null());
@@ -449,6 +467,39 @@ mod tests {
       snap.output,
       "always:1:always:1:1:xterm-256color:truecolor:1:unset"
     );
+  }
+
+  #[test]
+  fn the_agent_reads_output_without_colors_or_overwritten_progress() {
+    assert_eq!(
+      super::agent_visible_output(
+        "\u{1b}[1m\u{1b}[31merror\u{1b}[0m: mismatched types\nprogress 10%\rprogress 100%\n"
+      ),
+      "error: mismatched types\nprogress 100%\n"
+    );
+  }
+
+  #[test]
+  fn spawned_commands_never_open_a_pager() {
+    let (tx, _rx) = async_channel::unbounded();
+    let store = Arc::new(TerminalStore::new(tx));
+    spawn_terminal(
+      &store,
+      "t".to_string(),
+      "sh".to_string(),
+      vec!["-c".to_string(), "printf \"$PAGER:$GIT_PAGER\"".to_string()],
+      Vec::new(),
+      std::env::current_dir().expect("cwd"),
+      None,
+    )
+    .expect("spawns");
+    for _ in 0..250 {
+      if store.snapshot("t").is_some_and(|s| s.finished) {
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(store.snapshot("t").expect("entry").output, "cat:cat");
   }
 
   #[cfg(unix)]

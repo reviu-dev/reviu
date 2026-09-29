@@ -20,6 +20,10 @@ Opening or restoring terminals no longer blocks Reviu while the shell starts, an
 
 Terminal tabs now show the command running in them, such as `cargo test` or `npm run dev`, and fall back to the folder once the shell is back at its prompt. Closing a terminal that is still running a command asks first, so a dev server or a long build is never stopped by accident.
 
+### Cleaner Command Output For Agents
+
+Agents now read their commands' output as plain text, without the color codes Reviu adds for the chat, and with progress lines already settled, so they spend fewer tokens and read errors more reliably.
+
 ## 1.4.0
 
 ### Terminals In Split Panes

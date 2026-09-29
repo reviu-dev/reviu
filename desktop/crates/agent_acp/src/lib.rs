@@ -1145,7 +1145,7 @@ async fn run_driver(
         match term_output.snapshot(request.terminal_id.0.as_ref()) {
           Some(snap) => {
             let mut response = agent_client_protocol::schema::TerminalOutputResponse::new(
-              snap.output,
+              crate::terminal::agent_visible_output(&snap.output),
               snap.truncated,
             );
             if snap.finished {
