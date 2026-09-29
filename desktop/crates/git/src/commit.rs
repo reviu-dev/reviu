@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -7,6 +8,23 @@ use git2::{BranchType, Oid, Repository, RepositoryState, ResetType, Signature};
 pub struct HeadCommitStatus {
   pub has_head_commit: bool,
   pub can_undo_last_commit: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NoPushTargetError;
+
+impl fmt::Display for NoPushTargetError {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str("no upstream configured and no publish remote available")
+  }
+}
+
+impl std::error::Error for NoPushTargetError {}
+
+pub fn is_no_push_target_error(error: &anyhow::Error) -> bool {
+  error
+    .chain()
+    .any(|cause| cause.downcast_ref::<NoPushTargetError>().is_some())
 }
 
 fn repo_signature(repo: &Repository) -> Result<Signature<'_>> {
@@ -175,7 +193,7 @@ pub fn push(repo_root: &Path, force: bool) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let Some((info, should_set_upstream)) = push_target_info(&repo)? else {
-    bail!("no upstream configured and no publish remote available");
+    return Err(NoPushTargetError.into());
   };
   let local_ref = format!("refs/heads/{}", info.local_branch);
   let remote_ref = format!("refs/heads/{}", info.remote_branch);
@@ -486,11 +504,10 @@ mod tests {
     let repo = TempRepo::init("commit-push-upstream");
     commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
 
-    let err = push(&repo.path, false).err();
-    assert!(err.is_some());
+    let error = push(&repo.path, false).expect_err("push error");
+    assert!(is_no_push_target_error(&error));
     assert!(
-      err
-        .expect("push error")
+      error
         .to_string()
         .contains("no upstream configured and no publish remote available")
     );

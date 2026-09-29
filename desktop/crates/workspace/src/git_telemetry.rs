@@ -100,6 +100,9 @@ pub(crate) fn outcome_report(outcome: &anyhow::Result<RepoCommandOutcome>) -> Ou
     }
     Ok(RepoCommandOutcome::Conflicted { .. }) => OutcomeReport::Expected { reason: "conflict" },
     Err(error) if git::is_authentication_error(error) => OutcomeReport::Expected { reason: "auth" },
+    Err(error) if git::is_no_push_target_error(error) => OutcomeReport::Expected {
+      reason: "no_push_target",
+    },
     Err(error) => OutcomeReport::Unexpected {
       error: error.to_string(),
     },
@@ -409,10 +412,19 @@ mod tests {
       OutcomeReport::Expected { reason: "auth" },
       "missing credentials are the user's setup, not a bug to capture"
     );
+    assert_eq!(
+      outcome_report(&Err(
+        anyhow::Error::new(git::NoPushTargetError).context("push")
+      )),
+      OutcomeReport::Expected {
+        reason: "no_push_target"
+      },
+      "a branch without anywhere to push is setup, not a bug to capture"
+    );
   }
 
   #[test]
-  fn a_conflict_is_reported_as_expected_and_an_error_is_not() {
+  fn setup_failures_are_reported_as_expected_and_errors_are_not() {
     let sink = RecordingSink::install();
     let telemetry = GitTelemetry {
       repo_root: Some(Path::new("/tmp/widget")),
@@ -440,6 +452,19 @@ mod tests {
     assert_eq!(
       sink.last_data().and_then(|data| data.get("file").cloned()),
       None
+    );
+
+    telemetry.report_outcome(
+      "git.push",
+      outcome_report(&Err(anyhow::Error::new(git::NoPushTargetError))),
+    );
+    assert_eq!(
+      sink.reports(),
+      vec![Report::Expected {
+        operation: "git.push".to_string(),
+        reason: "no_push_target".to_string(),
+      }],
+      "a branch without anywhere to push never reaches Sentry as a crash"
     );
 
     telemetry.report_outcome(
