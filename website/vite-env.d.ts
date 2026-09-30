@@ -7,6 +7,7 @@ interface ViteTypeOptions {
 
 interface ImportMetaEnv {
   readonly PUBLIC_BACKEND_URL: string
+  readonly GITHUB_TOKEN?: string
 }
 
 interface ImportMeta {

@@ -16,6 +16,7 @@ export default defineConfig({
         validator: 'standard',
         schema: {
           PUBLIC_BACKEND_URL: z.string(),
+          GITHUB_TOKEN: z.string().optional(),
         },
       }),
     ],
