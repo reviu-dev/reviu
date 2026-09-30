@@ -300,6 +300,11 @@ impl HistoryList {
     self.refresh(cx);
   }
 
+  #[cfg(test)]
+  pub(crate) fn commits(&self) -> &[HistoryCommitNode] {
+    &self.commits
+  }
+
   pub(crate) fn is_empty(&self) -> bool {
     self.commits.is_empty()
   }

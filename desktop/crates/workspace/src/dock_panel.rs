@@ -2324,6 +2324,13 @@ impl DockPanel {
     if self.files_loaded {
       self.load_project_files(cx);
     }
+    // A closed history tab catches up when it is opened again.
+    if self.active_tab == DockPanelTab::History {
+      self.history_list.update(cx, |list, cx| match refresh {
+        PullRequestRefresh::Now => list.refresh(cx),
+        PullRequestRefresh::IfStale => list.refresh_if_repository_moved(cx),
+      });
+    }
   }
 
   /// The working tree alone: what a poll can afford to re-read, with no request
@@ -3754,13 +3761,16 @@ impl DockPanel {
     }
   }
 
-  /// The history is only worth loading once its tab is opened.
+  /// The history is only worth loading once its tab is opened, and it may have
+  /// missed commits made while another tab was showing.
   fn refresh_history(&mut self, cx: &mut Context<Self>) {
     let repo_root = self.repo_root.clone();
     self.history_list.update(cx, |list, cx| {
       list.set_repo_root(repo_root, cx);
       if list.is_empty() {
         list.refresh(cx);
+      } else {
+        list.refresh_if_repository_moved(cx);
       }
     });
   }
@@ -6146,6 +6156,101 @@ mod tests {
       assert!(
         panel.history_list.read(cx)._poll_task.is_some(),
         "an open history tab follows the repository"
+      );
+    });
+  }
+
+  async fn await_history(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
+    let history = panel.read_with(cx, |panel, _| panel.history_list.clone());
+    loop {
+      let (poll, load) = history.update(cx, |list, _| {
+        (list._poll_task.take(), list._history_task.take())
+      });
+      if poll.is_none() && load.is_none() {
+        return;
+      }
+      if let Some(poll) = poll {
+        poll.await;
+      }
+      if let Some(load) = load {
+        load.await;
+      }
+      cx.run_until_parked();
+    }
+  }
+
+  fn history_summaries(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
+    panel.read_with(cx, |panel, cx| {
+      panel
+        .history_list
+        .read(cx)
+        .commits()
+        .iter()
+        .map(|commit| commit.summary.clone())
+        .collect()
+    })
+  }
+
+  #[gpui::test]
+  async fn the_history_follows_a_refresh_and_catches_up_when_reopened(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-refresh-history");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::History, window, cx)
+    });
+    await_history(&panel, cx).await;
+    assert_eq!(history_summaries(&panel, cx), ["first"]);
+
+    // A commit lands the way Reviu's own commands end: with a panel refresh.
+    commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "second");
+    panel.update(cx, |panel, cx| panel.refresh(cx));
+    await_refresh(&panel, cx).await;
+    await_history(&panel, cx).await;
+    assert_eq!(
+      history_summaries(&panel, cx),
+      ["second", "first"],
+      "the refresh does not wait for the next poll"
+    );
+
+    // Committed while another tab was showing: reopening the history catches up.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Changes, window, cx)
+    });
+    commit_text_file(&repo.path, Path::new("a.txt"), "v3\n", "third");
+    panel.update(cx, |panel, cx| panel.refresh(cx));
+    await_refresh(&panel, cx).await;
+    await_history(&panel, cx).await;
+    assert_eq!(history_summaries(&panel, cx), ["second", "first"]);
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::History, window, cx)
+    });
+    await_history(&panel, cx).await;
+    assert_eq!(history_summaries(&panel, cx), ["third", "second", "first"]);
+  }
+
+  #[gpui::test]
+  async fn the_refresh_button_reloads_the_open_history(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-refresh-button-history");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::History, window, cx)
+    });
+    await_history(&panel, cx).await;
+
+    panel.update(cx, |panel, cx| panel.refresh_requested(cx));
+    panel.read_with(cx, |panel, cx| {
+      assert!(
+        panel.history_list.read(cx)._history_task.is_some(),
+        "being asked is reason enough to reload, even when nothing moved"
       );
     });
   }
