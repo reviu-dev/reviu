@@ -371,7 +371,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let shell_cmd = if prompt_contains("sleep") {
               "echo started; sleep 30".to_string()
             } else {
-              "printf 'line one\\nline two\\n'; exit 3".to_string()
+              // Keep the PTY alive long enough for Linux to deliver the output event before exit.
+              "printf 'line one\\nline two\\n'; sleep 0.2; exit 3".to_string()
             };
             let cx = cx.clone();
             let session_id = session_id.clone();
