@@ -17,7 +17,7 @@ interface GithubRelease {
   draft?: boolean;
 }
 
-const githubReleasesUrl = "https://api.github.com/repos/reviu-dev/reviu/releases?per_page=50";
+const githubReleasesUrl = "https://api.github.com/repos/reviu-dev/reviu/releases?per_page=100";
 const githubToken = import.meta.env.GITHUB_TOKEN?.trim();
 const githubHeaders: Record<string, string> = {
   Accept: "application/vnd.github+json",
@@ -51,6 +51,21 @@ const entries: ChangelogEntry[] = (releases as GithubRelease[])
     (left, right) =>
       new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime(),
   );
+
+const entriesByMajor = entries.reduce((groups, entry) => {
+  const major = Number.parseInt(entry.version.split(".")[0] ?? "", 10);
+  const key = Number.isNaN(major) ? -1 : major;
+  groups.set(key, [...(groups.get(key) ?? []), entry]);
+  return groups;
+}, new Map<number, ChangelogEntry[]>());
+
+const entryGroups = [...entriesByMajor.entries()]
+  .sort(([left], [right]) => right - left)
+  .map(([major, entries]) => ({
+    id: `changelog-${major >= 0 ? major : "other"}`,
+    label: major >= 0 ? `${major}.x` : "Other",
+    entries,
+  }));
 
 function formatDate(iso: string): string {
   if (!iso) return "";
@@ -104,35 +119,83 @@ function renderMarkdown(md: string): string {
       }
 
       {
-        entries.length > 0 && (
-          <div class="mt-12 space-y-0">
-            {entries.map((entry) => (
-              <article
-                class="group relative border-l-2 border-border pb-12 pl-8 last:pb-0"
-              >
-                <div class="absolute top-0 -left-[9px] flex size-4 items-center justify-center rounded-full border-2 border-primary bg-background" />
-
-                <div class="flex flex-wrap items-center gap-3">
-                  <span class="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-sm font-semibold text-primary ring-1 ring-primary/20 ring-inset">
-                    <TagIcon class="size-3.5" aria-hidden="true" />
-                    {entry.version}
+        entryGroups.length > 0 && (
+          <div class="mt-12" data-changelog-tabs>
+            <div
+              class="flex flex-wrap gap-2 border-b border-border pb-4"
+              role="tablist"
+              aria-label="Changelog major versions"
+            >
+              {entryGroups.map((group, groupIndex) => (
+                <button
+                  type="button"
+                  class="changelog-major-tab rounded-full border border-border px-4 py-2 text-sm font-semibold text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+                  id={`${group.id}-tab`}
+                  role="tab"
+                  aria-controls={`${group.id}-panel`}
+                  aria-selected={groupIndex === 0 ? "true" : "false"}
+                  data-changelog-tab={group.id}
+                >
+                  {group.label}
+                  <span class="ml-1 font-normal text-muted-foreground">
+                    {group.entries.length}
                   </span>
-                  {entry.publishedAt && (
-                    <time
-                      datetime={entry.publishedAt}
-                      class="text-sm text-muted-foreground"
-                    >
-                      {formatDate(entry.publishedAt)}
-                    </time>
-                  )}
-                </div>
+                </button>
+              ))}
+            </div>
 
-                <div
-                  class="changelog-body mt-4 text-sm/7 text-muted-foreground"
-                  set:html={renderMarkdown(entry.body)}
-                />
-              </article>
-            ))}
+            <div class="mt-8">
+              {entryGroups.map((group, groupIndex) => (
+                <section
+                  id={`${group.id}-panel`}
+                  role="tabpanel"
+                  aria-labelledby={`${group.id}-tab`}
+                  data-changelog-panel={group.id}
+                  hidden={groupIndex !== 0}
+                >
+                  <div class="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <h2 class="text-2xl font-semibold tracking-tight text-foreground">
+                        Reviu {group.label}
+                      </h2>
+                      <p class="mt-1 text-sm text-muted-foreground">
+                        {group.entries.length} releases
+                      </p>
+                    </div>
+                  </div>
+
+                  <div class="mt-6 space-y-0">
+                    {group.entries.map((entry) => (
+                      <article
+                        class="group relative border-l-2 border-border pb-12 pl-8 last:pb-0"
+                      >
+                        <div class="absolute top-0 -left-[9px] flex size-4 items-center justify-center rounded-full border-2 border-primary bg-background" />
+
+                        <div class="flex flex-wrap items-center gap-3">
+                          <span class="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-sm font-semibold text-primary ring-1 ring-primary/20 ring-inset">
+                            <TagIcon class="size-3.5" aria-hidden="true" />
+                            {entry.version}
+                          </span>
+                          {entry.publishedAt && (
+                            <time
+                              datetime={entry.publishedAt}
+                              class="text-sm text-muted-foreground"
+                            >
+                              {formatDate(entry.publishedAt)}
+                            </time>
+                          )}
+                        </div>
+
+                        <div
+                          class="changelog-body mt-4 text-sm/7 text-muted-foreground"
+                          set:html={renderMarkdown(entry.body)}
+                        />
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
           </div>
         )
       }
@@ -141,7 +204,43 @@ function renderMarkdown(md: string): string {
   <SiteFooter />
 </Layout>
 
+<script>
+  const changelogTabs = document.querySelector("[data-changelog-tabs]");
+
+  if (changelogTabs) {
+    const tabs = Array.from(changelogTabs.querySelectorAll("[data-changelog-tab]"));
+    const panels = Array.from(changelogTabs.querySelectorAll("[data-changelog-panel]"));
+
+    function activateTab(id: string) {
+      tabs.forEach((tab) => {
+        const isActive = tab.getAttribute("data-changelog-tab") === id;
+        tab.setAttribute("aria-selected", String(isActive));
+      });
+
+      panels.forEach((panel) => {
+        panel.toggleAttribute(
+          "hidden",
+          panel.getAttribute("data-changelog-panel") !== id,
+        );
+      });
+    }
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const id = tab.getAttribute("data-changelog-tab");
+        if (id) activateTab(id);
+      });
+    });
+  }
+</script>
+
 <style is:global>
+  .changelog-major-tab[aria-selected="true"] {
+    border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+    background-color: color-mix(in srgb, var(--primary) 10%, transparent);
+    color: var(--primary);
+  }
+
   .changelog-body h1,
   .changelog-body h2,
   .changelog-body h3 {
