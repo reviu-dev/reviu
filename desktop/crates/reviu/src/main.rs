@@ -227,6 +227,10 @@ fn macos_titlebar_options() -> TitlebarOptions {
 mod shell_env;
 
 fn main() {
+  if workspace::handle_askpass_invocation() {
+    return;
+  }
+
   #[cfg(unix)]
   shell_env::handle_printenv_flag();
   #[cfg(unix)]

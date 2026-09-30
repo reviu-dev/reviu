@@ -3,8 +3,9 @@
 
 use std::ffi::OsStr;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 
@@ -37,12 +38,35 @@ pub fn is_authentication_error(error: &anyhow::Error) -> bool {
     .any(|cause| cause.downcast_ref::<AuthenticationError>().is_some())
 }
 
+#[derive(Clone, Debug)]
+pub struct AskpassConfig {
+  pub program: PathBuf,
+  pub socket: Option<PathBuf>,
+}
+
+static ASKPASS_CONFIG: OnceLock<Mutex<Option<AskpassConfig>>> = OnceLock::new();
+
+fn askpass_config() -> Option<AskpassConfig> {
+  ASKPASS_CONFIG
+    .get_or_init(|| Mutex::new(None))
+    .lock()
+    .ok()
+    .and_then(|config| config.clone())
+}
+
+pub fn configure_askpass(config: Option<AskpassConfig>) {
+  if let Ok(mut global) = ASKPASS_CONFIG.get_or_init(|| Mutex::new(None)).lock() {
+    *global = config;
+  }
+}
+
 /// What git and ssh print when no credential could be found or the remote refused it.
 const AUTHENTICATION_FAILURES: &[&str] = &[
   "authentication failed",
   "could not read username",
   "could not read password",
   "terminal prompts disabled",
+  "unable to read askpass response",
   "invalid username or password",
   "the requested url returned error: 401",
   "the requested url returned error: 403",
@@ -92,7 +116,21 @@ where
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
-  if !has_custom_ssh_command(repo_root) {
+
+  let has_custom_ssh_command = has_custom_ssh_command(repo_root);
+  if sign_in == SignIn::Allowed
+    && let Some(askpass) = askpass_config()
+  {
+    command.env("GIT_ASKPASS", &askpass.program);
+    if let Some(socket) = askpass.socket {
+      command.env("REVIU_ASKPASS_SOCKET", socket);
+    }
+    if !has_custom_ssh_command {
+      command
+        .env("SSH_ASKPASS", &askpass.program)
+        .env("SSH_ASKPASS_REQUIRE", "force");
+    }
+  } else if !has_custom_ssh_command {
     // Same reason for ssh: a passphrase or host key question must fail, not hang.
     command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
   }
@@ -143,6 +181,7 @@ mod tests {
     for stderr in [
       "remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/a/b.git/'",
       "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      "error: unable to read askpass response from 'reviu'",
       "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
       "Host key verification failed.",
     ] {

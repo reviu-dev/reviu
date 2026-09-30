@@ -21,7 +21,9 @@ pub use diff::*;
 pub use git2::ApplyLocation;
 pub use history::*;
 pub use interactive_rebase::*;
-pub use remote_git::{AuthenticationError, is_authentication_error};
+pub use remote_git::{
+  AskpassConfig, AuthenticationError, configure_askpass, is_authentication_error,
+};
 pub use status::*;
 pub use store::*;
 pub use worktree::*;

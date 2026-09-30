@@ -77,6 +77,7 @@ mod api;
 pub mod app_log_sink;
 mod app_profile;
 mod app_update;
+mod askpass;
 pub mod auth_flow;
 mod auth_state;
 mod billing_dialog;
@@ -157,6 +158,7 @@ pub use actions::{
   CommitChanges, OpenProject, SaveFile, ShowCommandPalette, ShowFileSearch, ShowGlobalSearch,
 };
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};
+pub use askpass::handle_askpass_invocation;
 pub use auth_state::AuthStateStore;
 pub use crash_report::{
   StartupCrashReport, install_crash_reporter, show_startup_crash_report_notification,

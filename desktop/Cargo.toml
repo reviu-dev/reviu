@@ -150,6 +150,7 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_System_IO",
   "Win32_System_Pipes",
 ] }
+zeroize = "1.8.2"
 
 # Workspace member crates
 ansi_text = { path = "crates/ansi_text" }

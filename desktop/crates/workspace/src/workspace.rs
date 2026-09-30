@@ -239,9 +239,9 @@ impl WorkspaceView {
     crate::auth_flow::load_stored_token(cx);
     crate::install_app_key_bindings(cx);
 
-    // Deep links and the pro promise land in the app with no window of their
-    // own, and both have to open the billing dialog.
+    // Deep links, pro prompts, and git askpass requests land without their own window.
     WorkspaceWindow::register(window.window_handle(), cx);
+    crate::askpass::install(cx);
     for (kind, error) in [
       (crate::config_reload::ConfigKind::Settings, settings_error),
       (

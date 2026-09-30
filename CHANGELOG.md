@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.5.0
 
+### Git Credentials In The App
+
+When Git or SSH needs a password, token, or key passphrase during a user-started fetch, pull, or push, Reviu now asks in the app instead of failing because there is no visible terminal prompt.
+
 ### Agents Run Commands In Parallel
 
 While an agent waits for a long command such as a dev server, it can now start and read other commands, keep streaming its reply, and stop the long command itself. Waiting on a permission prompt no longer freezes the rest of the session either.

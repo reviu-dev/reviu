@@ -11800,6 +11800,7 @@ dependencies = [
  "tray-icon",
  "ui",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

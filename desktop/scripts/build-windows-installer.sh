@@ -204,6 +204,7 @@ main() {
   local artifact_url="https://github.com/${github_repository}/releases/download/${tag}/${installer_name}"
   local icon_path="${desktop_dir}/crates/reviu/assets/reviu.ico"
   local binary_path="${desktop_dir}/target/${target}/release/${binary_name}.exe"
+  local askpass_binary_path="${desktop_dir}/target/${target}/release/reviu-askpass.exe"
   local iss_path="${desktop_dir}/crates/reviu/resources/windows/reviu.iss"
   local iscc
   local installer_size
@@ -225,7 +226,7 @@ main() {
     log "Building ${app_name} ${version} for Windows ${manifest_arch} (${target})"
     (
       cd "${desktop_dir}"
-      API_BASE_URL="${api_base_url}" cargo build -p reviu --release --target "${target}"
+      API_BASE_URL="${api_base_url}" cargo build -p reviu --bins --release --target "${target}"
     )
   else
     log "Skipping cargo build"
@@ -233,6 +234,10 @@ main() {
 
   if [[ ! -f "${binary_path}" ]]; then
     die "Expected Windows binary not found: ${binary_path}"
+  fi
+
+  if [[ ! -f "${askpass_binary_path}" ]]; then
+    die "Expected Windows askpass binary not found: ${askpass_binary_path}"
   fi
 
   rm -rf "${output_dir}"
@@ -249,6 +254,7 @@ main() {
     "/dAppSetupName=${app_name}-${version}-windows-${manifest_arch}" \
     "/dSourceDir=$(to_windows_path "${repo_root}")" \
     "/dBinaryPath=$(to_windows_path "${binary_path}")" \
+    "/dAskpassBinaryPath=$(to_windows_path "${askpass_binary_path}")" \
     "/dIconPath=$(to_windows_path "${icon_path}")" \
     "/dTargetArch=${target_arch}"
 

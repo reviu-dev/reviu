@@ -38,6 +38,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#BinaryPath}"; DestDir: "{app}"; DestName: "{#AppExeName}.exe"; Flags: ignoreversion
+Source: "{#AskpassBinaryPath}"; DestDir: "{app}"; DestName: "reviu-askpass.exe"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}.exe"
