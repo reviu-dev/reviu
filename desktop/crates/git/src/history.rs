@@ -1,11 +1,11 @@
 use std::{
-  collections::BTreeMap,
+  collections::{BTreeMap, BinaryHeap, HashMap, HashSet},
   path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
 use git2::{
-  BranchType, Delta, Diff, DiffDelta, DiffFindOptions, DiffOptions, Oid, Patch, Repository, Sort,
+  BranchType, Commit, Delta, Diff, DiffDelta, DiffFindOptions, DiffOptions, Oid, Patch, Repository,
   Tree,
 };
 
@@ -61,25 +61,14 @@ pub fn list_commit_history(repo_root: &Path, limit: usize) -> Result<Vec<History
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let mut refs_by_oid = refs_by_oid(&repo)?;
 
-  let mut walk = repo.revwalk()?;
-  // Keep topological ordering for a stable history traversal.
-  walk.set_sorting(Sort::TOPOLOGICAL)?;
-
   let Some((head_oid, head_label)) = head_target(&repo) else {
     return Ok(Vec::new());
   };
-  if walk.push(head_oid).is_err() {
-    return Ok(Vec::new());
-  }
   insert_ref_label(&mut refs_by_oid, head_oid, head_label);
 
   let mut rows = Vec::with_capacity(limit);
-  for oid_result in walk.take(limit) {
-    let oid = oid_result?;
-    let Ok(commit) = repo.find_commit(oid) else {
-      continue;
-    };
-
+  for commit in newest_commits_first(&repo, head_oid, limit) {
+    let oid = commit.id();
     let mut refs = refs_by_oid.remove(&oid).unwrap_or_default();
     refs.sort();
     refs.dedup();
@@ -221,6 +210,64 @@ pub fn merge_base(repo_root: &Path, one_oid: &str, other_oid: &str) -> Result<St
     .merge_base(one, other)
     .map(|oid| oid.to_string())
     .with_context(|| format!("find merge base of {one_oid} and {other_oid}"))
+}
+
+/// The newest `limit` commits reachable from `head`, read the way `git log`
+/// reads them: a sorted libgit2 revwalk goes through the whole history before
+/// yielding its first commit, which costs hundreds of milliseconds on a large
+/// repository for a list that only shows the top of it.
+fn newest_commits_first(repo: &Repository, head: Oid, limit: usize) -> Vec<Commit<'_>> {
+  let Ok(head_commit) = repo.find_commit(head) else {
+    return Vec::new();
+  };
+  let mut queue = BinaryHeap::new();
+  let mut queued = HashMap::new();
+  let mut seen = HashSet::from([head]);
+  let mut sequence = 0_u64;
+  queue.push((head_commit.time().seconds(), sequence, head));
+  queued.insert(head, head_commit);
+
+  let mut commits = Vec::with_capacity(limit);
+  while commits.len() < limit {
+    // Dates alone can put a parent first: a rebase gives its commits one
+    // timestamp, and clocks drift. A commit waits while a child is queued.
+    let mut waiting = Vec::new();
+    let next = loop {
+      let Some(entry) = queue.pop() else {
+        break None;
+      };
+      let (_, _, oid) = entry;
+      if queued
+        .values()
+        .any(|queued_commit| queued_commit.parent_ids().any(|parent| parent == oid))
+      {
+        waiting.push(entry);
+      } else {
+        break Some(oid);
+      }
+    };
+    queue.extend(waiting);
+    let Some(oid) = next else {
+      break;
+    };
+    let Some(commit) = queued.remove(&oid) else {
+      continue;
+    };
+    for parent_oid in commit.parent_ids() {
+      if !seen.insert(parent_oid) {
+        continue;
+      }
+      // A shallow clone lists parents it does not have.
+      let Ok(parent) = repo.find_commit(parent_oid) else {
+        continue;
+      };
+      sequence += 1;
+      queue.push((parent.time().seconds(), sequence, parent_oid));
+      queued.insert(parent_oid, parent);
+    }
+    commits.push(commit);
+  }
+  commits
 }
 
 fn refs_by_oid(repo: &Repository) -> Result<BTreeMap<Oid, Vec<String>>> {
@@ -473,6 +520,88 @@ mod tests {
 
     let history = list_commit_history(&repo.path, 0).expect("list history");
     assert!(history.is_empty());
+  }
+
+  fn commit_at(
+    repo: &Repository,
+    message: &str,
+    seconds: i64,
+    parents: &[&git2::Commit<'_>],
+  ) -> git2::Oid {
+    let signature = Signature::new(
+      "Reviu Tests",
+      "tests@reviu.local",
+      &git2::Time::new(seconds, 0),
+    )
+    .expect("signature");
+    let tree_id = repo
+      .index()
+      .expect("open index")
+      .write_tree()
+      .expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    repo
+      .commit(None, &signature, &signature, message, &tree, parents)
+      .expect("commit")
+  }
+
+  fn history_summaries(repo_root: &Path, limit: usize) -> Vec<String> {
+    list_commit_history(repo_root, limit)
+      .expect("list history")
+      .into_iter()
+      .map(|commit| commit.summary)
+      .collect()
+  }
+
+  #[test]
+  fn list_commit_history_is_newest_first_and_stops_at_the_limit() {
+    let repo = TempRepo::init("history-newest-first");
+    for index in 1..=5 {
+      commit_text_file(
+        &repo.path,
+        Path::new("a.txt"),
+        &format!("v{index}\n"),
+        &format!("c{index}"),
+      );
+    }
+
+    assert_eq!(history_summaries(&repo.path, 3), ["c5", "c4", "c3"]);
+  }
+
+  #[test]
+  fn list_commit_history_keeps_children_before_parents_when_dates_tie() {
+    let repo = TempRepo::init("history-same-timestamp");
+    let git_repo = Repository::open(&repo.path).expect("open repo");
+    // One timestamp for all, as after a rebase. The merge names the branch tip
+    // first and its parent second, so date and queue order both point wrong.
+    let base = commit_at(&git_repo, "base", 1_000, &[]);
+    let base = git_repo.find_commit(base).expect("base");
+    let side = commit_at(&git_repo, "side", 1_000, &[&base]);
+    let side = git_repo.find_commit(side).expect("side");
+    let merge = commit_at(&git_repo, "merge", 1_000, &[&side, &base]);
+    git_repo
+      .reference("refs/heads/main", merge, true, "test")
+      .expect("point main at the merge");
+    git_repo.set_head("refs/heads/main").expect("set head");
+
+    assert_eq!(history_summaries(&repo.path, 10), ["merge", "side", "base"]);
+  }
+
+  #[test]
+  fn list_commit_history_keeps_children_before_parents_when_a_clock_drifted() {
+    let repo = TempRepo::init("history-clock-drift");
+    let git_repo = Repository::open(&repo.path).expect("open repo");
+    let base = commit_at(&git_repo, "base", 1_000, &[]);
+    let base = git_repo.find_commit(base).expect("base");
+    let side = commit_at(&git_repo, "side", 500, &[&base]);
+    let side = git_repo.find_commit(side).expect("side");
+    let merge = commit_at(&git_repo, "merge", 2_000, &[&side, &base]);
+    git_repo
+      .reference("refs/heads/main", merge, true, "test")
+      .expect("point main at the merge");
+    git_repo.set_head("refs/heads/main").expect("set head");
+
+    assert_eq!(history_summaries(&repo.path, 10), ["merge", "side", "base"]);
   }
 
   #[test]
