@@ -11798,6 +11798,7 @@ dependencies = [
  "terminal",
  "time",
  "tray-icon",
+ "uds_windows",
  "ui",
  "uuid",
  "zeroize",

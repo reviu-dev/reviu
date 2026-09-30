@@ -59,6 +59,7 @@ tray-icon = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_util = { workspace = true }
+uds_windows = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { workspace = true }

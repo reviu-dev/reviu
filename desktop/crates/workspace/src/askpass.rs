@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(windows)]
-use std::os::windows::net::{UnixListener, UnixStream};
+use uds_windows::{UnixListener, UnixStream};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

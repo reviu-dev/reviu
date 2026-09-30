@@ -151,6 +151,7 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_System_Pipes",
 ] }
 zeroize = "1.8.2"
+uds_windows = "1.2.1"
 
 # Workspace member crates
 ansi_text = { path = "crates/ansi_text" }
