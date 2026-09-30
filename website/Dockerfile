@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM node:26.9.0-alpine AS build
 
 WORKDIR /app
@@ -15,7 +16,8 @@ COPY . .
 
 ENV PUBLIC_BACKEND_URL=https://api.reviu.dev
 
-RUN pnpm build
+RUN --mount=type=secret,id=github_token \
+    GITHUB_TOKEN="$(cat /run/secrets/github_token 2>/dev/null || true)" pnpm build
 
 FROM nginx:alpine AS runtime
 
