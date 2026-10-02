@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.6.0
 
+### Image-Only Agent Messages
+
+Attach a screenshot or image to the agent composer and send it without typing a caption. Image-only messages now display as image cards without an empty text bubble.
+
 ### Project Search From Selection
 
 Pressing `cmd-shift-f` with code selected in the editor now opens project search with that text filled in, matching the way editor find starts from the current selection.

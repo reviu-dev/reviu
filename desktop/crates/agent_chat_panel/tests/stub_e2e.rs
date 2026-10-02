@@ -163,6 +163,51 @@ async fn a_staged_image_reaches_the_agent_as_an_image_block(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+async fn an_image_only_prompt_sends_from_the_composer(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::standalone(default_agent_id(), cwd.clone(), window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+  panel.update(cx, |panel, cx| {
+    panel.stage_image_for_test(
+      gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![5, 6, 7, 8]),
+      cx,
+    );
+    assert_eq!(panel.composer_text(cx), "");
+  });
+  cx.run_until_parked();
+
+  let input_focus = panel.read_with(cx, |panel, cx| panel.composer_focus_handle(cx));
+  cx.update(|window, cx| window.focus(&input_focus, cx));
+  cx.simulate_keystrokes("enter");
+
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight()
+      && panel
+        .transcript_texts()
+        .iter()
+        .any(|text| text == "image received")
+  })
+  .await;
+
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(panel.staged_image_count(), 0, "sending drains the image");
+    assert_eq!(panel.composer_text(cx), "", "no text was required");
+  });
+}
+
+#[gpui::test]
 async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
   set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));

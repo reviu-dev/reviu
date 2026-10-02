@@ -331,6 +331,21 @@ impl AgentChatPanel {
     role: ChatRole,
     cx: &mut Context<Self>,
   ) -> bool {
+    let images = self.staged_images.clone();
+    let dispatched = self.dispatch_prompt_with_role_and_images(text, role, images, cx);
+    if dispatched {
+      self.staged_images.clear();
+    }
+    dispatched
+  }
+
+  pub(crate) fn dispatch_prompt_with_role_and_images(
+    &mut self,
+    text: String,
+    role: ChatRole,
+    images: Vec<std::sync::Arc<gpui::Image>>,
+    cx: &mut Context<Self>,
+  ) -> bool {
     if self.in_flight {
       return false;
     }
@@ -365,7 +380,6 @@ impl AgentChatPanel {
     // ahead of the new prompt instead of being wiped.
     self.drain_pending_events(cx);
     self.flush_turn_buffers();
-    let images = std::mem::take(&mut self.staged_images);
     let role_label = format!("{role:?}");
     self.items.push(ChatItem::Message(ChatMessage {
       role,
@@ -411,8 +425,17 @@ impl AgentChatPanel {
   /// fresh dispatch when no turn is in flight, and refuses outright when the
   /// agent does not advertise the steering extension.
   pub fn steer_prompt(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+    self.steer_prompt_with_images(text, Vec::new(), cx)
+  }
+
+  pub(crate) fn steer_prompt_with_images(
+    &mut self,
+    text: String,
+    images: Vec<std::sync::Arc<gpui::Image>>,
+    cx: &mut Context<Self>,
+  ) -> bool {
     if !self.in_flight {
-      return self.dispatch_prompt(text, cx);
+      return self.dispatch_prompt_with_role_and_images(text, ChatRole::User, images, cx);
     }
     if !self.supports_steering {
       return false;
@@ -427,8 +450,8 @@ impl AgentChatPanel {
     self.items.push(ChatItem::Message(ChatMessage {
       role: ChatRole::User,
       text: text.clone().into(),
-      images: 0,
-      image_data: Vec::new(),
+      images: images.len(),
+      image_data: images.clone(),
     }));
     self.persist_state(cx);
     self.sync_list_count();
@@ -438,7 +461,7 @@ impl AgentChatPanel {
     let cwd = self.cwd.clone();
     let files = self.project_files.clone();
     cx.spawn(async move |this, cx| {
-      let blocks = build_prompt_blocks(text.clone(), files, None, Vec::new(), cwd).await;
+      let blocks = build_prompt_blocks(text.clone(), files, None, images.clone(), cwd).await;
       let result = session.steer_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
         match result {
@@ -450,8 +473,16 @@ impl AgentChatPanel {
           // The turn was already over: run the message as a fresh turn.
           Ok(agent_acp::SteerOutcome::PromptRequired) => {
             panel.retract_steered_message(&text);
-            if !panel.in_flight && !panel.dispatch_prompt(text.clone(), cx) {
+            if !panel.in_flight
+              && !panel.dispatch_prompt_with_role_and_images(
+                text.clone(),
+                ChatRole::User,
+                images.clone(),
+                cx,
+              )
+            {
               panel.queued_prompts.push(text.clone());
+              panel.queued_prompt_images.push(images.clone());
             }
           }
           // Steering unsupported or refused: back to the queue, not lost.
@@ -459,6 +490,7 @@ impl AgentChatPanel {
             log::warn!("[agent] steer error: {e}");
             panel.retract_steered_message(&text);
             panel.queued_prompts.push(text.clone());
+            panel.queued_prompt_images.push(images.clone());
             panel.items.push(ChatItem::Message(ChatMessage {
               role: ChatRole::System,
               text: "Steer refused; message queued for the next turn.".into(),

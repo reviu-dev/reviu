@@ -933,6 +933,7 @@ pub struct AgentChatPanel {
   pending_thought: String,
   /// Messages typed during a turn, drained oldest-first when it ends cleanly.
   queued_prompts: Vec<String>,
+  queued_prompt_images: Vec<Vec<std::sync::Arc<gpui::Image>>>,
   composer_history_index: Option<usize>,
   composer_history_draft: Option<String>,
   /// Whether the connected agent accepts image blocks in prompts.
@@ -1059,6 +1060,7 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      queued_prompt_images: Vec::new(),
       composer_history_index: None,
       composer_history_draft: None,
       supports_images: false,
@@ -1475,6 +1477,7 @@ impl AgentChatPanel {
   #[cfg(any(test, feature = "test-support"))]
   pub fn queue_prompt_for_test(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
     self.queued_prompts.push(text.into());
+    self.queued_prompt_images.push(Vec::new());
     cx.notify();
   }
 
@@ -1693,6 +1696,7 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      queued_prompt_images: Vec::new(),
       composer_history_index: None,
       composer_history_draft: None,
       supports_images: false,
@@ -2470,8 +2474,15 @@ impl AgentChatPanel {
       return;
     }
     let next = self.queued_prompts.remove(0);
-    if !self.dispatch_prompt(next.clone(), cx) {
+    let images = if self.queued_prompt_images.is_empty() {
+      Vec::new()
+    } else {
+      self.queued_prompt_images.remove(0)
+    };
+    if !self.dispatch_prompt_with_role_and_images(next.clone(), ChatRole::User, images.clone(), cx)
+    {
       self.queued_prompts.insert(0, next);
+      self.queued_prompt_images.insert(0, images);
     }
   }
 
@@ -2794,13 +2805,16 @@ impl AgentChatPanel {
 
   fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let text = self.input.read(cx).value().trim().to_string();
-    if text.is_empty() {
+    let has_images = !self.staged_images.is_empty();
+    if text.is_empty() && !has_images {
       return;
     }
     self.reset_composer_history();
     // Mid-turn, the message queues instead of being refused.
     if self.in_flight {
+      let images = std::mem::take(&mut self.staged_images);
       self.queued_prompts.push(text);
+      self.queued_prompt_images.push(images);
       self
         .input
         .update(cx, |state, cx| state.set_value("", window, cx));
@@ -2825,15 +2839,19 @@ impl AgentChatPanel {
       return;
     }
     let text = self.input.read(cx).value().trim().to_string();
-    if text.is_empty() {
+    let has_images = !self.staged_images.is_empty();
+    if text.is_empty() && !has_images {
       return;
     }
     self.reset_composer_history();
-    if self.steer_prompt(text, cx) {
+    let images = std::mem::take(&mut self.staged_images);
+    if self.steer_prompt_with_images(text, images.clone(), cx) {
       self
         .input
         .update(cx, |state, cx| state.set_value("", window, cx));
       self.schedule_draft_save(cx);
+    } else {
+      self.staged_images = images;
     }
   }
 
@@ -2970,11 +2988,23 @@ impl AgentChatPanel {
     }
     // A non-empty draft swaps into the queue slot so nothing is lost.
     let draft = self.input.read(cx).value().trim().to_string();
-    let text = if draft.is_empty() {
-      self.queued_prompts.remove(ix)
-    } else {
+    let draft_images = std::mem::take(&mut self.staged_images);
+    let has_draft = !draft.is_empty() || !draft_images.is_empty();
+    let text = if has_draft {
       std::mem::replace(&mut self.queued_prompts[ix], draft)
+    } else {
+      self.queued_prompts.remove(ix)
     };
+    let images = if ix < self.queued_prompt_images.len() {
+      if has_draft {
+        std::mem::replace(&mut self.queued_prompt_images[ix], draft_images)
+      } else {
+        self.queued_prompt_images.remove(ix)
+      }
+    } else {
+      Vec::new()
+    };
+    self.staged_images = images;
     self.reset_composer_history();
     self.set_composer_value(&text, window, cx);
     self.schedule_draft_save(cx);
@@ -2985,6 +3015,9 @@ impl AgentChatPanel {
   fn delete_queued(&mut self, ix: usize, cx: &mut Context<Self>) {
     if ix < self.queued_prompts.len() {
       self.queued_prompts.remove(ix);
+      if ix < self.queued_prompt_images.len() {
+        self.queued_prompt_images.remove(ix);
+      }
       cx.notify();
     }
   }
@@ -2995,8 +3028,14 @@ impl AgentChatPanel {
       return;
     }
     let text = self.queued_prompts.remove(ix);
-    if !self.steer_prompt(text.clone(), cx) {
+    let images = if ix < self.queued_prompt_images.len() {
+      self.queued_prompt_images.remove(ix)
+    } else {
+      Vec::new()
+    };
+    if !self.steer_prompt_with_images(text.clone(), images.clone(), cx) {
       self.queued_prompts.insert(ix, text);
+      self.queued_prompt_images.insert(ix, images);
     }
     cx.notify();
   }

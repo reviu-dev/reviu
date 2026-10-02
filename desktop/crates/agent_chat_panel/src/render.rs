@@ -2776,6 +2776,16 @@ impl AgentChatPanel {
 
     for ix in (0..self.queued_prompts.len()).rev() {
       let text = self.queued_prompts[ix].clone();
+      let image_count = self.queued_prompt_images.get(ix).map_or(0, Vec::len);
+      let label = if text.trim().is_empty() && image_count > 0 {
+        if image_count == 1 {
+          "1 image attached".to_string()
+        } else {
+          format!("{image_count} images attached")
+        }
+      } else {
+        text
+      };
       let inset = 12. + ix.min(3) as f32 * 8.;
       let bottom_margin = if ix == 0 { -8. } else { -4. };
 
@@ -2806,7 +2816,7 @@ impl AgentChatPanel {
               .truncate()
               .text_sm()
               .text_color(theme.foreground)
-              .child(text),
+              .child(label),
           )
           .when(self.in_flight && self.supports_steering, |this| {
             this.child(
@@ -3870,21 +3880,23 @@ impl AgentChatPanel {
                     },
                   ))
                 })
-                .child(
-                  div()
-                    .px_3()
-                    .py_2()
-                    .rounded(px(10.))
-                    .bg(theme.secondary)
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(selectable_text::SelectableText::new(
-                      item_id_base,
-                      m.text.clone(),
-                      Vec::new(),
-                      registry.clone(),
-                    )),
-                ),
+                .when(!m.text.trim().is_empty(), |this| {
+                  this.child(
+                    div()
+                      .px_3()
+                      .py_2()
+                      .rounded(px(10.))
+                      .bg(theme.secondary)
+                      .text_sm()
+                      .text_color(theme.foreground)
+                      .child(selectable_text::SelectableText::new(
+                        item_id_base,
+                        m.text.clone(),
+                        Vec::new(),
+                        registry.clone(),
+                      )),
+                  )
+                }),
             )
             .child(
               // Capped so the hover-only actions don't reserve a visible gap;

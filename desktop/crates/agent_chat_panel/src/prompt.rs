@@ -65,7 +65,10 @@ pub(crate) async fn build_prompt_blocks(
 ) -> Vec<ContentBlock> {
   use base64::Engine as _;
   let mentions = mention::resolve_mentions(&text, files.as_slice(), selection.is_some());
-  let mut blocks = vec![ContentBlock::Text(TextContent::new(text))];
+  let mut blocks = Vec::new();
+  if !text.is_empty() {
+    blocks.push(ContentBlock::Text(TextContent::new(text)));
+  }
   for image in images {
     let data = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
     blocks.push(ContentBlock::Image(
