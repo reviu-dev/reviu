@@ -67,7 +67,7 @@ jobs:
 
       - name: Install nextest
         if: runner.os != 'Windows'
-        uses: taiki-e/install-action@314b6e93a9b2f40a64f401a23fed55603083dc69 # nextest
+        uses: taiki-e/install-action@badb8c3638e0b773c6c17a6025c2306a8f1c4303 # nextest
 
       # Tests assume Unix-style paths; skip Windows.
       - name: Cargo test
