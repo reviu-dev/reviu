@@ -5154,6 +5154,52 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn global_search_uses_editor_selection_as_query(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-project-search-selection");
+    commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "alpha needle\nother needle\n",
+      "initial",
+    );
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      let editor = page.shown_editor().expect("editor");
+      editor.update(cx, |editor, _| {
+        editor.selections.primary_mut().range = 6..12;
+      });
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.show_global_search_action(&crate::ShowGlobalSearch, window, cx)
+    });
+    cx.run_until_parked();
+
+    let search = page.read_with(cx, |page, _| {
+      page
+        .project_search_view
+        .clone()
+        .expect("project search view")
+    });
+    search.read_with(cx, |search, cx| {
+      assert_eq!(search.query_for_test(cx), "needle")
+    });
+  }
+
+  #[gpui::test]
   async fn global_search_focuses_visible_split_search(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-render-project-search-split-focus");
     commit_text_file(&repo.path, Path::new("README.md"), "needle\n", "initial");

@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.6.0
+
+### Project Search From Selection
+
+Pressing `cmd-shift-f` with code selected in the editor now opens project search with that text filled in, matching the way editor find starts from the current selection.
+
 ## 1.5.0
 
 ### Git Credentials In The App

@@ -206,8 +206,7 @@ impl ProjectSearchView {
       .update(cx, |input, cx| input.focus(window, cx));
   }
 
-  #[cfg(test)]
-  pub(crate) fn set_query_for_test(
+  pub(crate) fn set_query(
     &mut self,
     query: impl Into<String>,
     window: &mut Window,
@@ -216,6 +215,16 @@ impl ProjectSearchView {
     self
       .query_input
       .update(cx, |input, cx| input.set_value(query.into(), window, cx));
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_query_for_test(
+    &mut self,
+    query: impl Into<String>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.set_query(query, window, cx);
   }
 
   #[cfg(test)]

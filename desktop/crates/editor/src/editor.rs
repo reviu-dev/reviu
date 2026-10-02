@@ -4779,7 +4779,7 @@ impl Editor {
     let input = self.ensure_find_input(window, cx);
     let input_value = input.read(cx).value().to_string();
     let query = self
-      .find_query_from_selection(cx)
+      .selected_text_search_query(cx)
       .filter(|selection| !selection.is_empty())
       .unwrap_or(input_value);
     input.update(cx, |state, cx| {
@@ -4847,7 +4847,7 @@ impl Editor {
     cx.emit(EditorEvent::FindOptionsChanged(options));
   }
 
-  fn find_query_from_selection(&self, cx: &App) -> Option<String> {
+  pub fn selected_text_search_query(&self, cx: &App) -> Option<String> {
     let selected = self.selected_text_for_copy(cx)?;
     let selected = selected.replace('\r', "");
     let first_line = selected.split('\n').next().unwrap_or_default().to_string();
@@ -15394,7 +15394,9 @@ pub mod tests {
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       editor.selections.primary_mut().range = 0..3;
-      let query = editor.find_query_from_selection(cx).expect("selected text");
+      let query = editor
+        .selected_text_search_query(cx)
+        .expect("selected text");
       editor.find.set_query(query);
       editor.refresh_find_matches(px(20.0), false, cx);
 

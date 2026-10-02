@@ -3000,7 +3000,11 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let selected_query = self.selected_editor_search_query(cx);
     self.open_global_search(window, cx);
+    if let Some(query) = selected_query {
+      self.set_project_search_query(query, window, cx);
+    }
     cx.stop_propagation();
   }
 
@@ -3097,6 +3101,23 @@ impl SessionPage {
 
   fn open_project_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.activate_project_search_tab(window, cx);
+  }
+
+  fn selected_editor_search_query(&self, cx: &App) -> Option<String> {
+    self.diff_editor()?.read(cx).selected_text_search_query(cx)
+  }
+
+  fn set_project_search_query(
+    &mut self,
+    query: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if let Some(search_view) = self.project_search_view.as_ref() {
+      search_view.update(cx, |search_view, cx| {
+        search_view.set_query(query, window, cx);
+      });
+    }
   }
 
   fn activate_project_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
