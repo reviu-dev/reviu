@@ -64,7 +64,7 @@ use crate::session_page::center_layout::{
   PersistedCenterTab, collect_persisted_tabs, persisted_center_tab,
 };
 use crate::session_page::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
-use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
+use crate::session_page::file_viewer::{OpenFileSearchMatch, OpenedSnapshot, UnsavedEditorAction};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
 use crate::git_telemetry::{self, GitTelemetry};
@@ -3294,14 +3294,31 @@ impl SessionPage {
         Arc::new(move |request: ProjectSearchOpenRequest, window, cx| {
           page.update(cx, |page, cx| {
             page.detach_project_search_from_layouts();
-            page.open_file(
-              request.path,
-              request.line,
-              request.column,
-              OpenIntent::Open,
-              window,
-              cx,
-            );
+            if let (Some(line), Some(column), Some(search)) =
+              (request.line, request.column, request.search)
+            {
+              page.open_file_with_search_match(
+                request.path,
+                line,
+                column,
+                OpenFileSearchMatch {
+                  query: search.query,
+                  options: search.options,
+                },
+                OpenIntent::Open,
+                window,
+                cx,
+              );
+            } else {
+              page.open_file(
+                request.path,
+                request.line,
+                request.column,
+                OpenIntent::Open,
+                window,
+                cx,
+              );
+            }
           });
           Ok(())
         });

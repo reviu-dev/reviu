@@ -130,6 +130,10 @@ impl SearchState {
     self.options
   }
 
+  pub fn set_options(&mut self, options: SearchOptions) {
+    self.options = options;
+  }
+
   pub fn matches(&self) -> &[SearchMatch] {
     &self.matches
   }

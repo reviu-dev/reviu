@@ -12,6 +12,10 @@ Attach a screenshot or image to the agent composer and send it without typing a 
 
 Pressing `cmd-shift-f` with code selected in the editor now opens project search with that text filled in, matching the way editor find starts from the current selection.
 
+### Project Search Result Highlighting
+
+Clicking a project search result now opens the file at the exact match and highlights that match in the editor, without opening the find panel.
+
 ## 1.5.0
 
 ### Git Credentials In The App

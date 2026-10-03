@@ -4612,7 +4612,7 @@ impl Editor {
   }
 
   pub(crate) fn refresh_find_matches_after_document_edit(&mut self, cx: &mut Context<Self>) {
-    if self.find_panel_open && !self.find.query().is_empty() {
+    if !self.find.query().is_empty() {
       self.recompute_find_matches(false, cx);
     }
   }
@@ -4740,7 +4740,7 @@ impl Editor {
   }
 
   pub(crate) fn find_highlights(&self) -> Option<SearchHighlights> {
-    (self.find_panel_open && !self.find.query().is_empty()).then(|| self.find.highlights())
+    (!self.find.query().is_empty()).then(|| self.find.highlights())
   }
 
   pub fn find_panel_occludes_display_line(&self, display_line: usize) -> bool {
@@ -4781,7 +4781,13 @@ impl Editor {
     let query = self
       .selected_text_search_query(cx)
       .filter(|selection| !selection.is_empty())
-      .unwrap_or(input_value);
+      .unwrap_or_else(|| {
+        if input_value.is_empty() {
+          self.find.query().to_string()
+        } else {
+          input_value
+        }
+      });
     input.update(cx, |state, cx| {
       state.set_value(query.clone(), window, cx);
     });
@@ -4797,7 +4803,13 @@ impl Editor {
   /// event bubble when there was nothing to close.
   pub(crate) fn close_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
     if !self.find_panel_open {
-      return false;
+      if self.find.query().is_empty() {
+        return false;
+      }
+
+      self.reset_find_input(window, cx);
+      cx.notify();
+      return true;
     }
 
     self.find_panel_open = false;
@@ -8208,6 +8220,52 @@ impl Editor {
     self.center_display_line_in_viewport(target_display_line, total_lines);
     self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
     cx.notify();
+  }
+
+  pub fn reveal_search_match(
+    &mut self,
+    query: String,
+    options: SearchOptions,
+    doc_line: usize,
+    doc_column: usize,
+    cx: &mut Context<Self>,
+  ) {
+    if query.trim().is_empty() {
+      self.reveal_source_position(doc_line, doc_column, cx);
+      return;
+    }
+
+    self.find.set_query(query);
+    self.find.set_options(options);
+    self.recompute_find_matches(false, cx);
+
+    let target_offset = {
+      let document = self.document.read(cx);
+      document.line_range(doc_line).map(|line_range| {
+        let line_length = line_range.end.saturating_sub(line_range.start);
+        line_range.start + doc_column.min(line_length)
+      })
+    };
+    let active_match = target_offset.and_then(|offset| {
+      self
+        .find
+        .matches()
+        .iter()
+        .position(|found| found.doc_range.start == offset)
+        .or_else(|| {
+          self
+            .find
+            .matches()
+            .iter()
+            .position(|found| found.doc_range.start <= offset && offset < found.doc_range.end)
+        })
+    });
+
+    if let Some(index) = active_match {
+      self.select_find_match(index, self.measured_editor_line_height(), false, cx);
+    } else {
+      self.reveal_source_position(doc_line, doc_column, cx);
+    }
   }
 
   fn conflict_center_display_line(&self, conflict_start_line: usize, cx: &App) -> Option<usize> {
@@ -13700,6 +13758,48 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn test_escape_clears_hidden_find_highlights(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(|cx| {
+      cx.bind_keys([gpui::KeyBinding::new(
+        "escape",
+        crate::actions::CloseFind,
+        Some("Editor"),
+      )]);
+    });
+    let ctx = EditorTestContext::with_text(cx.clone(), "a needle\nb");
+    let editor = ctx.editor.clone();
+    let bubbled = StdArc::new(Mutex::new(false));
+    let harness_bubbled = bubbled.clone();
+
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let harness = cx.new(|_| EscapeBubbleHarness {
+        editor: editor.clone(),
+        bubbled: harness_bubbled,
+      });
+      gpui_component::Root::new(harness, window, cx)
+    });
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      editor.reveal_search_match("needle".to_string(), SearchOptions::default(), 0, 2, cx);
+      let handle = editor.focus_handle(cx);
+      window.focus(&handle, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    ctx.editor.read_with(cx, |editor, _| {
+      assert!(editor.find_highlights().is_none());
+      assert!(!editor.find_panel_open);
+    });
+    assert!(
+      !*bubbled.lock().expect("bubbled lock"),
+      "escape clearing hidden highlights must not also close the file view"
+    );
+  }
+
+  #[gpui::test]
   fn test_review_comment_create_shift_enter_keeps_writing(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
@@ -14396,6 +14496,22 @@ pub mod tests {
       editor.reveal_source_position(99, 99, cx);
     });
     assert_eq!(ctx.cursor_offset(), 13);
+  }
+
+  #[gpui::test]
+  fn reveal_search_match_highlights_without_opening_find_panel(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo\nbar needle\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.reveal_search_match("needle".to_string(), SearchOptions::default(), 1, 4, cx);
+
+      let highlights = editor.find_highlights().expect("find highlights");
+      assert_eq!(highlights.matches.len(), 1);
+      assert_eq!(highlights.active_match, Some(0));
+      assert_eq!(highlights.active_range, Some(8..14));
+      assert!(!editor.is_find_panel_open());
+    });
+    assert_eq!(ctx.cursor_offset(), 14);
   }
 
   #[gpui::test]

@@ -47,10 +47,17 @@ const MATCH_ROW_HEIGHT: f32 = 36.0;
 pub(crate) const PROJECT_SEARCH_CONTEXT: &str = "ProjectSearch";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProjectSearchOpenMatch {
+  pub query: String,
+  pub options: SearchOptions,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProjectSearchOpenRequest {
   pub path: PathBuf,
   pub line: Option<u32>,
   pub column: Option<u32>,
+  pub search: Option<ProjectSearchOpenMatch>,
 }
 
 pub(crate) type ProjectSearchHandler =
@@ -243,8 +250,8 @@ impl ProjectSearchView {
       InputEvent::Change => self.refresh_results(cx),
       InputEvent::PressEnter { .. } => {
         if let Some(request) = self
-          .active_open_request()
-          .or_else(|| self.first_open_request())
+          .active_open_request(cx)
+          .or_else(|| self.first_open_request(cx))
         {
           self.open_result(request, window, cx);
         }
@@ -265,14 +272,32 @@ impl ProjectSearchView {
     }
   }
 
-  fn first_open_request(&self) -> Option<ProjectSearchOpenRequest> {
-    let file = self.results.first()?;
-    let found = file.matches.first()?;
-    Some(ProjectSearchOpenRequest {
-      path: file.path.clone(),
+  fn current_open_match(&self, cx: &App) -> Option<ProjectSearchOpenMatch> {
+    let query = self.query_input.read(cx).value().to_string();
+    (!query.trim().is_empty()).then_some(ProjectSearchOpenMatch {
+      query,
+      options: self.options,
+    })
+  }
+
+  fn open_request_for_match(
+    &self,
+    path: PathBuf,
+    found: &ProjectSearchMatch,
+    cx: &App,
+  ) -> ProjectSearchOpenRequest {
+    ProjectSearchOpenRequest {
+      path,
       line: Some(found.line_number),
       column: Some(found.column),
-    })
+      search: self.current_open_match(cx),
+    }
+  }
+
+  fn first_open_request(&self, cx: &App) -> Option<ProjectSearchOpenRequest> {
+    let file = self.results.first()?;
+    let found = file.matches.first()?;
+    Some(self.open_request_for_match(file.path.clone(), found, cx))
   }
 
   fn open_result(
@@ -465,16 +490,12 @@ impl ProjectSearchView {
     };
   }
 
-  fn active_open_request(&self) -> Option<ProjectSearchOpenRequest> {
+  fn active_open_request(&self, cx: &App) -> Option<ProjectSearchOpenRequest> {
     let (result_index, match_index) =
       match_indices_for_flat_index(&self.results, self.active_match_index?)?;
     let file = self.results.get(result_index)?;
     let found = file.matches.get(match_index)?;
-    Some(ProjectSearchOpenRequest {
-      path: file.path.clone(),
-      line: Some(found.line_number),
-      column: Some(found.column),
-    })
+    Some(self.open_request_for_match(file.path.clone(), found, cx))
   }
 
   fn select_match(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -635,6 +656,7 @@ impl ProjectSearchView {
           found,
           flat_index,
           active,
+          self.current_open_match(cx),
           cx,
         ))
       }
@@ -1046,6 +1068,7 @@ fn render_file_header(
     path: path.clone(),
     line: None,
     column: None,
+    search: None,
   };
 
   h_flex()
@@ -1121,6 +1144,7 @@ fn render_match_row(
   found: &ProjectSearchMatch,
   flat_index: Option<usize>,
   active: bool,
+  search: Option<ProjectSearchOpenMatch>,
   cx: &mut Context<ProjectSearchView>,
 ) -> AnyElement {
   let theme = cx.theme().clone();
@@ -1130,6 +1154,7 @@ fn render_match_row(
     path,
     line: Some(line_number),
     column: Some(column),
+    search,
   };
   let entity = cx.entity();
 

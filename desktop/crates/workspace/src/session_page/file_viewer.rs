@@ -20,6 +20,12 @@ pub(crate) enum OpenedSnapshot {
 }
 
 #[derive(Clone)]
+pub(super) struct OpenFileSearchMatch {
+  pub query: String,
+  pub options: editor::SearchOptions,
+}
+
+#[derive(Clone)]
 pub(super) enum UnsavedEditorAction {
   CloseDiff,
   SelectSession {
@@ -502,7 +508,36 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.open_file_without_unsaved_prompt(rel_path, reveal_line, reveal_column, intent, window, cx);
+    self.open_file_without_unsaved_prompt(
+      rel_path,
+      reveal_line,
+      reveal_column,
+      None,
+      intent,
+      window,
+      cx,
+    );
+  }
+
+  pub(super) fn open_file_with_search_match(
+    &mut self,
+    rel_path: PathBuf,
+    reveal_line: u32,
+    reveal_column: u32,
+    search_match: OpenFileSearchMatch,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_file_without_unsaved_prompt(
+      rel_path,
+      Some(reveal_line),
+      Some(reveal_column),
+      Some(search_match),
+      intent,
+      window,
+      cx,
+    );
   }
 
   fn open_diff_without_unsaved_prompt(
@@ -519,6 +554,7 @@ impl SessionPage {
       rel_path,
       reveal_line,
       reveal_column,
+      None,
       intent,
       true,
       window,
@@ -531,6 +567,7 @@ impl SessionPage {
     rel_path: PathBuf,
     reveal_line: Option<u32>,
     reveal_column: Option<u32>,
+    search_match: Option<OpenFileSearchMatch>,
     intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
@@ -540,6 +577,7 @@ impl SessionPage {
       rel_path,
       reveal_line,
       reveal_column,
+      search_match,
       intent,
       false,
       window,
@@ -553,6 +591,7 @@ impl SessionPage {
     rel_path: PathBuf,
     reveal_line: Option<u32>,
     reveal_column: Option<u32>,
+    search_match: Option<OpenFileSearchMatch>,
     intent: OpenIntent,
     show_git_diff: bool,
     window: &mut Window,
@@ -584,6 +623,7 @@ impl SessionPage {
         reveal_column.map_or(0, |column| column.saturating_sub(1) as usize),
       )
     });
+    let search_match = reveal_doc_position.and(search_match);
 
     self.center = CenterView::Diff;
     self.diff_chat_open = false;
@@ -593,11 +633,7 @@ impl SessionPage {
       && self.editor_tab.as_ref() == Some(&tab)
       && let Some(editor) = self.warm_editor()
     {
-      if let Some((doc_line, doc_column)) = reveal_doc_position {
-        editor.update(cx, |editor, cx| {
-          editor.reveal_source_position(doc_line, doc_column, cx)
-        });
-      }
+      Self::reveal_editor_position(&editor, reveal_doc_position, search_match.as_ref(), cx);
       if self.center_layout.contains_tab(&tab) {
         self.set_active_center_tab_and_reveal(tab.clone(), cx);
       } else {
@@ -610,7 +646,15 @@ impl SessionPage {
       return;
     }
 
-    if self.restore_center_editor(&tab, &rel_path, reveal_doc_position, intent, window, cx) {
+    if self.restore_center_editor(
+      &tab,
+      &rel_path,
+      reveal_doc_position,
+      search_match.as_ref(),
+      intent,
+      window,
+      cx,
+    ) {
       return;
     }
 
@@ -656,7 +700,15 @@ impl SessionPage {
           editor.set_git_diff_enabled(show_git_diff, cx);
           editor.set_diff_view_mode(diff_view, cx);
           editor.set_ignore_whitespace(hide_whitespace, cx);
-          if let Some((doc_line, doc_column)) = reveal_doc_position {
+          if let Some(search_match) = search_match.as_ref() {
+            editor.reveal_search_match(
+              search_match.query.clone(),
+              search_match.options,
+              reveal_doc_position.map_or(0, |position| position.0),
+              reveal_doc_position.map_or(0, |position| position.1),
+              cx,
+            );
+          } else if let Some((doc_line, doc_column)) = reveal_doc_position {
             editor.reveal_source_position(doc_line, doc_column, cx);
           }
         });
@@ -1375,11 +1427,37 @@ impl SessionPage {
     self.set_editor_tab_state(tab, state);
   }
 
+  fn reveal_editor_position(
+    editor: &Entity<Editor>,
+    reveal_doc_position: Option<(usize, usize)>,
+    search_match: Option<&OpenFileSearchMatch>,
+    cx: &mut Context<Self>,
+  ) {
+    let Some((doc_line, doc_column)) = reveal_doc_position else {
+      return;
+    };
+
+    editor.update(cx, |editor, cx| {
+      if let Some(search_match) = search_match {
+        editor.reveal_search_match(
+          search_match.query.clone(),
+          search_match.options,
+          doc_line,
+          doc_column,
+          cx,
+        );
+      } else {
+        editor.reveal_source_position(doc_line, doc_column, cx);
+      }
+    });
+  }
+
   fn restore_center_editor(
     &mut self,
     tab: &CenterTab,
     rel_path: &Path,
     reveal_doc_position: Option<(usize, usize)>,
+    search_match: Option<&OpenFileSearchMatch>,
     intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
@@ -1411,12 +1489,8 @@ impl SessionPage {
         list.select_path(Some(rel_path), cx);
       });
     let active_editor = self.warm_editor();
-    if let (Some((doc_line, doc_column)), Some(editor)) =
-      (reveal_doc_position, active_editor.clone())
-    {
-      editor.update(cx, |editor, cx| {
-        editor.reveal_source_position(doc_line, doc_column, cx)
-      });
+    if let Some(editor) = active_editor.clone() {
+      Self::reveal_editor_position(&editor, reveal_doc_position, search_match, cx);
     }
     self.sync_editor_unmerged_state(cx);
     self.sync_git_telemetry(cx);
@@ -1491,7 +1565,15 @@ impl SessionPage {
     }
     let tab = CenterTab::agent_snapshot(rel_path.clone(), old_text.clone(), new_text.clone());
     let reveal_doc_position = reveal_line.map(|line| (line.saturating_sub(1) as usize, 0));
-    if self.restore_center_editor(&tab, &rel_path, reveal_doc_position, intent, window, cx) {
+    if self.restore_center_editor(
+      &tab,
+      &rel_path,
+      reveal_doc_position,
+      None,
+      intent,
+      window,
+      cx,
+    ) {
       return;
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
@@ -1608,7 +1690,7 @@ impl SessionPage {
     self.diff_chat_open = false;
     self.sync_agent_chat_close_control(cx);
     let tab = CenterTab::commit_snapshot(rel_path.clone(), commit_oid.clone());
-    if self.restore_center_editor(&tab, &rel_path, None, intent, window, cx) {
+    if self.restore_center_editor(&tab, &rel_path, None, None, intent, window, cx) {
       return;
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
@@ -1736,7 +1818,15 @@ impl SessionPage {
     let tab =
       CenterTab::pull_request_snapshot(rel_path.clone(), base_oid.clone(), head_oid.clone());
     let reveal_doc_position = reveal_line.map(|line| (line.saturating_sub(1) as usize, 0));
-    if self.restore_center_editor(&tab, &rel_path, reveal_doc_position, intent, window, cx) {
+    if self.restore_center_editor(
+      &tab,
+      &rel_path,
+      reveal_doc_position,
+      None,
+      intent,
+      window,
+      cx,
+    ) {
       return;
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
