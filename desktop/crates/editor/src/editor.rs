@@ -145,6 +145,7 @@ const FIND_SCROLL_DURATION: Duration = Duration::from_millis(260);
 const FIND_SCROLL_TICK: Duration = Duration::from_millis(16);
 const FIND_SCROLL_MIN_DELTA: f32 = 0.01;
 const FIND_PANEL_OCCLUDED_VISIBLE_LINES: usize = 3;
+const FIND_PANEL_ROW_HEIGHT_PX: f32 = 36.0;
 const REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS: usize = 72;
 const REVIEW_COMMENT_MIN_WRAP_COLUMNS: usize = 28;
 const REVIEW_COMMENT_MAX_WRAP_COLUMNS: usize = 180;
@@ -4906,11 +4907,6 @@ impl Editor {
     let find_status = find_error
       .map(|error| format!("Invalid: {error}"))
       .unwrap_or_else(|| format!("{}/{}", current_match, total_matches));
-    let input_border = if has_find_error {
-      theme.red
-    } else {
-      theme.border
-    };
     let options = self.find.options();
     let case_sensitive = options.case_sensitive;
     let whole_word = options.whole_word;
@@ -4934,15 +4930,14 @@ impl Editor {
     Some(
       div()
         .w_full()
-        .px_2()
-        .py_1p5()
+        .flex_none()
         .occlude()
         .cursor(CursorStyle::Arrow)
         .flex()
         .flex_col()
         .items_stretch()
-        .gap_1()
         .bg(theme.background)
+        .border_t_1()
         .border_b_1()
         .border_color(theme.border)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -4964,23 +4959,26 @@ impl Editor {
           cx.stop_propagation();
         })
         .child(
-          div()
-            .flex()
+          h_flex()
+            .h(px(FIND_PANEL_ROW_HEIGHT_PX))
+            .min_h(px(FIND_PANEL_ROW_HEIGHT_PX))
+            .max_h(px(FIND_PANEL_ROW_HEIGHT_PX))
             .items_center()
-            .gap_2()
+            .when(replace_panel_open, |this| {
+              this.border_b_1().border_color(theme.border)
+            })
             .child(
               div()
                 .flex_1()
                 .min_w(px(0.0))
-                .h(px(32.0))
+                .h_full()
                 .flex()
                 .items_center()
                 .gap_1()
-                .pl_1()
-                .pr_1()
-                .border_1()
-                .border_color(input_border)
-                .rounded_md()
+                .pl_2()
+                .pr_2()
+                .border_r_1()
+                .border_color(theme.border)
                 .bg(theme.background)
                 .child(
                   div()
@@ -5055,11 +5053,13 @@ impl Editor {
                 ),
             )
             .child(
-              div()
+              h_flex()
+                .flex_none()
                 .w(px(224.0))
-                .flex()
-                .items_center()
+                .justify_end()
                 .gap_2()
+                .items_center()
+                .px_2()
                 .child(
                   Button::new("editor-toggle-replace")
                     .icon(UiIconName::Replace)
@@ -5131,22 +5131,22 @@ impl Editor {
         )
         .when_some(replace_input, |this, replace_input| {
           this.child(
-            div()
-              .flex()
+            h_flex()
+              .h(px(FIND_PANEL_ROW_HEIGHT_PX))
+              .min_h(px(FIND_PANEL_ROW_HEIGHT_PX))
+              .max_h(px(FIND_PANEL_ROW_HEIGHT_PX))
               .items_center()
-              .gap_2()
               .child(
                 div()
                   .flex_1()
                   .min_w(px(0.0))
-                  .h(px(32.0))
+                  .h_full()
                   .flex()
                   .items_center()
-                  .pl_1()
-                  .pr_1()
-                  .border_1()
+                  .pl_2()
+                  .pr_2()
+                  .border_r_1()
                   .border_color(theme.border)
-                  .rounded_md()
                   .bg(theme.background)
                   .child(
                     Input::new(&replace_input)
@@ -5157,11 +5157,12 @@ impl Editor {
                   ),
               )
               .child(
-                div()
+                h_flex()
+                  .flex_none()
                   .w(px(224.0))
-                  .flex()
-                  .items_center()
                   .gap_2()
+                  .items_center()
+                  .px_2()
                   .child(
                     Button::new("editor-replace-current")
                       .icon(UiIconName::Replace)
@@ -10722,6 +10723,7 @@ impl Render for Editor {
       .font_family(cx.theme().mono_font_family.clone())
       .text_size(cx.theme().mono_font_size)
       .relative()
+      .overflow_hidden()
       .child(EditorScrollbarElement::vertical(editor_entity));
 
     div()
