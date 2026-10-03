@@ -389,16 +389,10 @@ impl AgentChatPanel {
     }));
     cx.emit(AgentChatPanelEvent::TurnStarted);
     self.start_turn(cx);
-    let session_id = session
-      .init_info()
-      .session_id
-      .as_deref()
-      .unwrap_or("unknown");
     log::info!(
-      "[agent-turn] started backend={} conversation={} session={} role={} images={} queued={}",
+      "[agent-turn] started backend={} conversation={} role={} images={} queued={}",
       self.backend_kind.0,
       self.current_conv.id,
-      session_id,
       role_label,
       images.len(),
       self.queued_prompts.len(),
