@@ -8,34 +8,42 @@ on:
       - completed
 
 permissions:
-  contents: write
+  contents: read
 
 env:
-  SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
   SENTRY_ORG: joris-gallot
   SENTRY_PROJECT: reviu-desktop
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   prepare-release:
     name: Prepare Release
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.release_meta.outputs.should_release }}
       version: ${{ steps.release_meta.outputs.version }}
       tag: ${{ steps.release_meta.outputs.tag }}
       sentry_release: ${{ steps.release_meta.outputs.sentry_release }}
+      commit_sha: ${{ steps.release_meta.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: main
+          persist-credentials: false
 
       - name: Resolve release metadata from commit subject
         id: release_meta
         shell: bash
         run: |
           set -euo pipefail
+
+          workflow_sha="${{ github.event.workflow_run.head_sha }}"
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "${checked_out_sha}" != "${workflow_sha}" ]]; then
+            echo "Checked out main at ${checked_out_sha}, but completed CI ran for ${workflow_sha}; skipping release."
+            echo "should_release=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
 
           subject="$(git log -1 --pretty=%s)"
           echo "Commit subject: ${subject}"
@@ -47,6 +55,7 @@ jobs:
             echo "version=${version}" >> "${GITHUB_OUTPUT}"
             echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
             echo "sentry_release=reviu@${version}" >> "${GITHUB_OUTPUT}"
+            echo "commit_sha=${checked_out_sha}" >> "${GITHUB_OUTPUT}"
           else
             echo "should_release=false" >> "${GITHUB_OUTPUT}"
           fi
@@ -59,7 +68,7 @@ jobs:
   build-macos:
     name: Build macOS (${{ matrix.arch }})
     needs: prepare-release
-    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    if: ${{ needs.prepare-release.outputs.should_release == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -84,14 +93,24 @@ jobs:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
       SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
-      REVIU_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha }}
+      REVIU_BUILD_COMMIT: ${{ needs.prepare-release.outputs.commit_sha }}
       TARGET: ${{ matrix.target }}
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: main
+          persist-credentials: false
+      - name: Verify checked out release commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "${checked_out_sha}" != "${REVIU_BUILD_COMMIT}" ]]; then
+            echo "Checked out main at ${checked_out_sha}, expected release commit ${REVIU_BUILD_COMMIT}." >&2
+            exit 1
+          fi
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
@@ -100,6 +119,8 @@ jobs:
         run: cargo install cargo-bundle --locked
       - name: Validate macOS release secrets
         shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           required_vars=(
@@ -168,6 +189,8 @@ jobs:
           bash ./desktop/scripts/build-macos-dmg.sh "${VERSION}" "${MANIFEST_ARCH}"
       - name: Upload Sentry debug files
         shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           app_path="desktop/target/${TARGET}/release/bundle/osx/Reviu.app"
@@ -197,7 +220,7 @@ jobs:
   build-linux:
     name: Build Linux (${{ matrix.arch }})
     needs: prepare-release
-    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    if: ${{ needs.prepare-release.outputs.should_release == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -215,14 +238,25 @@ jobs:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
       SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
-      REVIU_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha }}
+      REVIU_BUILD_COMMIT: ${{ needs.prepare-release.outputs.commit_sha }}
       TARGET: ${{ matrix.target }}
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: main
+          persist-credentials: false
+
+      - name: Verify checked out release commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "${checked_out_sha}" != "${REVIU_BUILD_COMMIT}" ]]; then
+            echo "Checked out main at ${checked_out_sha}, expected release commit ${REVIU_BUILD_COMMIT}." >&2
+            exit 1
+          fi
 
       - name: Install system dependencies
         shell: bash
@@ -265,6 +299,8 @@ jobs:
       # The archive ships this binary as is, line tables included.
       - name: Upload Sentry debug files
         shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           binary_path="desktop/target/${TARGET}/release/reviu"
@@ -287,7 +323,7 @@ jobs:
   build-windows:
     name: Build Windows (${{ matrix.arch }})
     needs: prepare-release
-    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    if: ${{ needs.prepare-release.outputs.should_release == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -305,14 +341,25 @@ jobs:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
       SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
-      REVIU_BUILD_COMMIT: ${{ github.event.workflow_run.head_sha }}
+      REVIU_BUILD_COMMIT: ${{ needs.prepare-release.outputs.commit_sha }}
       TARGET: ${{ matrix.target }}
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: main
+          persist-credentials: false
+
+      - name: Verify checked out release commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "${checked_out_sha}" != "${REVIU_BUILD_COMMIT}" ]]; then
+            echo "Checked out main at ${checked_out_sha}, expected release commit ${REVIU_BUILD_COMMIT}." >&2
+            exit 1
+          fi
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -357,6 +404,8 @@ jobs:
       # MSVC keeps the debug info in a .pdb next to the executable.
       - name: Upload Sentry debug files
         shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           release_dir="desktop/target/${TARGET}/release"
@@ -381,16 +430,30 @@ jobs:
   publish:
     name: Publish draft release
     needs: [prepare-release, build-macos, build-linux, build-windows]
-    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    if: ${{ needs.prepare-release.outputs.should_release == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
+      RELEASE_COMMIT: ${{ needs.prepare-release.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: main
+          persist-credentials: false
+
+      - name: Verify checked out release commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "${checked_out_sha}" != "${RELEASE_COMMIT}" ]]; then
+            echo "Checked out main at ${checked_out_sha}, expected release commit ${RELEASE_COMMIT}." >&2
+            exit 1
+          fi
 
       - name: Download all build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -454,7 +517,7 @@ jobs:
 
           gh release create "${TAG}" \
             --draft \
-            --target "${{ github.event.workflow_run.head_sha }}" \
+            --target "${RELEASE_COMMIT}" \
             --title "Reviu ${TAG}" \
             "${notes_args[@]}" \
             "${assets[@]}" \
