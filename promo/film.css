@@ -1,0 +1,673 @@
+@font-face {
+  font-family: "Poppins";
+  font-weight: 500;
+  src: url("../website/node_modules/@fontsource/poppins/files/poppins-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Poppins";
+  font-weight: 600;
+  src: url("../website/node_modules/@fontsource/poppins/files/poppins-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-weight: 400;
+  src: url("../desktop/crates/ui/assets/fonts/inter/Inter-Regular.otf") format("opentype");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-weight: 500;
+  src: url("../desktop/crates/ui/assets/fonts/inter/Inter-Medium.otf") format("opentype");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-weight: 600;
+  src: url("../desktop/crates/ui/assets/fonts/inter/Inter-SemiBold.otf") format("opentype");
+}
+
+@font-face {
+  font-family: "Lilex";
+  font-weight: 400;
+  src: url("../desktop/crates/ui/assets/fonts/lilex/Lilex-Regular.ttf") format("truetype");
+}
+
+/* Colours are sampled from the dark theme of the desktop app. */
+:root {
+  --black: #000000;
+  --panel: #0a0a0a;
+  --border: #262626;
+  --text: #fafafa;
+  --muted: #a3a3a3;
+  --faint: #7e7f85;
+  --blue: #2563eb;
+  --added: #162d16;
+  --added-token: #1b641b;
+  --added-bar: #2eb82e;
+  --removed-token: #7f2323;
+  --green: #4ade80;
+  --violet: #a78bfa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--black);
+  overflow: hidden;
+}
+
+#stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--black);
+  color: var(--text);
+  font-family: "Inter", sans-serif;
+  transform-origin: 0 0;
+}
+
+#world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: 960px 540px;
+}
+
+.scene {
+  position: absolute;
+  width: 1920px;
+  height: 1080px;
+}
+
+.backlight {
+  position: absolute;
+  border-radius: 50%;
+}
+
+svg.icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+
+.caret {
+  position: absolute;
+  border-radius: 2px;
+  background: var(--blue);
+  box-shadow:
+    0 0 18px rgba(37, 99, 235, 0.95),
+    0 0 56px rgba(37, 99, 235, 0.55);
+}
+
+.typed {
+  display: inline-block;
+  white-space: pre;
+}
+
+/* Opening */
+
+#mask {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+}
+
+#openingDetail {
+  position: absolute;
+  left: 126px;
+  top: 852px;
+  font: 500 30px/36px "Inter";
+  letter-spacing: -0.01em;
+  color: var(--muted);
+}
+
+/* Titles */
+
+.title {
+  position: absolute;
+  left: 110px;
+  top: 372px;
+}
+
+.title .line {
+  position: relative;
+  height: 140px;
+  font: 600 128px/140px "Poppins";
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+}
+
+.title .caret {
+  top: 18px;
+  width: 8px;
+  height: 104px;
+}
+
+.title .detail {
+  margin-top: 34px;
+  font: 500 30px/36px "Inter";
+  letter-spacing: -0.01em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.title .detail .step {
+  color: #5c5c5c;
+}
+
+.title .detail .tag {
+  display: inline-block;
+  margin-left: 14px;
+  padding: 2px 12px;
+  border: 1px solid rgba(37, 99, 235, 0.55);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.16);
+  color: #9dbbfb;
+  font: 600 20px/30px "Inter";
+  letter-spacing: 0;
+  vertical-align: 3px;
+}
+
+/* Diff pane */
+
+#pane {
+  position: absolute;
+  overflow: hidden;
+}
+
+#wall {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  font: 400 26px/44px "Lilex", monospace;
+}
+
+.column {
+  position: absolute;
+  top: 0;
+  width: 1080px;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.row {
+  position: relative;
+  height: 44px;
+  white-space: pre;
+}
+
+.row .bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 5px;
+  height: 44px;
+  background: var(--added-bar);
+}
+
+.row .number {
+  display: inline-block;
+  width: 88px;
+  text-align: right;
+  color: #878787;
+}
+
+.row .code {
+  display: inline-block;
+  height: 44px;
+  margin-left: 28px;
+  vertical-align: top;
+}
+
+.t-kw { color: #69a1d8; }
+.t-ctl { color: #c074cd; }
+.t-fn { color: #e2d388; }
+.t-type { color: #63cab3; }
+.t-str { color: #d19971; }
+.t-num { color: #afcaa0; }
+.t-var { color: #9cc0f2; }
+.t-pun { color: #d4d4d4; }
+
+.writer {
+  position: absolute;
+  width: 13px;
+  height: 34px;
+  margin-top: 5px;
+  border-radius: 2px;
+  background: var(--blue);
+  box-shadow: 0 0 22px rgba(37, 99, 235, 0.9);
+}
+
+#paneHeader {
+  position: absolute;
+  left: 0;
+  top: -3px;
+  width: 100%;
+  height: 59px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 3px 22px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font: 500 21px/1 "Inter";
+}
+
+#paneEdge {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border);
+}
+
+#paneHeader .file-type {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  background: #3178c6;
+  font: 600 12px/1 "Inter";
+  color: #ffffff;
+}
+
+#paneHeader .stat {
+  margin-left: auto;
+  font: 400 20px/1 "Lilex";
+  color: var(--green);
+}
+
+#staged {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 9px;
+  border-radius: 999px;
+  background: rgba(74, 222, 128, 0.13);
+  color: var(--green);
+  font: 600 18px/1 "Inter";
+}
+
+#cursorLine {
+  position: absolute;
+  left: 0;
+  width: 1080px;
+  height: 44px;
+  background: rgba(37, 99, 235, 0.3);
+  box-shadow: inset 5px 0 0 var(--blue);
+}
+
+#thread {
+  position: relative;
+  overflow: hidden;
+}
+
+#comment {
+  position: absolute;
+  left: 116px;
+  top: 12px;
+  width: 924px;
+  height: 172px;
+  padding: 20px 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  font-family: "Inter";
+  white-space: normal;
+  transform-origin: 40px 0;
+}
+
+#comment .author {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 30px;
+  font: 600 21px/30px "Inter";
+}
+
+#comment .avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #60a5fa, #2563eb 60%, #1e3a8a);
+}
+
+#comment .where {
+  font: 400 19px/30px "Inter";
+  color: var(--faint);
+}
+
+#comment .body {
+  position: relative;
+  height: 34px;
+  margin-top: 12px;
+  font: 500 25px/34px "Inter";
+  letter-spacing: -0.005em;
+}
+
+#comment .body .caret {
+  top: 2px;
+  width: 3px;
+  height: 30px;
+  box-shadow: 0 0 12px rgba(37, 99, 235, 0.9);
+}
+
+#send {
+  position: absolute;
+  right: 22px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font: 600 19px/1 "Inter";
+  transform-origin: 100% 50%;
+}
+
+#send .keys {
+  font: 500 17px/1 "Inter";
+  opacity: 0.55;
+}
+
+.rewrite {
+  position: relative;
+  display: inline-block;
+  height: 44px;
+  vertical-align: top;
+}
+
+.rewrite .after {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+/* Graph */
+
+#graph {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+}
+
+.commit {
+  position: absolute;
+  left: 1076px;
+  width: 800px;
+}
+
+.commit .message {
+  font: 500 34px/42px "Inter";
+  letter-spacing: -0.012em;
+  white-space: nowrap;
+}
+
+.commit .meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6px;
+  font: 400 22px/30px "Lilex";
+  color: var(--faint);
+}
+
+.chip {
+  padding: 0 11px;
+  border: 1px solid #3a3a3a;
+  border-radius: 7px;
+  color: #d4d4d4;
+  font: 500 19px/28px "Inter";
+}
+
+.chip.feature {
+  border-color: rgba(37, 99, 235, 0.6);
+  background: rgba(37, 99, 235, 0.18);
+  color: #9dbbfb;
+}
+
+/* Pull request */
+
+#pullRequest {
+  position: absolute;
+  left: 760px;
+  top: 250px;
+  width: 1060px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+}
+
+#pullRequest .head {
+  padding: 34px 38px 30px;
+}
+
+#pullRequest .status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+#pill {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 16px 0 12px;
+  border: 1px solid;
+  border-radius: 999px;
+  font: 600 21px/1 "Inter";
+}
+
+#pullRequest .pr-number {
+  font: 400 23px/1 "Lilex";
+  color: var(--faint);
+}
+
+#pullRequest .pr-title {
+  margin-top: 20px;
+  font: 600 38px/46px "Inter";
+  letter-spacing: -0.02em;
+}
+
+#pullRequest .branches {
+  margin-top: 8px;
+  font: 400 21px/30px "Lilex";
+  color: var(--faint);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: 80px;
+  padding: 0 38px;
+  border-top: 1px solid var(--border);
+  font: 500 26px/1 "Inter";
+  letter-spacing: -0.01em;
+}
+
+.check .mark {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: none;
+}
+
+.check .mark > * {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.check .spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid #333333;
+  border-top-color: var(--muted);
+  border-radius: 50%;
+}
+
+.check .passed {
+  color: var(--green);
+}
+
+.check .outcome {
+  margin-left: auto;
+  font: 400 22px/1 "Inter";
+  color: var(--faint);
+}
+
+#pullRequest .foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 24px 38px 26px;
+  border-top: 1px solid var(--border);
+}
+
+#merge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 300px;
+  height: 56px;
+  border-radius: 11px;
+  font: 600 23px/1 "Inter";
+  letter-spacing: -0.01em;
+  color: var(--panel);
+}
+
+#mergeRing {
+  position: absolute;
+  border: 2px solid var(--violet);
+  border-radius: 14px;
+}
+
+/* Travelling commit */
+
+#tether {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+}
+
+#dot {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow:
+    0 0 20px rgba(37, 99, 235, 0.9),
+    0 0 70px rgba(37, 99, 235, 0.6);
+}
+
+/* Ending */
+
+#wipe {
+  position: absolute;
+  background: var(--blue);
+}
+
+#logo {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+}
+
+#glow {
+  position: absolute;
+  left: 460px;
+  top: 0;
+  width: 1000px;
+  height: 1000px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(37, 99, 235, 0.42), rgba(37, 99, 235, 0.12) 55%, rgba(37, 99, 235, 0));
+}
+
+#tagline {
+  position: absolute;
+  left: 0;
+  top: 606px;
+  width: 1920px;
+  text-align: center;
+  font: 500 43px/56px "Poppins";
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+#tagline .holder {
+  position: relative;
+  display: inline-block;
+}
+
+#tagline .caret {
+  top: 6px;
+  width: 4px;
+  height: 44px;
+}
+
+#address {
+  position: absolute;
+  left: 0;
+  top: 708px;
+  width: 1920px;
+  text-align: center;
+  font: 500 30px/40px "Poppins";
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
+/* Tools */
+
+#timecode {
+  position: absolute;
+  right: 24px;
+  top: 18px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #000000;
+  font: 400 44px/52px "Lilex";
+}
+
+#probe {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 4px;
+  background: #ff00ff;
+}
+
+#player {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  background: #1c1c1c;
+}
+
+#player .played {
+  height: 100%;
+  background: var(--blue);
+}
