@@ -1462,6 +1462,27 @@ fn agent_error_hints_name_the_classes_users_hit() {
 }
 
 #[test]
+fn retry_hints_classify_provider_limits() {
+  let quota =
+    crate::events::retry_hint_from_error("insufficient_quota: out of credits", "").expect("quota");
+  assert_eq!(quota.reason, crate::events::RetryReason::QuotaExhausted);
+  assert_eq!(quota.retry_after, None);
+
+  let rate = crate::events::retry_hint_from_error(
+    "Provider error: {\"blockedReason\":\"rate_limited\",\"retryAfterMs\":120000}",
+    "HTTP 429 Too Many Requests",
+  )
+  .expect("rate limit");
+  assert_eq!(rate.reason, crate::events::RetryReason::RateLimited);
+  assert_eq!(rate.retry_after, Some(std::time::Duration::from_secs(120)));
+
+  assert_eq!(
+    crate::events::retry_hint_from_error("connection reset by peer", ""),
+    None
+  );
+}
+
+#[test]
 fn auth_errors_surface_agent_login() {
   assert!(is_agent_auth_error(
     "Failed to authenticate: OAuth session expired and could not be refreshed"

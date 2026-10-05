@@ -934,6 +934,8 @@ pub struct AgentChatPanel {
   /// Messages typed during a turn, drained oldest-first when it ends cleanly.
   queued_prompts: Vec<String>,
   queued_prompt_images: Vec<Vec<std::sync::Arc<gpui::Image>>>,
+  retry_generation: u64,
+  _retry_task: Option<Task<()>>,
   composer_history_index: Option<usize>,
   composer_history_draft: Option<String>,
   /// Whether the connected agent accepts image blocks in prompts.
@@ -1061,6 +1063,8 @@ impl AgentChatPanel {
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
       queued_prompt_images: Vec::new(),
+      retry_generation: 0,
+      _retry_task: None,
       composer_history_index: None,
       composer_history_draft: None,
       supports_images: false,
@@ -1354,6 +1358,7 @@ impl AgentChatPanel {
     self.pending_thought.clear();
     self.reset_composer_history();
     self.clear_runway();
+    self.cancel_scheduled_retry();
     self.sync_list_count();
     // The splice above may keep heights measured on the previous
     // conversation's rows; they must not stick to the new transcript.
@@ -1478,6 +1483,7 @@ impl AgentChatPanel {
   pub fn queue_prompt_for_test(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
     self.queued_prompts.push(text.into());
     self.queued_prompt_images.push(Vec::new());
+    self.cancel_scheduled_retry();
     cx.notify();
   }
 
@@ -1697,6 +1703,8 @@ impl AgentChatPanel {
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
       queued_prompt_images: Vec::new(),
+      retry_generation: 0,
+      _retry_task: None,
       composer_history_index: None,
       composer_history_draft: None,
       supports_images: false,
@@ -2470,6 +2478,7 @@ impl AgentChatPanel {
   }
 
   fn dispatch_next_queued_prompt(&mut self, cx: &mut Context<Self>) {
+    self.cancel_scheduled_retry();
     if self.queued_prompts.is_empty() {
       return;
     }
@@ -2484,6 +2493,55 @@ impl AgentChatPanel {
       self.queued_prompts.insert(0, next);
       self.queued_prompt_images.insert(0, images);
     }
+  }
+
+  fn cancel_scheduled_retry(&mut self) {
+    self.retry_generation = self.retry_generation.wrapping_add(1);
+    self._retry_task = None;
+  }
+
+  fn schedule_retry_prompt(
+    &mut self,
+    text: String,
+    image_count: usize,
+    delay: std::time::Duration,
+    cx: &mut Context<Self>,
+  ) {
+    self.retry_generation = self.retry_generation.wrapping_add(1);
+    let generation = self.retry_generation;
+    let task = cx.spawn(async move |this, cx| {
+      cx.background_executor().timer(delay).await;
+      let _ = this.update(cx, |panel, cx| {
+        panel._retry_task = None;
+        if panel.retry_generation != generation || panel.in_flight {
+          return;
+        }
+        let next_matches = panel
+          .queued_prompts
+          .first()
+          .is_some_and(|queued| queued == &text)
+          && panel.queued_prompt_images.first().map_or(0, Vec::len) == image_count;
+        if !next_matches {
+          return;
+        }
+        if matches!(panel.status, Status::Ready) && panel.session.is_some() {
+          panel.dispatch_next_queued_prompt(cx);
+          let still_queued = !panel.in_flight
+            && panel
+              .queued_prompts
+              .first()
+              .is_some_and(|queued| queued == &text)
+            && panel.queued_prompt_images.first().map_or(0, Vec::len) == image_count;
+          if still_queued {
+            panel.schedule_retry_prompt(text, image_count, delay, cx);
+          }
+        } else {
+          panel.schedule_retry_prompt(text, image_count, delay, cx);
+        }
+        cx.notify();
+      });
+    });
+    self._retry_task = Some(task);
   }
 
   /// Reapply the last model the user picked for this backend, if the agent still offers it.
@@ -2815,6 +2873,7 @@ impl AgentChatPanel {
       let images = std::mem::take(&mut self.staged_images);
       self.queued_prompts.push(text);
       self.queued_prompt_images.push(images);
+      self.cancel_scheduled_retry();
       self
         .input
         .update(cx, |state, cx| state.set_value("", window, cx));
@@ -2986,6 +3045,7 @@ impl AgentChatPanel {
     if ix >= self.queued_prompts.len() {
       return;
     }
+    self.cancel_scheduled_retry();
     // A non-empty draft swaps into the queue slot so nothing is lost.
     let draft = self.input.read(cx).value().trim().to_string();
     let draft_images = std::mem::take(&mut self.staged_images);
@@ -3014,6 +3074,7 @@ impl AgentChatPanel {
 
   fn delete_queued(&mut self, ix: usize, cx: &mut Context<Self>) {
     if ix < self.queued_prompts.len() {
+      self.cancel_scheduled_retry();
       self.queued_prompts.remove(ix);
       if ix < self.queued_prompt_images.len() {
         self.queued_prompt_images.remove(ix);
@@ -3027,6 +3088,7 @@ impl AgentChatPanel {
     if ix >= self.queued_prompts.len() {
       return;
     }
+    self.cancel_scheduled_retry();
     let text = self.queued_prompts.remove(ix);
     let images = if ix < self.queued_prompt_images.len() {
       self.queued_prompt_images.remove(ix)

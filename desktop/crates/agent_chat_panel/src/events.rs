@@ -31,6 +31,92 @@ fn turn_produced_reply(items: &[ChatItem]) -> bool {
   true
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetryReason {
+  QuotaExhausted,
+  RateLimited,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RetryHint {
+  pub(crate) reason: RetryReason,
+  pub(crate) retry_after: Option<std::time::Duration>,
+}
+
+impl RetryHint {
+  fn delay(self) -> std::time::Duration {
+    self.retry_after.unwrap_or_else(|| match self.reason {
+      RetryReason::QuotaExhausted => std::time::Duration::from_secs(15 * 60),
+      RetryReason::RateLimited => std::time::Duration::from_secs(60),
+    })
+  }
+}
+
+pub(crate) fn retry_hint_from_error(raw: &str, human: &str) -> Option<RetryHint> {
+  let combined = format!("{raw}\n{human}").to_ascii_lowercase();
+  let has = |needles: &[&str]| needles.iter().any(|needle| combined.contains(needle));
+  let reason = if has(&["rate limit", "too many requests", "429"]) {
+    RetryReason::RateLimited
+  } else if has(&[
+    "usage limit",
+    "quota",
+    "credit",
+    "billing",
+    "insufficient",
+    "payment",
+  ]) {
+    RetryReason::QuotaExhausted
+  } else {
+    return None;
+  };
+
+  Some(RetryHint {
+    reason,
+    retry_after: retry_after_from_error_text(raw),
+  })
+}
+
+fn retry_after_from_error_text(raw: &str) -> Option<std::time::Duration> {
+  let json_start = raw.find('{')?;
+  let value = serde_json::from_str::<serde_json::Value>(&raw[json_start..]).ok()?;
+  let millis = find_json_u64(
+    &value,
+    &["retryAfterMs", "retry_after_ms", "retryAfterMillis"],
+  )?;
+  if millis == 0 {
+    return None;
+  }
+  Some(std::time::Duration::from_millis(
+    millis.min(24 * 60 * 60 * 1000),
+  ))
+}
+
+fn find_json_u64(value: &serde_json::Value, keys: &[&str]) -> Option<u64> {
+  match value {
+    serde_json::Value::Object(map) => {
+      for key in keys {
+        if let Some(value) = map.get(*key).and_then(serde_json::Value::as_u64) {
+          return Some(value);
+        }
+      }
+      map.values().find_map(|value| find_json_u64(value, keys))
+    }
+    serde_json::Value::Array(values) => values.iter().find_map(|value| find_json_u64(value, keys)),
+    _ => None,
+  }
+}
+
+fn format_retry_delay(duration: std::time::Duration) -> String {
+  let secs = duration.as_secs().max(1);
+  if secs < 60 {
+    format!("{secs}s")
+  } else if secs < 60 * 60 {
+    format!("{}m", secs.div_ceil(60))
+  } else {
+    format!("{}h", secs.div_ceil(60 * 60))
+  }
+}
+
 /// Folds an adjacent same-message text chunk into `prev` so a burst costs
 /// one markdown push_str instead of one per chunk.
 fn merge_into_last(prev: Option<&mut AgentEvent>, next: &AgentEvent) -> bool {
@@ -321,6 +407,73 @@ impl AgentChatPanel {
     self.flush_pending_agent();
   }
 
+  fn current_turn_had_tool_activity(&self) -> bool {
+    for item in self.items.iter().rev() {
+      if let ChatItem::Message(message) = item
+        && matches!(message.role, ChatRole::User | ChatRole::ReviewExport)
+      {
+        return false;
+      }
+      if matches!(
+        item,
+        ChatItem::Tool(_) | ChatItem::Permission(_) | ChatItem::TurnSummary(_)
+      ) {
+        return true;
+      }
+    }
+    false
+  }
+
+  fn last_user_prompt_for_retry(&self) -> Option<(String, Vec<std::sync::Arc<gpui::Image>>)> {
+    self.items.iter().rev().find_map(|item| match item {
+      ChatItem::Message(message) if message.role == ChatRole::User => {
+        Some((message.text.to_string(), message.image_data.clone()))
+      }
+      _ => None,
+    })
+  }
+
+  fn prepare_retry_after_failure(
+    &mut self,
+    raw: &str,
+    human: &str,
+    cx: &mut Context<Self>,
+  ) -> Option<String> {
+    let hint = retry_hint_from_error(raw, human)?;
+    self.prepare_retry_after_hint(hint, cx)
+  }
+
+  fn prepare_retry_after_hint(
+    &mut self,
+    hint: RetryHint,
+    cx: &mut Context<Self>,
+  ) -> Option<String> {
+    if self.current_turn_had_tool_activity() {
+      return Some(
+        "This turn already ran tools, so Reviu will not retry it automatically. Retry manually when the provider is available."
+          .to_string(),
+      );
+    }
+    self.session.as_ref()?;
+    let (text, images) = self.last_user_prompt_for_retry()?;
+    let image_count = images.len();
+    let already_next = self
+      .queued_prompts
+      .first()
+      .is_some_and(|queued| queued == &text)
+      && self.queued_prompt_images.first().map_or(0, Vec::len) == image_count;
+    if !already_next {
+      self.queued_prompts.insert(0, text.clone());
+      self.queued_prompt_images.insert(0, images);
+    }
+    let delay = hint.delay();
+    self.schedule_retry_prompt(text, image_count, delay, cx);
+    Some(format!(
+      "Queued to retry automatically in {}.",
+      format_retry_delay(delay)
+    ))
+  }
+
   pub(crate) fn dispatch_prompt(&mut self, text: String, cx: &mut Context<Self>) -> bool {
     self.dispatch_prompt_with_role(text, ChatRole::User, cx)
   }
@@ -559,13 +712,24 @@ impl AgentChatPanel {
               if !turn_produced_reply(&panel.items) {
                 let message = "The agent ended the turn without a reply. \
 Its provider may have refused it (credits, usage limit) without reporting an error.";
+                let retry_note = panel.prepare_retry_after_hint(
+                  RetryHint {
+                    reason: RetryReason::QuotaExhausted,
+                    retry_after: None,
+                  },
+                  cx,
+                );
+                let note_suffix = retry_note
+                  .as_ref()
+                  .map(|note| format!("\n{note}"))
+                  .unwrap_or_default();
                 panel.last_turn_failed = true;
                 cx.emit(AgentChatPanelEvent::TurnFailed {
                   message: message.to_string(),
                 });
                 panel.items.push(ChatItem::Message(ChatMessage {
                   role: ChatRole::System,
-                  text: format!("[error] {message}").into(),
+                  text: format!("[error] {message}{note_suffix}").into(),
                   images: 0,
                   image_data: Vec::new(),
                 }));
@@ -591,10 +755,15 @@ Its provider may have refused it (credits, usage limit) without reporting an err
                 .or_else(|| agent_error_hint(&raw))
                 .map(str::to_string)
                 .unwrap_or_else(|| truncate_chars(&human, 200));
+              let retry_note = panel.prepare_retry_after_failure(&raw, &human, cx);
+              let note_suffix = retry_note
+                .as_ref()
+                .map(|note| format!("\n{note}"))
+                .unwrap_or_default();
               let text = if short == human {
-                format!("[error] {human}")
+                format!("[error] {human}{note_suffix}")
               } else {
-                format!("[error] {short}\n{human}")
+                format!("[error] {short}\n{human}{note_suffix}")
               };
               panel.last_turn_failed = true;
               cx.emit(AgentChatPanelEvent::TurnFailed {
@@ -625,6 +794,13 @@ Its provider may have refused it (credits, usage limit) without reporting an err
                 panel.items.push(ChatItem::Message(ChatMessage {
                   role: ChatRole::System,
                   text: text.into(),
+                  images: 0,
+                  image_data: Vec::new(),
+                }));
+              } else if let Some(note) = retry_note {
+                panel.items.push(ChatItem::Message(ChatMessage {
+                  role: ChatRole::System,
+                  text: format!("[info] {note}").into(),
                   images: 0,
                   image_data: Vec::new(),
                 }));

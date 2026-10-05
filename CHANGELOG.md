@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.6.0
 
+### Agent Credit Retry
+
+When a provider refuses a turn because credits, usage limits, or rate limits are exhausted, Reviu now keeps safe prompts queued and retries them automatically after a delay instead of losing the message.
+
 ### Image-Only Agent Messages
 
 Attach a screenshot or image to the agent composer and send it without typing a caption. Image-only messages now display as image cards without an empty text bubble.
