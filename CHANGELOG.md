@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.6.0
 
+### Recent Tab Switcher
+
+Press `ctrl-tab` to jump back to the tab you were on last, or keep `ctrl` held to see the open tabs in most-recently-used order and step through them with `tab` and `shift-tab`. Releasing `ctrl` opens the selected tab. `cmd-shift-]` and `cmd-shift-[` still walk the tabs in tab bar order.
+
 ### Agent Credit Retry
 
 When a provider refuses a turn because credits, usage limits, or rate limits are exhausted, Reviu now keeps safe prompts queued and retries them automatically after a delay instead of losing the message.

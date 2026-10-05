@@ -7,6 +7,8 @@ actions!(
     CloseCenterTab,
     NextCenterTab,
     PreviousCenterTab,
+    ToggleTabSwitcher,
+    ToggleTabSwitcherBackward,
     MoveCenterTabLeft,
     MoveCenterTabRight,
     SplitPaneRight,

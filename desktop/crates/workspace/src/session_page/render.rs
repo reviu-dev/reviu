@@ -16,6 +16,7 @@ use gpui_component::{
 };
 
 const CENTER_NEW_MENU_MAX_HEIGHT_PX: f32 = 360.0;
+const TAB_SWITCHER_TOP_OFFSET_PX: f32 = 96.0;
 const CENTER_HISTORY_EMPTY_HEIGHT_PX: f32 = 96.0;
 const CENTER_HISTORY_MAX_VISIBLE_ROWS: usize = 7;
 const CENTER_HISTORY_ROW_HEIGHT_PX: f32 = 48.0;
@@ -422,15 +423,11 @@ impl SessionPage {
       .unwrap_or_else(|| agent_chat_panel::backend_icon(&agent_chat_panel::default_agent_id()))
   }
 
-  fn center_file_tab_icon(&self, path: &Path, cx: &App) -> AnyElement {
-    let theme = cx.theme().clone();
-    file_icon_path_for_path_with_theme(path, &theme)
-      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+  fn center_file_tab_icon(&self, path: &Path, cx: &App) -> CenterTabIcon {
+    file_icon_path_for_path_with_theme(path, cx.theme())
+      .map(CenterTabIcon::FileType)
       .unwrap_or_else(|| {
-        gpui_component::Icon::new(gpui_component::IconName::File)
-          .size_3()
-          .text_color(theme.muted_foreground)
-          .into_any_element()
+        CenterTabIcon::glyph(gpui_component::Icon::new(gpui_component::IconName::File))
       })
   }
 
@@ -469,7 +466,7 @@ impl SessionPage {
       .filter(|layout| layout.surface_count() > 1)
   }
 
-  fn center_tab_label_source(&self, tab: &CenterTab) -> CenterTab {
+  pub(super) fn center_tab_label_source(&self, tab: &CenterTab) -> CenterTab {
     self
       .center_tab_group_layout(tab)
       .map(|layout| layout.active_tab().clone())
@@ -577,7 +574,7 @@ impl SessionPage {
       .into_any_element()
   }
 
-  fn center_tab_label(&self, tab: &CenterTab, cx: &mut Context<Self>) -> Option<String> {
+  pub(super) fn center_tab_label(&self, tab: &CenterTab, cx: &mut Context<Self>) -> Option<String> {
     match tab.kind {
       CenterTabKind::Chat => Some(self.center_chat_tab_label(tab, cx)),
       CenterTabKind::File if tab.is_untitled() => {
@@ -610,36 +607,23 @@ impl SessionPage {
   }
 
   fn center_tab_icon(&self, tab: &CenterTab, cx: &mut Context<Self>) -> Option<AnyElement> {
-    let theme = cx.theme().clone();
+    self
+      .center_tab_icon_kind(tab, cx)
+      .map(|icon| icon.render(cx))
+  }
+
+  pub(super) fn center_tab_icon_kind(&self, tab: &CenterTab, cx: &App) -> Option<CenterTabIcon> {
+    let glyph = |name: UiIconName| CenterTabIcon::glyph(gpui_component::Icon::new(name));
     Some(match tab.kind {
-      CenterTabKind::Chat => self
-        .center_chat_tab_icon(tab, cx)
-        .size_3()
-        .text_color(theme.muted_foreground)
-        .into_any_element(),
+      CenterTabKind::Chat => CenterTabIcon::glyph(self.center_chat_tab_icon(tab, cx)),
       CenterTabKind::File if tab.is_untitled() => {
-        gpui_component::Icon::new(gpui_component::IconName::File)
-          .size_3()
-          .text_color(theme.muted_foreground)
-          .into_any_element()
+        CenterTabIcon::glyph(gpui_component::Icon::new(gpui_component::IconName::File))
       }
       CenterTabKind::File | CenterTabKind::Diff => self.center_file_tab_icon(tab.path()?, cx),
-      CenterTabKind::InteractiveRebase => gpui_component::Icon::new(UiIconName::GitMerge)
-        .size_3()
-        .text_color(theme.muted_foreground)
-        .into_any_element(),
-      CenterTabKind::ProjectSearch => gpui_component::Icon::new(UiIconName::Search)
-        .size_3()
-        .text_color(theme.muted_foreground)
-        .into_any_element(),
-      CenterTabKind::Terminal => gpui_component::Icon::new(UiIconName::Terminal)
-        .size_3()
-        .text_color(theme.muted_foreground)
-        .into_any_element(),
-      CenterTabKind::PaneLauncher => gpui_component::Icon::new(UiIconName::Maximize2)
-        .size_3()
-        .text_color(theme.muted_foreground)
-        .into_any_element(),
+      CenterTabKind::InteractiveRebase => glyph(UiIconName::GitMerge),
+      CenterTabKind::ProjectSearch => glyph(UiIconName::Search),
+      CenterTabKind::Terminal => glyph(UiIconName::Terminal),
+      CenterTabKind::PaneLauncher => glyph(UiIconName::Maximize2),
     })
   }
 
@@ -2425,7 +2409,7 @@ impl SessionPage {
         div()
           .debug_selector(|| "session-page-editor-title-icon".to_string())
           .flex_shrink_0()
-          .child(self.center_file_tab_icon(path, cx)),
+          .child(self.center_file_tab_icon(path, cx).render(cx)),
       )
       .child(
         div()
@@ -3152,6 +3136,8 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::close_active_center_tab_action))
       .on_action(cx.listener(Self::activate_next_center_tab_action))
       .on_action(cx.listener(Self::activate_previous_center_tab_action))
+      .on_action(cx.listener(Self::toggle_tab_switcher_action))
+      .on_action(cx.listener(Self::toggle_tab_switcher_backward_action))
       .on_action(cx.listener(Self::move_center_tab_left_action))
       .on_action(cx.listener(Self::move_center_tab_right_action))
       .on_action(cx.listener(Self::split_pane_right_action))
@@ -3260,6 +3246,18 @@ impl Render for SessionPage {
           .child(dock)
           .into_any_element()
       })
+      .children(self.tab_switcher.as_ref().map(|(switcher, _)| {
+        gpui::deferred(
+          h_flex()
+            .absolute()
+            .top(px(TAB_SWITCHER_TOP_OFFSET_PX))
+            .left_0()
+            .right_0()
+            .justify_center()
+            .child(switcher.clone()),
+        )
+        .with_priority(1)
+      }))
   }
 }
 

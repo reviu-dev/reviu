@@ -80,6 +80,8 @@ pub enum ShortcutId {
   ShowCommandPalette,
   NextCenterTab,
   PreviousCenterTab,
+  ToggleTabSwitcher,
+  ToggleTabSwitcherBackward,
   MoveCenterTabLeft,
   MoveCenterTabRight,
   MoveCenterPaneLeft,
@@ -137,6 +139,8 @@ impl ShortcutId {
       ShortcutId::ShowCommandPalette => "show_command_palette",
       ShortcutId::NextCenterTab => "next_center_tab",
       ShortcutId::PreviousCenterTab => "previous_center_tab",
+      ShortcutId::ToggleTabSwitcher => "toggle_tab_switcher",
+      ShortcutId::ToggleTabSwitcherBackward => "toggle_tab_switcher_backward",
       ShortcutId::MoveCenterTabLeft => "move_center_tab_left",
       ShortcutId::MoveCenterTabRight => "move_center_tab_right",
       ShortcutId::MoveCenterPaneLeft => "move_center_pane_left",
@@ -194,6 +198,8 @@ impl ShortcutId {
       "show_command_palette" => Some(ShortcutId::ShowCommandPalette),
       "next_center_tab" => Some(ShortcutId::NextCenterTab),
       "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
+      "toggle_tab_switcher" => Some(ShortcutId::ToggleTabSwitcher),
+      "toggle_tab_switcher_backward" => Some(ShortcutId::ToggleTabSwitcherBackward),
       "move_center_tab_left" => Some(ShortcutId::MoveCenterTabLeft),
       "move_center_tab_right" => Some(ShortcutId::MoveCenterTabRight),
       "move_center_pane_left" => Some(ShortcutId::MoveCenterPaneLeft),
@@ -269,7 +275,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 52] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 54] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -299,6 +305,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 52] = [
     scope_label: "Workspace",
     category: ShortcutCategory::Core,
     keystroke: "cmd-shift-[",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleTabSwitcher,
+    title: "Switch to Recent Tab",
+    description: "Cycle through center tabs, most recently used first.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "ctrl-tab",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleTabSwitcherBackward,
+    title: "Switch to Recent Tab (Backward)",
+    description: "Cycle through center tabs, least recently used first.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "ctrl-shift-tab",
     context: CENTER_TAB_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -949,6 +977,12 @@ impl ShortcutDefinition {
       ShortcutId::PreviousCenterTab => {
         KeyBinding::new(keystroke, PreviousCenterTab, Some(&context))
       }
+      ShortcutId::ToggleTabSwitcher => {
+        KeyBinding::new(keystroke, crate::ToggleTabSwitcher, Some(&context))
+      }
+      ShortcutId::ToggleTabSwitcherBackward => {
+        KeyBinding::new(keystroke, crate::ToggleTabSwitcherBackward, Some(&context))
+      }
       ShortcutId::MoveCenterTabLeft => {
         KeyBinding::new(keystroke, crate::MoveCenterTabLeft, Some(&context))
       }
@@ -1055,6 +1089,8 @@ impl ShortcutDefinition {
       ShortcutId::ShowCommandPalette
         | ShortcutId::NextCenterTab
         | ShortcutId::PreviousCenterTab
+        | ShortcutId::ToggleTabSwitcher
+        | ShortcutId::ToggleTabSwitcherBackward
         | ShortcutId::MoveCenterTabLeft
         | ShortcutId::MoveCenterTabRight
         | ShortcutId::MoveCenterPaneLeft
@@ -1455,7 +1491,27 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("delete", DeleteSelectedFileItem, Some(FILES_TREE_CONTEXT)),
   ]);
   bindings.extend(terminal_key_bindings());
+  bindings.extend(tab_switcher_key_bindings());
   bindings
+}
+
+pub(crate) fn tab_switcher_key_bindings() -> Vec<KeyBinding> {
+  use crate::session_page::tab_switcher::{
+    Confirm, Dismiss, SelectNext, SelectPrevious, TAB_SWITCHER_CONTEXT,
+  };
+  let context = Some(TAB_SWITCHER_CONTEXT);
+  // The switcher is driven with the opening modifier still held, so the
+  // navigation keys arrive with `ctrl` attached.
+  vec![
+    KeyBinding::new("down", SelectNext, context),
+    KeyBinding::new("ctrl-down", SelectNext, context),
+    KeyBinding::new("up", SelectPrevious, context),
+    KeyBinding::new("ctrl-up", SelectPrevious, context),
+    KeyBinding::new("enter", Confirm, context),
+    KeyBinding::new("ctrl-enter", Confirm, context),
+    KeyBinding::new("escape", Dismiss, context),
+    KeyBinding::new("ctrl-escape", Dismiss, context),
+  ]
 }
 
 fn terminal_key_bindings() -> Vec<KeyBinding> {
@@ -1691,6 +1747,8 @@ pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action
     ShortcutId::ShowCommandPalette => f(&ShowCommandPalette),
     ShortcutId::NextCenterTab => f(&NextCenterTab),
     ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
+    ShortcutId::ToggleTabSwitcher => f(&crate::ToggleTabSwitcher),
+    ShortcutId::ToggleTabSwitcherBackward => f(&crate::ToggleTabSwitcherBackward),
     ShortcutId::MoveCenterTabLeft => f(&crate::MoveCenterTabLeft),
     ShortcutId::MoveCenterTabRight => f(&crate::MoveCenterTabRight),
     ShortcutId::MoveCenterPaneLeft => f(&MoveCenterPaneLeft),

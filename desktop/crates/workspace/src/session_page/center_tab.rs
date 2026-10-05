@@ -1,5 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use gpui::{AnyElement, App, IntoElement as _, SharedString, Styled as _, img, px};
+use gpui_component::ActiveTheme as _;
+use ui::FILE_ICON_SIZE_PX;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum CenterTabKind {
   Chat,
@@ -21,6 +25,32 @@ impl CenterTabKind {
       Self::ProjectSearch => "project_search",
       Self::Terminal => "terminal",
       Self::PaneLauncher => "pane_launcher",
+    }
+  }
+}
+
+#[derive(Clone)]
+pub(super) enum CenterTabIcon {
+  FileType(SharedString),
+  Glyph(Box<gpui_component::Icon>),
+}
+
+impl CenterTabIcon {
+  pub(super) fn glyph(icon: impl Into<gpui_component::Icon>) -> Self {
+    Self::Glyph(Box::new(icon.into()))
+  }
+
+  pub(super) fn render(&self, cx: &App) -> AnyElement {
+    match self {
+      Self::FileType(path) => img(path.clone())
+        .size(px(FILE_ICON_SIZE_PX))
+        .into_any_element(),
+      Self::Glyph(icon) => icon
+        .as_ref()
+        .clone()
+        .size_3()
+        .text_color(cx.theme().muted_foreground)
+        .into_any_element(),
     }
   }
 }

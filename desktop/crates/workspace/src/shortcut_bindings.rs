@@ -168,8 +168,6 @@ pub(super) const RESERVED_EDITOR_SHORTCUTS: &[(&str, &str)] = &[
   ("cmd-alt-]", "Unfold"),
   ("cmd-\\", "Split Editor"),
   ("cmd-shift-\\", "Matching Bracket"),
-  ("ctrl-tab", "Next Recent Tab"),
-  ("ctrl-shift-tab", "Previous Recent Tab"),
   ("ctrl-`", "Toggle Terminal"),
   ("ctrl-shift-`", "New Terminal"),
   ("cmd-b", "Toggle Sidebar"),

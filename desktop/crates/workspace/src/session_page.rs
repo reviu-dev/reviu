@@ -20,7 +20,7 @@ use editor::{ReviewCommentMode, ReviewCommentSide};
 use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-  PathPromptOptions, Render, ScrollHandle, SharedString, Task, Window, div, img, prelude::*, px,
+  PathPromptOptions, Render, ScrollHandle, SharedString, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Sizable as _,
@@ -63,8 +63,9 @@ use crate::session_page::center_layout::{
   CenterDropTarget, CenterLayout, CenterSplitDirection, CenterSurface, PersistedCenterLayout,
   PersistedCenterTab, collect_persisted_tabs, persisted_center_tab,
 };
-use crate::session_page::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
+use crate::session_page::center_tab::{CenterTab, CenterTabIcon, CenterTabKind, CenterTabSnapshot};
 use crate::session_page::file_viewer::{OpenFileSearchMatch, OpenedSnapshot, UnsavedEditorAction};
+use crate::session_page::tab_switcher::{TabSwitcher, TabSwitcherEntry, TabSwitcherEvent};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
 use crate::git_telemetry::{self, GitTelemetry};
@@ -317,6 +318,7 @@ pub struct SessionPage {
   center_tabs_scroll_handle: ScrollHandle,
   center_tabs_revealed_tab: RefCell<Option<CenterTab>>,
   center_tab_history: Vec<CenterTab>,
+  tab_switcher: Option<(Entity<TabSwitcher>, gpui::Subscription)>,
   /// Only inactive checkouts live here; the active state is moved out on restore.
   center_checkouts: HashMap<PathBuf, center_workspace::CenterCheckoutState>,
   active_center_tab: Option<CenterTab>,
@@ -394,6 +396,7 @@ mod pull_request_link;
 mod render;
 mod repo;
 mod review_github;
+pub(crate) mod tab_switcher;
 mod terminal_viewer;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -698,6 +701,7 @@ impl SessionPage {
       center_tabs_scroll_handle: ScrollHandle::new(),
       center_tabs_revealed_tab: RefCell::new(None),
       center_tab_history: CenterTab::default_tabs(),
+      tab_switcher: None,
       center_checkouts: HashMap::new(),
       active_center_tab: Some(CenterTab::chat()),
       editor_tab: None,
@@ -1990,6 +1994,91 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     self.activate_adjacent_center_tab(-1, window, cx);
+  }
+
+  fn toggle_tab_switcher_action(
+    &mut self,
+    _: &crate::ToggleTabSwitcher,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_tab_switcher(false, window, cx);
+  }
+
+  fn toggle_tab_switcher_backward_action(
+    &mut self,
+    _: &crate::ToggleTabSwitcherBackward,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_tab_switcher(true, window, cx);
+  }
+
+  /// The open tabs, most recently visited first, starting with the one on
+  /// screen. Tabs never visited keep their tab bar order at the end.
+  fn recent_center_tabs(&self) -> Vec<CenterTab> {
+    let tabs = self.center_tabs_for_navigation();
+    let selected_tab = self.selected_center_tab_from(&tabs);
+    let mut recent_tabs = Vec::with_capacity(tabs.len());
+    let visited = self.center_tab_history.iter().rev();
+    for tab in std::iter::once(&selected_tab)
+      .chain(visited)
+      .chain(tabs.iter())
+    {
+      if tabs.contains(tab) && !recent_tabs.contains(tab) {
+        recent_tabs.push(tab.clone());
+      }
+    }
+    recent_tabs
+  }
+
+  fn tab_switcher_entry(&self, tab: CenterTab, cx: &mut Context<Self>) -> Option<TabSwitcherEntry> {
+    let label_tab = self.center_tab_label_source(&tab);
+    let label = self.center_tab_label(&label_tab, cx)?;
+    let detail = label_tab
+      .path()
+      .and_then(Path::parent)
+      .filter(|parent| !parent.as_os_str().is_empty())
+      .map(|parent| SharedString::from(parent.to_string_lossy().into_owned()));
+    let icon = self.center_tab_icon_kind(&label_tab, cx);
+    Some(TabSwitcherEntry {
+      tab,
+      label: label.into(),
+      detail,
+      icon,
+    })
+  }
+
+  fn open_tab_switcher(&mut self, select_last: bool, window: &mut Window, cx: &mut Context<Self>) {
+    let entries = self
+      .recent_center_tabs()
+      .into_iter()
+      .filter_map(|tab| self.tab_switcher_entry(tab, cx))
+      .collect::<Vec<_>>();
+    if entries.is_empty() {
+      cx.propagate();
+      return;
+    }
+    let switcher = cx.new(|cx| TabSwitcher::new(entries, select_last, window, cx));
+    let subscription = cx.subscribe_in(
+      &switcher,
+      window,
+      |this, _, event: &TabSwitcherEvent, window, cx| {
+        this.tab_switcher = None;
+        if let TabSwitcherEvent::Confirmed(tab) = event
+          && this.center_tabs_for_navigation().contains(tab)
+        {
+          this.activate_center_tab(tab.clone(), OpenIntent::Open, window, cx);
+        }
+        // The switcher held the focus and is gone; the page resolves to the
+        // surface of whichever tab ended up on screen.
+        this.focus_page_on_next_frame(window, cx);
+        cx.notify();
+      },
+    );
+    window.focus(&switcher.focus_handle(cx), cx);
+    self.tab_switcher = Some((switcher, subscription));
+    cx.notify();
   }
 
   fn activate_center_tab(
