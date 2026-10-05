@@ -3,18 +3,32 @@ name: Website deploy
 on:
   workflow_dispatch:
     inputs:
-      image_tag:
+      tag:
         description: Docker image tag to publish
-        required: true
+        type: string
         default: latest
+        required: true
+      no_cache:
+        description: Build without Docker cache
+        type: boolean
+        default: false
+      trigger_deploy:
+        description: Trigger Dokploy after pushing the image
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: deploy-website
+  cancel-in-progress: false
+
 jobs:
   deploy:
-    name: Build and push website image
+    name: Build, push, and deploy website image
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -35,8 +49,44 @@ jobs:
           file: website/Dockerfile
           platforms: linux/amd64
           network: host
-          no-cache: true
+          no-cache: ${{ inputs.no_cache }}
           push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/${{ secrets.WEBSITE_IMAGE }}:${{ inputs.image_tag }}
+          provenance: false
+          tags: ${{ secrets.DOCKER_REGISTRY }}/${{ secrets.WEBSITE_IMAGE }}:${{ inputs.tag }}
           secrets: |
             github_token=${{ github.token }}
+
+      - name: Trigger Dokploy deploy
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_WEBSITE_COMPOSE_ID }}
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          WEBSITE_IMAGE: ${{ secrets.WEBSITE_IMAGE }}
+          TAG: ${{ inputs.tag }}
+          TRIGGER_DEPLOY: ${{ inputs.trigger_deploy }}
+        run: |
+          set -euo pipefail
+
+          if [ "$TRIGGER_DEPLOY" != "true" ]; then
+            echo "Dokploy trigger disabled."
+            exit 0
+          fi
+
+          if [ -z "$DOKPLOY_URL" ] || [ -z "$DOKPLOY_API_KEY" ] || [ -z "$DOKPLOY_COMPOSE_ID" ]; then
+            echo "DOKPLOY_URL, DOKPLOY_API_KEY and DOKPLOY_WEBSITE_COMPOSE_ID must be configured."
+            exit 1
+          fi
+
+          DOKPLOY_DEPLOY_URL="$DOKPLOY_URL/api/compose.deploy"
+
+          PAYLOAD=$(jq -n \
+            --arg composeId "$DOKPLOY_COMPOSE_ID" \
+            --arg title "Deploy Reviu website" \
+            --arg description "GitHub Actions run $GITHUB_RUN_NUMBER: $DOCKER_REGISTRY/$WEBSITE_IMAGE:$TAG" \
+            '{ composeId: $composeId, title: $title, description: $description }')
+
+          curl -fsSL -X POST "$DOKPLOY_DEPLOY_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: $DOKPLOY_API_KEY" \
+            --data "$PAYLOAD"
