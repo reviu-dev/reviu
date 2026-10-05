@@ -239,11 +239,8 @@ mod tests {
   struct DialogHost(Entity<Editor>);
 
   impl Render for DialogHost {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-      div()
-        .size_full()
-        .child(self.0.clone())
-        .children(gpui_component::Root::render_dialog_layer(window, cx))
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+      div().size_full().child(self.0.clone())
     }
   }
 

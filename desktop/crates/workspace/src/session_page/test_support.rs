@@ -29,12 +29,11 @@ fn disable_agent_process_for_test() {
 }
 
 impl Render for SessionPageTestHost {
-  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
       .size_full()
       .key_context(crate::shortcuts::current_workspace_key_context(cx).as_str())
       .child(self.page.clone())
-      .children(gpui_component::Root::render_dialog_layer(window, cx))
   }
 }
 

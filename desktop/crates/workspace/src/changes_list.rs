@@ -1956,13 +1956,7 @@ mod tests {
     task.await;
     cx.run_until_parked();
 
-    let reported = cx.update(|window, cx| {
-      !gpui_component::Root::read(window, cx)
-        .notification
-        .read(cx)
-        .notifications()
-        .is_empty()
-    });
+    let reported = cx.update(|window, cx| !window.notifications(cx).is_empty());
     assert!(reported, "a failed git action must be reported");
 
     let _ = std::fs::remove_dir_all(&repo_root);

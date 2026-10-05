@@ -329,13 +329,7 @@ mod tests {
   }
 
   fn notification_count(cx: &mut gpui::VisualTestContext) -> usize {
-    cx.update(|window, cx| {
-      gpui_component::Root::read(window, cx)
-        .notification
-        .read(cx)
-        .notifications()
-        .len()
-    })
+    cx.update(|window, cx| window.notifications(cx).len())
   }
 
   fn has_active_dialog(cx: &mut gpui::VisualTestContext) -> bool {

@@ -721,10 +721,8 @@ mod tests {
   struct Page;
 
   impl Render for Page {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-      div()
-        .size_full()
-        .children(gpui_component::Root::render_dialog_layer(window, cx))
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+      div().size_full()
     }
   }
 

@@ -196,9 +196,8 @@ fn a_background_snapshot_cannot_undo_a_more_recent_ui_save(cx: &mut App) {
 struct Host;
 
 impl Render for Host {
-  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    use gpui::ParentElement as _;
-    div().children(gpui_component::Root::render_notification_layer(window, cx))
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    div()
   }
 }
 

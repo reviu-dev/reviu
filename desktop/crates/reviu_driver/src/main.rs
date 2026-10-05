@@ -37,7 +37,7 @@ mod presentation;
 use presentation::Presentation;
 
 /// Same shape as the app's root in `crates/reviu/src/app_root.rs`: the view
-/// plus the layers that dialogs, sheets and notifications render into.
+/// mounted inside gpui-component's root plugin layers.
 struct DriverRoot {
   view: Entity<WorkspaceView>,
   focus_handle: FocusHandle,
@@ -50,20 +50,8 @@ impl Focusable for DriverRoot {
 }
 
 impl Render for DriverRoot {
-  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let sheet_layer = Root::render_sheet_layer(window, cx);
-    let dialog_layer = Root::render_dialog_layer(window, cx);
-    let notification_layer = Root::render_notification_layer(window, cx);
-    let dialog_backdrop = ui::render_dialog_backdrop(window, cx);
-
-    div()
-      .relative()
-      .size_full()
-      .child(self.view.clone())
-      .children(dialog_backdrop)
-      .children(sheet_layer)
-      .children(dialog_layer)
-      .children(notification_layer.map(gpui::deferred))
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    div().relative().size_full().child(self.view.clone())
   }
 }
 
@@ -964,7 +952,7 @@ fn confirm_dialog(cx: &mut gpui::VisualTestContext, keystrokes: &str) {
 fn notification_stats(cx: &mut gpui::VisualTestContext) -> serde_json::Value {
   cx.update(|window, cx| {
     serde_json::json!({
-      "count": Root::read(window, cx).notification.read(cx).notifications().len(),
+      "count": window.notifications(cx).len(),
     })
   })
 }
@@ -1887,7 +1875,7 @@ fn notification_stats_directly(
 ) -> Result<serde_json::Value, String> {
   cx.update_window(window, |_, window, cx| {
     serde_json::json!({
-      "count": Root::read(window, cx).notification.read(cx).notifications().len(),
+      "count": window.notifications(cx).len(),
     })
   })
   .map_err(|error| error.to_string())

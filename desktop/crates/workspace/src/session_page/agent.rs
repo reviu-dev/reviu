@@ -6686,13 +6686,7 @@ mod tests {
   }
 
   fn notifications(cx: &mut gpui::VisualTestContext) -> Vec<gpui::Entity<Notification>> {
-    cx.update(|window, cx| {
-      gpui_component::Root::read(window, cx)
-        .notification
-        .read(cx)
-        .notifications()
-        .to_vec()
-    })
+    cx.update(|window, cx| window.notifications(cx).to_vec())
   }
 
   #[gpui::test]
