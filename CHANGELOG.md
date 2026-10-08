@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.7.0
+
+### Git Change Actions
+
+Hover actions in the Changes panel now reliably stage, unstage, or restore the file without also opening it in the editor when the click lands on the action area.
+
 ## 1.6.0
 
 ### Recent Tab Switcher

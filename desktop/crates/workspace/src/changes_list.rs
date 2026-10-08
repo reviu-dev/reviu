@@ -434,7 +434,7 @@ impl ListDelegate for ChangesRowsDelegate {
     let stage_element: AnyElement = if show_row_actions {
       match stage_tooltip {
         Some(tooltip) => div()
-          .id(("changes-stage-icon", ix.row))
+          .id(format!("changes-stage-icon-{}-{}", ix.section, ix.row))
           .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
           .child(stage_icon)
           .into_any_element(),
@@ -474,7 +474,7 @@ impl ListDelegate for ChangesRowsDelegate {
           .into_any_element()
       };
       let status = div()
-        .id(("changes-status-letter", ix.row))
+        .id(format!("changes-status-letter-{}-{}", ix.section, ix.row))
         .w(px(15.))
         .min_w(px(15.))
         .flex()
@@ -504,15 +504,27 @@ impl ListDelegate for ChangesRowsDelegate {
       let list = self.list.clone();
       let path = path.clone();
       div()
+        .id(format!(
+          "changes-row-actions-strip-{}-{}",
+          ix.section, ix.row
+        ))
         .absolute()
+        .top_0()
         .right_0()
+        .bottom_0()
+        .flex()
+        .items_center()
+        .pl_1()
+        .debug_selector(move || format!("changes-row-actions-{}-{}", ix.section, ix.row))
         .bg(theme.sidebar)
         .rounded(theme.radius)
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(|_, _, cx| cx.stop_propagation())
         .child(
-          ButtonGroup::new(("changes-row-actions", ix.row))
+          ButtonGroup::new(format!("changes-row-actions-{}-{}", ix.section, ix.row))
             .outline()
             .child(
-              Button::new(("changes-stage", ix.row))
+              Button::new(format!("changes-stage-{}-{}", ix.section, ix.row))
                 .debug_selector(move || format!("changes-stage-{}-{}", ix.section, ix.row))
                 .icon(toggle_icon)
                 .xsmall()
@@ -534,7 +546,7 @@ impl ListDelegate for ChangesRowsDelegate {
             )
             .when(restorable, |this| {
               this.child(
-                Button::new(("changes-restore", ix.row))
+                Button::new(format!("changes-restore-{}-{}", ix.section, ix.row))
                   .debug_selector(move || format!("changes-restore-{}-{}", ix.section, ix.row))
                   .icon(IconName::Undo)
                   .xsmall()
@@ -1418,6 +1430,39 @@ mod tests {
     drop(observer);
 
     assert_eq!(opened.lock().unwrap().clone(), None);
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn row_action_strip_does_not_open_the_file(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-actions-strip-no-open");
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+    let observer = {
+      let opened = opened.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
+          if let ChangesListEvent::OpenFile { path, .. } = event {
+            *opened.lock().unwrap() = Some(path.clone());
+          }
+        })
+      })
+    };
+
+    let actions = cx
+      .debug_bounds("changes-row-actions-0-0")
+      .expect("actions strip bounds");
+    cx.simulate_click(
+      gpui::point(actions.left() + gpui::px(1.0), actions.center().y),
+      gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(opened.lock().unwrap().clone(), None);
+    list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
     let _ = std::fs::remove_dir_all(&repo_root);
   }
 
