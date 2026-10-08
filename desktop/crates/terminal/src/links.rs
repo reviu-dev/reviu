@@ -26,6 +26,7 @@ pub(crate) enum TerminalLinkTarget {
 pub(crate) struct TerminalLink {
   pub(crate) target: TerminalLinkTarget,
   pub(crate) tooltip: Arc<str>,
+  pub(crate) range: crate::ViewportSelectionRange,
 }
 
 struct SnapshotLine {
@@ -56,15 +57,12 @@ pub(crate) fn link_at(
     return None;
   }
 
-  if let Some(uri) = screen
-    .cells
-    .iter()
-    .find(|cell| cell.row == point.row && cell.col == point.col)
-    .and_then(|cell| cell.hyperlink_uri.clone())
-  {
+  if let Some(uri) = hyperlink_uri_at(screen, point) {
+    let columns = hyperlink_columns_at(screen, point, uri.as_ref());
     return Some(TerminalLink {
       target: TerminalLinkTarget::Url(uri.clone()),
       tooltip: uri,
+      range: point_range(point.row, columns),
     });
   }
 
@@ -83,6 +81,7 @@ pub(crate) fn link_at(
       return Some(TerminalLink {
         target: TerminalLinkTarget::Url(url.clone()),
         tooltip: url,
+        range: point_range(point.row, columns),
       });
     }
   }
@@ -109,10 +108,64 @@ pub(crate) fn link_at(
     return Some(TerminalLink {
       target: TerminalLinkTarget::Path { path, line, column },
       tooltip: Arc::<str>::from(text),
+      range: point_range(point.row, columns),
     });
   }
 
   None
+}
+
+fn point_range(row: usize, columns: Range<usize>) -> crate::ViewportSelectionRange {
+  crate::ViewportSelectionRange {
+    start: ViewportPoint {
+      row,
+      col: columns.start,
+    },
+    end: ViewportPoint {
+      row,
+      col: columns.end.saturating_sub(1),
+    },
+  }
+}
+
+fn hyperlink_uri_at(screen: &ScreenSnapshot, point: ViewportPoint) -> Option<Arc<str>> {
+  screen
+    .cells
+    .iter()
+    .find(|cell| cell.row == point.row && cell.col == point.col)
+    .and_then(|cell| cell.hyperlink_uri.clone())
+}
+
+fn hyperlink_columns_at(screen: &ScreenSnapshot, point: ViewportPoint, uri: &str) -> Range<usize> {
+  let mut start = point.col;
+  while start > 0
+    && hyperlink_uri_at(
+      screen,
+      ViewportPoint {
+        row: point.row,
+        col: start - 1,
+      },
+    )
+    .is_some_and(|candidate| candidate.as_ref() == uri)
+  {
+    start -= 1;
+  }
+
+  let mut end = point.col + 1;
+  while end < screen.cols
+    && hyperlink_uri_at(
+      screen,
+      ViewportPoint {
+        row: point.row,
+        col: end,
+      },
+    )
+    .is_some_and(|candidate| candidate.as_ref() == uri)
+  {
+    end += 1;
+  }
+
+  start..end
 }
 
 fn url_regex() -> &'static Regex {
@@ -241,7 +294,7 @@ mod tests {
   };
 
   use super::{TerminalLinkTarget, link_at, parse_path_with_position};
-  use crate::{ScreenSnapshot, TerminalCellSnapshot, ViewportPoint};
+  use crate::{ScreenSnapshot, TerminalCellSnapshot, ViewportPoint, ViewportSelectionRange};
 
   fn screen_from_line(line: &str) -> ScreenSnapshot {
     let cells = line
@@ -296,6 +349,13 @@ mod tests {
     assert_eq!(
       link.target,
       TerminalLinkTarget::Url(Arc::<str>::from("https://example.com/docs"))
+    );
+    assert_eq!(
+      link.range,
+      ViewportSelectionRange {
+        start: ViewportPoint { row: 0, col: 4 },
+        end: ViewportPoint { row: 0, col: 27 },
+      }
     );
   }
 }

@@ -411,6 +411,20 @@ impl TerminalView {
         .is_some_and(|hovered| hovered.point == point)
   }
 
+  pub(crate) fn active_hovered_link_range(
+    &self,
+    modifiers: Modifiers,
+  ) -> Option<ViewportSelectionRange> {
+    if !self.hyperlink_activation_enabled(modifiers) {
+      return None;
+    }
+
+    self
+      .hovered_hyperlink
+      .as_ref()
+      .map(|hovered| hovered.link.range)
+  }
+
   pub(crate) fn update_hovered_hyperlink(
     &mut self,
     point: Option<ViewportPoint>,
@@ -2738,13 +2752,23 @@ mod tests {
       view.update_hovered_hyperlink(Some(ViewportPoint { row: 0, col: 1 }), cx);
     });
 
-    let hovered = view.read_with(cx, |view, _| {
-      view
-        .hovered_hyperlink
-        .as_ref()
-        .map(|hovered| hovered.link.tooltip.clone())
+    let (hovered, active_range) = view.read_with(cx, |view, _| {
+      (
+        view
+          .hovered_hyperlink
+          .as_ref()
+          .map(|hovered| hovered.link.tooltip.clone()),
+        view.active_hovered_link_range(secondary_click_modifiers()),
+      )
     });
     assert_eq!(hovered.as_deref(), Some("https://example.com"));
+    assert_eq!(
+      active_range,
+      Some(ViewportSelectionRange {
+        start: ViewportPoint { row: 0, col: 0 },
+        end: ViewportPoint { row: 0, col: 3 },
+      })
+    );
   }
 
   #[gpui::test]

@@ -13,8 +13,8 @@ use alacritty_terminal::{
 };
 
 use crate::{
-  ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, ViewportPoint, colors::TerminalPalette,
-  terminal_view::TerminalView,
+  ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, ViewportPoint, ViewportSelectionRange,
+  colors::TerminalPalette, terminal_view::TerminalView,
 };
 
 #[derive(Clone)]
@@ -212,15 +212,16 @@ impl Element for TerminalElement {
     self.view.update(cx, |view, cx| {
       view.sync_bounds(terminal_bounds, cx);
     });
-    let (screen, search_matches, active_search_match) = {
+    let (screen, search_matches, active_search_match, highlighted_link) = {
       let view = self.view.read(cx);
       (
         view.screen().clone(),
         Arc::from(view.visible_search_matches()),
         view.visible_active_search_match(),
+        view.active_hovered_link_range(window.modifiers()),
       )
     };
-    let row_layouts = build_row_layouts(&screen, &self.palette, window);
+    let row_layouts = build_row_layouts(&screen, &self.palette, highlighted_link, window);
     let line_height = px(f32::from(terminal_bounds.cell_height));
     let cell_width = px(f32::from(terminal_bounds.cell_width));
 
@@ -510,6 +511,7 @@ impl Element for TerminalElement {
 fn build_row_layouts(
   screen: &ScreenSnapshot,
   palette: &TerminalPalette,
+  highlighted_link: Option<ViewportSelectionRange>,
   window: &mut Window,
 ) -> Vec<RowLayout> {
   if screen.rows == 0 || screen.cols == 0 {
@@ -550,7 +552,9 @@ fn build_row_layouts(
         if cell_len == 0 {
           continue;
         }
-        let style = style_for_cell(cell, palette, &screen.colors);
+        let highlighted_link = highlighted_link
+          .is_some_and(|range| selection_range_contains_point(&range, ViewportPoint { row, col }));
+        let style = style_for_cell(cell, palette, &screen.colors, highlighted_link);
         if active_style == Some(style) {
           active_len += cell_len;
         } else {
@@ -630,6 +634,7 @@ fn style_for_cell(
   cell: Option<&TerminalCellSnapshot>,
   palette: &TerminalPalette,
   colors: &alacritty_terminal::term::color::Colors,
+  highlighted_link: bool,
 ) -> RowStyle {
   let flags = cell.map(|cell| cell.flags).unwrap_or_else(Flags::empty);
   let explicit_underline_color = cell.and_then(|cell| cell.underline_color);
@@ -653,14 +658,19 @@ fn style_for_cell(
   if flags.contains(Flags::DIM) {
     foreground = foreground.opacity(0.72);
   }
+  if highlighted_link {
+    foreground = palette.resolve(Color::Named(NamedColor::Blue), colors);
+  }
 
-  let underline =
-    (flags.intersects(Flags::ALL_UNDERLINES) || has_hyperlink).then_some(UnderlineStyle {
-      color: Some(
+  let underline = (flags.intersects(Flags::ALL_UNDERLINES) || has_hyperlink || highlighted_link)
+    .then_some(UnderlineStyle {
+      color: Some(if highlighted_link {
+        foreground
+      } else {
         explicit_underline_color
           .map(|color| palette.resolve(color, colors))
-          .unwrap_or(foreground),
-      ),
+          .unwrap_or(foreground)
+      }),
       thickness: px(1.0),
       wavy: flags.contains(Flags::UNDERCURL),
     });
@@ -698,6 +708,25 @@ fn text_run_for_style(len: usize, font: &gpui::Font, style: RowStyle) -> TextRun
     underline: style.underline,
     strikethrough: style.strikethrough,
   }
+}
+
+fn selection_range_contains_point(range: &ViewportSelectionRange, point: ViewportPoint) -> bool {
+  let range = range.normalized();
+  if point.row < range.start.row || point.row > range.end.row {
+    return false;
+  }
+
+  let start_col = if point.row == range.start.row {
+    range.start.col
+  } else {
+    0
+  };
+  let end_col = if point.row == range.end.row {
+    range.end.col
+  } else {
+    usize::MAX
+  };
+  point.col >= start_col && point.col <= end_col
 }
 
 fn terminal_bounds_for_surface(
@@ -1160,7 +1189,7 @@ mod tests {
       hyperlink_uri: None,
     };
 
-    let style = style_for_cell(Some(&cell), &palette, &colors);
+    let style = style_for_cell(Some(&cell), &palette, &colors, false);
 
     assert!(style.bold);
     assert!(style.italic);
@@ -1195,7 +1224,7 @@ mod tests {
       hyperlink_uri: None,
     };
 
-    let style = style_for_cell(Some(&cell), &palette, &colors);
+    let style = style_for_cell(Some(&cell), &palette, &colors, false);
 
     assert_eq!(style.underline.map(|underline| underline.wavy), Some(false));
     assert_eq!(style.background, Some(palette.resolve(cell.bg, &colors)));
@@ -1222,12 +1251,38 @@ mod tests {
       hyperlink_uri: Some(Arc::<str>::from("https://example.com")),
     };
 
-    let style = style_for_cell(Some(&cell), &palette, &colors);
+    let style = style_for_cell(Some(&cell), &palette, &colors, false);
 
     assert_eq!(
       style.underline.map(|underline| underline.color),
       Some(Some(palette.resolve(underline_color, &colors)))
     );
     assert_eq!(style.underline.map(|underline| underline.wavy), Some(false));
+  }
+
+  #[test]
+  fn highlighted_links_are_blue_and_underlined() {
+    let palette = TerminalPalette::default();
+    let colors = Colors::default();
+    let cell = TerminalCellSnapshot {
+      row: 0,
+      col: 0,
+      c: 'x',
+      zerowidth: Arc::default(),
+      fg: Color::Named(NamedColor::Foreground),
+      bg: Color::Named(NamedColor::Background),
+      flags: Flags::empty(),
+      underline_color: None,
+      hyperlink_uri: None,
+    };
+
+    let style = style_for_cell(Some(&cell), &palette, &colors, true);
+    let link_color = palette.resolve(Color::Named(NamedColor::Blue), &colors);
+
+    assert_eq!(style.foreground, link_color);
+    assert_eq!(
+      style.underline.map(|underline| underline.color),
+      Some(Some(link_color))
+    );
   }
 }

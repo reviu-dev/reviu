@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.7.0
 
+### Terminal Link Hover
+
+Holding the command/control link modifier over a terminal link now colors and underlines the full link before opening it.
+
 ### Git Change Actions
 
 Hover actions in the Changes panel now reliably stage, unstage, or restore the file without also opening it in the editor when the click lands on the action area.
