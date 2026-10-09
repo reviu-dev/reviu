@@ -150,7 +150,7 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_System_IO",
   "Win32_System_Pipes",
 ] }
-zeroize = "1.9.0"
+zeroize = "1.9.1"
 uds_windows = "1.2.1"
 
 # Workspace member crates
