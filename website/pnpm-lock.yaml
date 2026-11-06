@@ -170,8 +170,8 @@ importers:
         specifier: ^5.3.0
         version: 5.3.0
       '@lucide/astro':
-        specifier: ^1.66.0
-        version: 1.66.0(astro@7.4.5(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+        specifier: ^1.67.0
+        version: 1.69.0(astro@7.4.5(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
       '@tailwindcss/vite':
         specifier: ^4.3.4
         version: 4.3.4(vite@8.3.5(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
@@ -780,8 +780,8 @@ packages:
     peerDependencies:
       vite: ^2.9.0 || ^3.0.0-0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
 
-  '@lucide/astro@1.66.0':
-    resolution: {integrity: sha512-e6HoP1W2PQm8HSQfWyo0jz4fl8rAgzbNk/to0dlMy0jpwwwmsZ8NxeX3KU8TcpISa0BL02pV9WdbjzGIsMT6LQ==}
+  '@lucide/astro@1.69.0':
+    resolution: {integrity: sha512-A7oaxQD112/bHrWJpQ8uRnuNazI+z36sY8lZAng4foFS/IJneSiw3KAfMe7eX44KD+ehIRHwBkbucw5IcvmoyA==}
     peerDependencies:
       astro: ^4 || ^5 || ^6 || ^7
 
@@ -2623,7 +2623,7 @@ snapshots:
       unconfig: 7.3.3
       vite: 8.3.5(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)
 
-  '@lucide/astro@1.66.0(astro@7.4.5(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))':
+  '@lucide/astro@1.69.0(astro@7.4.5(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
       astro: 7.4.5(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)
 
