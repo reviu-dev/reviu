@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "agent_acp"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "agent-client-protocol",
  "agent_acp",
@@ -332,7 +332,7 @@ dependencies = [
 
 [[package]]
 name = "agent_chat_panel"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "agent-client-protocol",
  "agent_acp",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "agent_registry"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "dirs 7.0.0",
@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "ansi_text"
-version = "1.7.0"
+version = "1.7.1"
 
 [[package]]
 name = "anstream"
@@ -539,7 +539,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app_log"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "log",
 ]
@@ -1152,7 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "buffer"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "ropey 1.6.1",
 ]
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "diff_core"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "imara-diff",
  "unicode-segmentation",
@@ -2274,7 +2274,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "editor"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "app_log",
  "blake3",
@@ -3113,7 +3113,7 @@ dependencies = [
 
 [[package]]
 name = "git"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -7213,7 +7213,7 @@ dependencies = [
 
 [[package]]
 name = "reviu"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "agent_registry",
  "anyhow",
@@ -7237,7 +7237,7 @@ dependencies = [
 
 [[package]]
 name = "reviu_driver"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "agent_chat_panel",
  "agent_registry",
@@ -7735,7 +7735,7 @@ dependencies = [
 
 [[package]]
 name = "selectable_text"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "gpui",
  "gpui-component",
@@ -8561,7 +8561,7 @@ dependencies = [
 
 [[package]]
 name = "syntax"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "cc",
  "gpui",
@@ -8789,7 +8789,7 @@ dependencies = [
 
 [[package]]
 name = "terminal"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -8806,7 +8806,7 @@ dependencies = [
 
 [[package]]
 name = "terminal_core"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -9709,7 +9709,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.1",
@@ -11278,7 +11278,7 @@ dependencies = [
 
 [[package]]
 name = "workspace"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "agent_acp",
  "agent_chat_panel",
