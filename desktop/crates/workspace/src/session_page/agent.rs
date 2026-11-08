@@ -602,7 +602,9 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    use crate::agent_notification::{AgentNotification, AgentNotificationEvent};
+    use crate::agent_notification::{
+      AGENT_NOTIFICATION_AUTO_DISMISS, AgentNotification, AgentNotificationEvent,
+    };
 
     if window.is_window_active() {
       return;
@@ -611,9 +613,7 @@ impl SessionPage {
       return;
     }
     // One popup at a time: the newest wins.
-    if let Some(existing) = self.agent_notification.take() {
-      let _ = existing.update(cx, |_, window, _| window.remove_window());
-    }
+    self.dismiss_agent_notification(cx);
     let Some(screen) = cx.primary_display() else {
       return;
     };
@@ -652,9 +652,16 @@ impl SessionPage {
       .detach();
     });
     self.agent_notification = Some(handle);
+    self._agent_notification_dismiss_task = Some(cx.spawn(async move |this, cx| {
+      cx.background_executor()
+        .timer(AGENT_NOTIFICATION_AUTO_DISMISS)
+        .await;
+      let _ = this.update(cx, |this, cx| this.dismiss_agent_notification(cx));
+    }));
   }
 
   pub(super) fn dismiss_agent_notification(&mut self, cx: &mut Context<Self>) {
+    self._agent_notification_dismiss_task = None;
     if let Some(handle) = self.agent_notification.take() {
       let _ = handle.update(cx, |_, window, _| window.remove_window());
     }
