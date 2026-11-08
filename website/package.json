@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@fontsource/poppins": "^5.3.0",
-    "@lucide/astro": "^1.68.0",
+    "@lucide/astro": "^1.69.0",
     "@tailwindcss/vite": "^4.3.4",
     "astro": "^7.4.5",
     "marked": "^18.1.3",
