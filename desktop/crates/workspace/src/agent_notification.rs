@@ -9,11 +9,15 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
 use std::rc::Rc;
+use std::time::Duration;
 
 pub const AGENT_NOTIFICATION_SIZE: Size<gpui::Pixels> = Size {
   width: px(380.),
   height: px(64.),
 };
+
+/// How long the attention popup stays up when nobody clicks it.
+pub const AGENT_NOTIFICATION_AUTO_DISMISS: Duration = Duration::from_secs(8);
 
 pub struct AgentNotification {
   icon: gpui_component::Icon,

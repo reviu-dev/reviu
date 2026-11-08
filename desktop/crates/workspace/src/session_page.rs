@@ -295,6 +295,7 @@ pub struct SessionPage {
   unseen_finished_session_ids: HashSet<String>,
   turn_gate: TurnGate,
   agent_notification: Option<gpui::WindowHandle<crate::agent_notification::AgentNotification>>,
+  _agent_notification_dismiss_task: Option<Task<()>>,
   dock_panel: Entity<DockPanel>,
   inbox: Entity<Inbox>,
   session_list: Entity<SessionList>,
@@ -685,6 +686,7 @@ impl SessionPage {
       unseen_finished_session_ids: HashSet::new(),
       turn_gate: TurnGate::new(),
       agent_notification: None,
+      _agent_notification_dismiss_task: None,
       dock_panel,
       inbox,
       session_list,
@@ -3734,6 +3736,34 @@ mod tests {
       windows_before,
       "the setting keeps the popup away"
     );
+  }
+
+  #[gpui::test]
+  async fn agent_attention_auto_dismisses(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-agent-notify-autodismiss");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    let windows_before = cx.update(|_, cx| cx.windows().len());
+
+    cx.deactivate_window();
+    page.update_in(cx, |page, window, cx| {
+      page.notify_agent_attention("Reviu agent finished", None, window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), windows_before + 1);
+
+    cx.executor()
+      .advance_clock(crate::agent_notification::AGENT_NOTIFICATION_AUTO_DISMISS);
+    cx.run_until_parked();
+
+    assert_eq!(
+      cx.update(|_, cx| cx.windows().len()),
+      windows_before,
+      "the popup closes itself after the auto-dismiss timer"
+    );
+    page.read_with(cx, |page, _| {
+      assert!(page.agent_notification.is_none());
+    });
   }
 
   #[gpui::test(iterations = 10)]

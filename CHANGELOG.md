@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.7.1
+
+### Agent Attention Auto-Dismiss
+
+When an agent needs attention while Reviu is in the background, the popup now closes itself after a few seconds instead of staying until you click it.
+
 ## 1.7.0
 
 ### Reliable Pi Recovery
