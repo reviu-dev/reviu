@@ -664,11 +664,10 @@ impl HighlightStreamState {
     let mut start = self.next_flush_line;
     while start < ready_line {
       let batch_end = (start + HIGHLIGHT_BATCH_LINES).min(ready_line);
-      let mut batch_lines = Vec::with_capacity(batch_end - start);
-      for line_idx in start..batch_end {
-        let spans = std::mem::take(&mut self.line_spans[line_idx]);
-        batch_lines.push(Arc::from(spans));
-      }
+      let batch_lines = self.line_spans[start..batch_end]
+        .iter_mut()
+        .map(|spans| Arc::from(std::mem::take(spans)))
+        .collect();
       batches.lock().push_back(HighlightBatch {
         start_line: start,
         lines: batch_lines,
